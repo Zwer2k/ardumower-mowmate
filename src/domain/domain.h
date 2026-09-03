@@ -1,0 +1,552 @@
+  #pragma once
+
+#include <Arduino.h>
+#include <inttypes.h>
+#include <ArduinoJson.h>
+#include "mower_map.h"
+
+namespace ArduMower
+{
+  namespace Domain
+  {
+    namespace Robot
+    {
+      struct UploadProgress {
+        int pct = 0;
+        String label;
+        int done = 0;
+        int total = 0;
+        int totalDone = 0;
+        int totalTotal = 0;
+      };
+      class Properties
+      {
+      public:
+        uint32_t timestamp = 0;
+        String firmware;
+        String version;
+
+        bool operator==(const Properties &other);
+        bool operator!=(const Properties &other) { return !(*this == other); }
+        void marshal(JsonObject o) const;
+      };
+
+      namespace Stats
+      {
+        class Durations
+        {
+        public:
+          uint32_t idle, charge, mow, mowFloat, mowFix, mowInvalid;
+
+          bool operator==(const Durations &other);
+          bool operator!=(const Durations &other) { return !(*this == other); }
+          void marshal(JsonObject o) const;
+        };
+
+        class Recoveries
+        {
+        public:
+          uint32_t mowFloatToFix;
+          uint32_t imu;
+          uint32_t mowInvalid;
+
+          bool operator==(const Recoveries &other);
+          bool operator!=(const Recoveries &other) { return !(*this == other); }
+          void marshal(JsonObject o) const;
+        };
+
+        class Obstacles
+        {
+        public:
+          uint32_t count;
+          uint32_t sonar;
+          uint32_t bumper;
+          uint32_t gpsMotionLow;
+
+          bool operator==(const Obstacles &other);
+          bool operator!=(const Obstacles &other) { return !(*this == other); }
+          void marshal(JsonObject o) const;
+        };
+
+        class Stats
+        {
+        public:
+          uint32_t timestamp;
+          Durations durations;
+          Recoveries recoveries;
+          Obstacles obstacles;
+          float mowDistanceTraveled;
+          float mowMaxDgpsAge;
+          float tempMin, tempMax;
+          uint32_t gpsChecksumErrors;
+          uint32_t dgpsChecksumErrors;
+          float maxMotorControlCycleTime;
+          uint32_t serialBufferSize;
+          uint32_t freeMemory;
+          int resetCause;
+
+          uint32_t gpsJumps;
+
+          Stats() : timestamp(0), mowDistanceTraveled(0), mowMaxDgpsAge(0), tempMin(0), tempMax(0), gpsChecksumErrors(0), dgpsChecksumErrors(0), maxMotorControlCycleTime(0), serialBufferSize(0), freeMemory(0), resetCause(0), gpsJumps(0) {}
+
+          bool operator==(const Stats &other);
+          bool operator!=(const Stats &other) { return !(*this == other); }
+          void marshal(JsonObject o) const;
+        };
+      }
+
+      namespace State
+      {
+        class Point
+        {
+        public:
+          float x, y;
+
+          Point()
+              : x(0), y(0){};
+
+          bool operator==(const Point &other);
+          bool operator!=(const Point &other) { return !(*this == other); }
+          void marshal(JsonObject o) const;
+        };
+
+        class Position : public Point
+        {
+        public:
+          float delta;
+          int solution;
+          float age;
+          float accuracy;
+          int visibleSatellites, visibleSatellitesDgps;
+          int mowPointIndex;
+
+          Position()
+              : delta(0),
+                solution(0), age(0), accuracy(0), visibleSatellites(0), visibleSatellitesDgps(0),
+                mowPointIndex(0){};
+
+          bool operator==(const Position &other);
+          bool operator!=(const Position &other) { return !(*this == other); }
+          void marshal(JsonObject o) const;
+        };
+
+        class State
+        {
+        public:
+          uint32_t timestamp;
+          float batteryVoltage;
+          Position position;
+          Point target;
+          int job;
+          int sensor;
+          float amps;
+          int mapCrc;
+          float temperature;
+          float chargingMah;
+          float motorMowMah;
+          float motorLeftMah;
+          float motorRightMah;
+
+          static const byte jobDescLen = 5;
+          static const char* jobDesc[jobDescLen];
+
+          static const byte posSolutionDescLen = 3;
+          static const char* posSolutionDesc[posSolutionDescLen];
+
+
+          State()
+              : timestamp(0), batteryVoltage(0), job(0), sensor(0), amps(0), mapCrc(0), temperature(0), chargingMah(0), motorMowMah(0), motorLeftMah(0), motorRightMah(0)
+          {
+          }
+
+          bool operator==(const State &other);
+          bool operator!=(const State &other) { return !(*this == other); }
+          void marshal(JsonObject o) const;
+        };
+      }
+
+      class DesiredState
+      {
+      public:
+        uint32_t timestamp;
+        float speed;
+        bool mowerMotorEnabled;
+        bool finishAndRestart;
+        int op;
+        int fixTimeout;
+
+        DesiredState() : timestamp(1), speed(0), mowerMotorEnabled(false), finishAndRestart(false), op(-1), fixTimeout(-1){};
+        void marshal(JsonObject o) const;
+      };
+
+      class SensorSummary
+      {
+      public:
+        uint32_t timestamp;
+        float sonarLeft;
+        float sonarCenter;
+        float sonarRight;
+        bool sonarObstacle;
+        bool sonarNearObstacle;
+        bool bumperLeft;
+        bool bumperRight;
+        bool bumperObstacle;
+        bool bumperNearObstacle;
+        bool lidarObstacle;
+        bool lidarNearObstacle;
+        bool liftTriggered;
+        bool rainTriggered;
+
+        SensorSummary()
+            : timestamp(0), sonarLeft(0), sonarCenter(0), sonarRight(0),
+              sonarObstacle(false), sonarNearObstacle(false),
+              bumperLeft(false), bumperRight(false),
+              bumperObstacle(false), bumperNearObstacle(false),
+              lidarObstacle(false), lidarNearObstacle(false),
+              liftTriggered(false), rainTriggered(false)
+        {
+        }
+
+        bool operator==(const SensorSummary &other);
+        bool operator!=(const SensorSummary &other) { return !(*this == other); }
+        void marshal(JsonObject o) const;
+      };
+
+      class GpsSatellite
+      {
+      public:
+        uint8_t gnssId;
+        uint8_t svId;
+        uint8_t sigId;
+        uint8_t cno;
+        uint8_t qualityInd;
+        bool prUsed;
+        bool crCorrUsed;
+        float prRes;
+        int8_t elevation;
+        int8_t azimuth;
+
+        GpsSatellite()
+            : gnssId(0), svId(0), sigId(0), cno(0), qualityInd(0),
+              prUsed(false), crCorrUsed(false), prRes(0), elevation(0), azimuth(0)
+        {
+        }
+
+        void marshal(JsonObject o) const;
+      };
+
+      class GpsDetails
+      {
+      public:
+        uint32_t timestamp;
+        int numSV;
+        int numSVdgps;
+        int solution;
+        float hAccuracy;
+        float vAccuracy;
+        uint32_t dgpsAge;
+        std::vector<GpsSatellite> satellites;
+
+        GpsDetails()
+            : timestamp(0), numSV(0), numSVdgps(0), solution(0),
+              hAccuracy(0), vAccuracy(0), dgpsAge(0)
+        {
+        }
+
+        bool operator==(const GpsDetails &other);
+        bool operator!=(const GpsDetails &other) { return !(*this == other); }
+        void marshal(JsonObject o) const;
+      };
+
+      class UbxResponse
+      {
+      public:
+        uint32_t timestamp;
+        String hexData;
+
+        UbxResponse() : timestamp(0) {}
+
+        bool operator==(const UbxResponse &other) {
+          return timestamp == other.timestamp && hexData == other.hexData;
+        }
+        bool operator!=(const UbxResponse &other) { return !(*this == other); }
+        void marshal(JsonObject o) const;
+      };
+
+      // Erkannte Hindernisse als Punkt-Polygone (wie Sunray AT+S2 /
+      // CaSSAndRA). Jedes Polygon hat einen CRC (Summe von x*100 + y*100)
+      // zur Deduplizierung. Obstacles akkumulieren über Polls hinweg, bis
+      // das Cap erreicht ist oder die Firmware keine mehr meldet.
+      class ObstaclePolygon
+      {
+      public:
+        int32_t crc;
+        std::vector<std::pair<float, float>> points; // (x, y) in Map-Koordinaten
+
+        ObstaclePolygon() : crc(0) {}
+
+        void marshal(JsonObject o) const {
+          o["crc"] = crc;
+          JsonArray arr = o["points"].to<JsonArray>();
+          for (const auto &p : points) {
+            JsonObject pt = arr.add<JsonObject>();
+            pt["x"] = p.first;
+            pt["y"] = p.second;
+          }
+        }
+      };
+
+      class Obstacles
+      {
+      public:
+        static const size_t MAX_OBSTACLES = 20;
+
+        uint32_t timestamp;
+        std::vector<ObstaclePolygon> polygons;
+
+        Obstacles() : timestamp(0) {}
+
+        // Fügt ein Polygon hinzu, wenn sein CRC noch nicht bekannt ist.
+        // Gibt true zurück, wenn etwas geändert wurde.
+        bool addIfNew(ObstaclePolygon &&poly) {
+          for (const auto &p : polygons) {
+            if (p.crc == poly.crc) return false;
+          }
+          polygons.push_back(std::move(poly));
+          if (polygons.size() > MAX_OBSTACLES) {
+            polygons.erase(polygons.begin());
+          }
+          return true;
+        }
+
+        void clear() { polygons.clear(); timestamp = 0; }
+        bool empty() const { return polygons.empty(); }
+
+        bool operator==(const Obstacles &other) {
+          return timestamp == other.timestamp && polygons.size() == other.polygons.size();
+        }
+        bool operator!=(const Obstacles &other) { return !(*this == other); }
+        void marshal(JsonObject o) const {
+          o["timestamp"] = timestamp;
+          JsonArray arr = o["polygons"].to<JsonArray>();
+          for (const auto &p : polygons) {
+            JsonObject obj = arr.add<JsonObject>();
+            p.marshal(obj);
+          }
+        }
+      };
+
+      struct TrackPoint {
+        float x, y;
+        uint32_t timestamp;
+      };
+
+      class DrivenTrack {
+      public:
+        static const size_t MAX_POINTS = 500;
+        static constexpr float MIN_DISTANCE = 0.1f; // meters
+
+        DrivenTrack() : _head(0), _count(0), _lastX(0.0f), _lastY(0.0f), _hasLast(false) {
+          _points.resize(MAX_POINTS);
+        }
+
+        void push(float x, float y, uint32_t timestamp) {
+          if (_hasLast) {
+            const float dx = x - _lastX;
+            const float dy = y - _lastY;
+            if (dx * dx + dy * dy < MIN_DISTANCE * MIN_DISTANCE) return;
+          }
+          _points[_head].x = x;
+          _points[_head].y = y;
+          _points[_head].timestamp = timestamp;
+          _head = (_head + 1) % MAX_POINTS;
+          if (_count < MAX_POINTS) _count++;
+          _lastX = x;
+          _lastY = y;
+          _hasLast = true;
+        }
+
+        size_t size() const { return _count; }
+
+        void marshal(JsonObject o) const {
+          JsonArray arr = o["points"].to<JsonArray>();
+          size_t start = (_count < MAX_POINTS) ? 0 : _head;
+          for (size_t i = 0; i < _count; i++) {
+            size_t idx = (start + i) % MAX_POINTS;
+            JsonObject p = arr.add<JsonObject>();
+            p["x"] = _points[idx].x;
+            p["y"] = _points[idx].y;
+            p["t"] = _points[idx].timestamp;
+          }
+          o["size"] = (uint32_t)_count;
+        }
+
+        void clear() { _count = 0; _head = 0; _hasLast = false; }
+
+      private:
+        std::vector<TrackPoint> _points;
+        size_t _head;
+        size_t _count;
+        float _lastX;
+        float _lastY;
+        bool _hasLast;
+      };
+
+      class MowSettings
+      {
+      public:
+        uint32_t timestamp;
+        int pattern;
+        float width;
+        int angle;
+        float distanceToBorder;
+        int borderLaps;
+        bool mowBorderCcw;
+        // Neue Laufzeit-Toggles: Karte wird berechnet, diese Schalter entscheiden,
+        // welche bereits berechneten Bereiche tatsächlich gemäht werden.
+        bool doMowArea = true;
+        bool doMowPerimeter = true;
+        bool doMowBorder = false;
+        bool doMowExclusions = true;
+        bool doMowExclusionBorder = false;
+
+        MowSettings()
+            : timestamp(0), pattern(0), width(0.3f), angle(0),
+              distanceToBorder(0.0f), borderLaps(0), mowBorderCcw(false),
+              doMowArea(true), doMowPerimeter(true), doMowBorder(false),
+              doMowExclusions(true), doMowExclusionBorder(false) {}
+
+        bool operator==(const MowSettings &other) {
+          return timestamp == other.timestamp
+              && pattern == other.pattern
+              && width == other.width
+              && angle == other.angle
+              && distanceToBorder == other.distanceToBorder
+              && borderLaps == other.borderLaps
+              && mowBorderCcw == other.mowBorderCcw
+              && doMowArea == other.doMowArea
+              && doMowPerimeter == other.doMowPerimeter
+              && doMowBorder == other.doMowBorder
+              && doMowExclusions == other.doMowExclusions
+              && doMowExclusionBorder == other.doMowExclusionBorder;
+        }
+        bool operator!=(const MowSettings &other) { return !(*this == other); }
+        void marshal(JsonObject o) const;
+      };
+
+      struct MapInfo {
+        String id;
+        String name;
+        double area = 0.0;
+        String hash;
+        int crc = 0;
+        double rotation = 0.0;
+        uint32_t timestamp = 0;
+        bool unsaved = false;
+        bool requiresRename = false;
+      };
+
+      class StateSource
+      {
+      public:
+        virtual ArduMower::Domain::Robot::State::State state() = 0;
+        virtual ArduMower::Domain::Robot::Stats::Stats stats() = 0;
+        virtual ArduMower::Domain::Robot::Properties props() = 0;
+        virtual DesiredState desiredState() = 0;
+
+        virtual ArduMower::Domain::Robot::State::State *stateP() = 0;
+        virtual ArduMower::Domain::Robot::Stats::Stats *statsP() = 0;
+        virtual ArduMower::Domain::Robot::Properties *propsP() = 0;
+        virtual DesiredState *desiredStateP() = 0;
+        virtual SensorSummary sensorSummary() = 0;
+        virtual SensorSummary *sensorSummaryP() = 0;
+        virtual GpsDetails gpsDetails() = 0;
+        virtual GpsDetails *gpsDetailsP() = 0;
+        virtual UbxResponse ubxResponse() = 0;
+        virtual UbxResponse *ubxResponseP() = 0;
+        virtual Obstacles obstacles() = 0;
+        virtual Obstacles *obstaclesP() = 0;
+        virtual MowSettings mowSettings() = 0;
+        virtual MowSettings *mowSettingsP() = 0;
+
+        virtual ArduMower::Domain::Robot::MowerMap mowerMap() = 0;
+        virtual void setMap(const ArduMower::Domain::Robot::MowerMap &map) = 0;
+        virtual void setMowSettings(const MowSettings &s) = 0;
+
+        // Read-lock the real map while a chunked transfer is in progress.
+        // Default empty implementations keep subclasses without this concept working.
+        virtual void beginMowerMapRead() {}
+        virtual void endMowerMapRead() {}
+        virtual bool isMowerMapReading() { return false; }
+
+        // Karten-Verwaltung (optional, Standardimplementierungen liefern leere Werte)
+        virtual std::vector<MapInfo> mapList() { return {}; }
+        virtual String activeMapId() { return ""; }
+        virtual String currentMapId() { return ""; }
+        virtual bool mapListDirty() { return false; }
+        virtual void clearMapListDirty() {}
+        virtual String saveMap(const String &name, double rotation = 0.0) { (void)name; (void)rotation; return ""; }
+        virtual bool loadMap(const String &id) { (void)id; return false; }
+        virtual bool renameMap(const String &id, const String &name) { (void)id; (void)name; return false; }
+        virtual bool deleteMap(const String &id) { (void)id; return false; }
+        virtual bool setActiveMap(const String &id) { (void)id; return false; }
+        virtual bool discardMap() { return false; }
+        virtual String currentMapHash() { return ""; }
+        virtual int currentMapCrc() { return 0; }
+        virtual double currentMapArea() { return 0.0; }
+        virtual double currentMapRotation() { return 0.0; }
+
+        // Mower-compatible JSON import/export helpers.
+        // Returns true on successful import, the map is placed into outMap.
+        virtual bool importMowerMap(const String &json, ArduMower::Domain::Robot::MowerMap &outMap) { (void)json; (void)outMap; return false; }
+        virtual String exportMowerMap(const ArduMower::Domain::Robot::MowerMap &map) { (void)map; return ""; }
+      };
+
+      class CommandExecutor
+      {
+      public:
+
+        virtual bool changeSpeed(float speed) = 0;
+        virtual bool changeWayPerc(float perc) = 0;
+        virtual bool changeMowHeight(int height) = 0;
+        virtual bool tuneParam(int index, float value) = 0;
+        virtual bool dock() = 0;
+        virtual bool finishAndRestartEnabled(bool enabled) = 0;
+        virtual bool mowerEnabled(bool enabled) = 0;
+        virtual bool mowerAuto() = 0;
+        virtual bool setFixTimeout(int timeout) = 0;
+        virtual bool setWaypoint(float waypoint) = 0;
+        virtual bool skipWaypoint() = 0;
+        virtual bool start() = 0;
+        virtual bool stop() = 0;
+        virtual bool sonarEnabled(bool enabled) = 0;
+
+        virtual bool requestVersion() = 0;
+        virtual bool requestStatus() = 0;
+        virtual bool requestStatusNow() = 0;
+        virtual bool requestStats() = 0;
+        virtual bool requestStatsNow() = 0;
+        virtual bool requestSensorSummary() = 0;
+        virtual bool requestObstacles() = 0;
+        virtual bool applyPositionSettings() = 0;
+#if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
+        virtual bool requestGpsDetails() = 0;
+        virtual bool sendUbx(const String &hexCmd) = 0;
+#endif
+
+        virtual bool manualDrive(float linear, float angular) = 0;
+        virtual bool navigateTo(float x, float y) = 0;
+
+        virtual bool reboot() = 0;
+        virtual bool rebootGPS() = 0;
+        virtual bool powerOff() = 0;
+
+        virtual bool uploadMapToMower() = 0;
+        virtual bool uploadMapToMowerActive() { return false; }
+        virtual bool uploadMapToMowerSuccess() { return false; }
+        virtual UploadProgress uploadProgress() { return UploadProgress(); }
+        virtual bool customCmd(String cmd) = 0;
+      };
+    }
+  }
+}

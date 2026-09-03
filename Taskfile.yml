@@ -1,0 +1,330 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  A2L_CMD: ~/Library/Arduino15/packages/esp32/tools/xtensa-esp32-elf-gcc/1.22.0-97-gc752ad5-5.2.0/bin/xtensa-esp32-elf-addr2line
+
+dotenv: ['.env']
+
+tasks:
+  clean:
+    cmds:
+    - rm -rf ui/build
+
+  build-ui:
+    vars:
+      VITE_ENABLE_MAP: '{{default "false" .VITE_ENABLE_MAP}}'
+      VITE_ENABLE_LIVE_MAP: '{{default "false" .VITE_ENABLE_LIVE_MAP}}'
+      VITE_ENABLE_GPS_DASHBOARD: '{{default "false" .VITE_ENABLE_GPS_DASHBOARD}}'
+    cmds:
+    - VITE_ENABLE_MAP={{.VITE_ENABLE_MAP}} VITE_ENABLE_LIVE_MAP={{.VITE_ENABLE_LIVE_MAP}} VITE_ENABLE_GPS_DASHBOARD={{.VITE_ENABLE_GPS_DASHBOARD}} npm run build
+    dir: ui
+  
+  debug-ui:
+    vars:
+      ESP_TARGET: '{{default "esp32" .ESP_TARGET}}'
+      IS_S3: '{{if eq (lower .ESP_TARGET) "esp32-s3"}}true{{else}}false{{end}}'
+      VITE_ENABLE_MAP: '{{if eq .IS_S3 "true"}}true{{else}}false{{end}}'
+      VITE_ENABLE_LIVE_MAP: '{{if eq .IS_S3 "true"}}true{{else}}false{{end}}'
+      VITE_ENABLE_GPS_DASHBOARD: '{{if eq .IS_S3 "true"}}true{{else}}false{{end}}'
+    cmds:
+    - VITE_ENABLE_MAP={{.VITE_ENABLE_MAP}} VITE_ENABLE_LIVE_MAP={{.VITE_ENABLE_LIVE_MAP}} VITE_ENABLE_GPS_DASHBOARD={{.VITE_ENABLE_GPS_DASHBOARD}} npm run dev
+    dir: ui
+
+  package-ui:
+    vars:
+      ESP_TARGET: '{{default "esp32" .ESP_TARGET}}'
+      VITE_ENABLE_MAP: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
+      VITE_ENABLE_LIVE_MAP: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
+      VITE_ENABLE_GPS_DASHBOARD: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
+    cmds:
+    - go run .
+    deps:
+    - task: build-ui
+      vars:
+        VITE_ENABLE_MAP: '{{.VITE_ENABLE_MAP}}'
+        VITE_ENABLE_LIVE_MAP: '{{.VITE_ENABLE_LIVE_MAP}}'
+        VITE_ENABLE_GPS_DASHBOARD: '{{.VITE_ENABLE_GPS_DASHBOARD}}'
+    dir: util/package_ui
+    generates:
+    - ../../src/sys/asset_bundle.h
+    sources:
+    - ../../ui/build/**/*
+    - ./**/*
+
+  compile:
+    vars:
+      ESP_TARGET: '{{default "esp32" .ESP_TARGET}}'
+      VARIANT: '{{default "ESP_MODEM_APP" .VARIANT}}'
+    cmds:
+    - |
+      ESP_TARGET="{{.ESP_TARGET}}"
+      git_tag_defines=$(ci/bin/git-tag.sh)
+      if [ "$ESP_TARGET" = "esp32-S3" ]; then
+        target_fqbn=esp32:esp32:esp32s3
+        partitions=default_16MB
+        flash_size=16MB
+        upload_size=16777216
+        flash_mode=qio
+        f_cpu_prop=""
+        arduino-cli core install esp32:esp32
+        arduino-cli compile \
+          ardumower-modem.ino \
+          --output-dir build/dist/{{.VARIANT}} \
+          --fqbn "$target_fqbn" \
+          --build-path $PWD/build/caches/{{.VARIANT}}/build \
+          --build-property build.flash_freq=80m \
+          --build-property build.flash_size="$flash_size" \
+          --build-property build.flash_mode=$flash_mode \
+          $f_cpu_prop \
+          --build-property build.partitions="$partitions" \
+          --build-property upload.maximum_size="$upload_size" \
+          --build-property "build.extra_flags=-DESP32 -D{{.VARIANT}} $git_tag_defines -Isrc -Isrc/hal -Isrc/comm -Isrc/device -Isrc/domain -Isrc/sys -Isrc/ota -Isrc/stm32ota"
+      else
+        target_fqbn=esp32:esp32:lolin32
+        partitions=min_spiffs
+        flash_size=4MB
+        upload_size=1966080
+        flash_mode=qio
+        f_cpu_prop="--build-property build.f_cpu=160000000L"
+        arduino-cli core install esp32:esp32
+        arduino-cli compile \
+          ardumower-modem.ino \
+          --output-dir build/dist/{{.VARIANT}} \
+          --fqbn "$target_fqbn" \
+          --build-path $PWD/build/caches/{{.VARIANT}}/build \
+          --build-property build.flash_freq=80m \
+          --build-property build.flash_size="$flash_size" \
+          --build-property build.flash_mode=$flash_mode \
+          $f_cpu_prop \
+          --build-property build.partitions="$partitions" \
+          --build-property upload.maximum_size="$upload_size" \
+          --build-property "build.extra_flags=-DESP32 -D{{.VARIANT}} -DENABLE_PS4_CONTROLLER $git_tag_defines -Isrc -Isrc/hal -Isrc/comm -Isrc/device -Isrc/domain -Isrc/sys -Isrc/ota -Isrc/stm32ota"
+      fi
+    deps:
+    - task: package-ui
+      vars:
+        VITE_ENABLE_MAP: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
+        VITE_ENABLE_LIVE_MAP: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
+        VITE_ENABLE_GPS_DASHBOARD: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
+
+  compile-with-ps4:
+    cmds:
+    - ~/.platformio/penv/bin/pio run
+    deps:
+    - task: package-ui
+      vars:
+        VITE_ENABLE_MAP: 'true'
+        VITE_ENABLE_LIVE_MAP: 'true'
+        VITE_ENABLE_GPS_DASHBOARD: 'true'
+
+  compile-pio:
+    vars:
+      ESP_TARGET: '{{default "esp32-S3" .ESP_TARGET}}'
+      PIO_ENV: '{{if eq .ESP_TARGET "esp32-S3"}}esp32-S3-N16-R8{{else}}{{.ESP_TARGET}}{{end}}'
+    cmds:
+    - ~/.platformio/penv/bin/pio run -e {{.PIO_ENV}}
+    deps:
+    - task: package-ui
+      vars:
+        VITE_ENABLE_MAP: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
+        VITE_ENABLE_LIVE_MAP: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
+        VITE_ENABLE_GPS_DASHBOARD: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
+    
+  build:
+    deps:
+    - task: package-ui
+    cmds:
+    - task: build-firmware
+    - task: build-sim
+    - task: build-test
+
+  build-firmware:
+    cmds:
+    - task: compile
+      vars: {VARIANT: ESP_MODEM_APP}
+
+  build-sim:
+    cmds:
+    - task: compile
+      vars: {VARIANT: ESP_MODEM_SIM}
+
+  build-firmware-with-ps4:
+    cmds:
+    - task: compile-with-ps4
+      vars: {VARIANT: ESP_MODEM_APP}
+
+
+  build-test:
+    cmds:
+    - task: compile
+      vars: {VARIANT: ESP_MODEM_TEST}
+
+  install-libraries:
+    silent: true
+    cmds:
+    - |
+      ESP_TARGET=${ESP_TARGET:-esp32}
+      library_file=".libraries.${ESP_TARGET}"
+      if [ ! -f "$library_file" ]; then
+        echo "Library file $library_file not found"
+        exit 1
+      fi
+      while read lib
+      do
+        [ -z "$lib" ] && continue
+        arduino-cli lib install "$lib"
+      done < "$library_file"
+
+  flash:
+    cmds:
+    - |
+      arduino-cli upload \
+        --verbose \
+        --port ${SERIAL_PORT} \
+        --fqbn esp32:esp32:lolin32 \
+        --input-file build/dist/{{.VARIANT}}/ardumower-modem.ino.bin
+    vars:
+      VARIANT: '{{default "ESP_MODEM_APP" .VARIANT}}'
+
+  run:
+    cmds:
+    - task: flash
+      vars: {VARIANT: ESP_MODEM_APP}
+    - task: monitor
+    deps:
+    - task: build-firmware
+
+  sim:
+    cmds:
+    - task: flash
+      vars: {VARIANT: ESP_MODEM_SIM}
+    - task: monitor
+    deps:
+    - task: build-sim
+
+  test:
+    cmds:
+    - task: flash
+      vars: {VARIANT: ESP_MODEM_TEST}
+    - task: test-monitor
+    deps:
+    - task: build-test
+
+  validate:
+    cmds:
+    - go run ./cmd/validate ${SERIAL_PORT} {{.CLI_ARGS}}
+    dir: util/validation
+    silent: true
+
+  ota:
+    cmds:
+    - |
+      curl ${ESP_DEV_IP}/api/modem/ota/post \
+        -v \
+        -u "${ESP_DEV_CREDS}" \
+        -X POST \
+        -H 'Content-type: application/binary' \
+        --data-binary @ardumower-modem.bin
+    deps: [task: build-firmware]
+  
+  ota-sim:
+    cmds:
+    - |
+      curl ${ESP_DEV_IP}/api/modem/ota/post \
+        -v \
+        -u "${ESP_DEV_CREDS}" \
+        -X POST \
+        -H 'Content-type: application/binary' \
+        --data-binary @ardumower-modem_sim.bin
+    deps: [task: build-sim]
+    dir: build
+  
+  ota-prod:
+    cmds:
+    - |
+      curl ${ESP_PROD_IP}/api/modem/ota/post \
+        -v \
+        -u "${ESP_PROD_CREDS}" \
+        -X POST \
+        -H 'Content-type: application/binary' \
+        --data-binary @ardumower-modem.bin
+    deps: [task: build-firmware]
+    dir: build
+
+  ota-with-ps4:
+    cmds:
+    - |
+      curl ${ESP_DEV_IP}/api/modem/ota/post \
+        -v \
+        -u "${ESP_DEV_CREDS}" \
+        -X POST \
+        -H 'Content-type: application/binary' \
+        --data-binary @.pio/build/esp32/firmware.bin
+    deps: [task: build-firmware-with-ps4]
+  
+  ota-sim-with-ps4:
+    cmds:
+    - |
+      curl ${ESP_DEV_IP}/api/modem/ota/upload \
+        -v \
+        -u "${ESP_DEV_CREDS}" \
+        -X POST \
+        -H 'Content-type: application/binary' \
+        --data-binary @.pio/build/esp32/firmware.bin 
+    
+  monitor:
+    # Ctrl-a Ctrl-\ terminates GNU screen
+    cmds:
+    - mv screenlog.0 screenlog.1
+    - screen -L ${SERIAL_PORT} 115200
+    deps: [task: stop-monitor]
+    silent: true
+  
+  stop-monitor:
+    cmds:
+    - |
+      pid=$(ps ax | grep "SCREEN -L ${SERIAL_PORT} 115200" | grep -v grep | cut -d\  -f1)
+      [ -z "$pid" ] || kill "$pid"
+    silent: true
+
+  test-monitor:
+    cmds:
+    - go run . ${SERIAL_PORT}
+    deps: [task: stop-monitor]
+    dir: util/serial_test_runner
+    silent: true
+
+  trace-test:
+    cmds:
+    - |
+      echo "paste 'Backtrace: 0x...' line now: "
+      read tmp backtrace
+      elf=build/ardumower-modem_test.elf
+      for x in $backtrace; do
+        {{.A2L_CMD}} -pfiaC -e $elf ${x%:*}
+      done
+    silent: true
+
+  trace-sim:
+    cmds:
+    - |
+      echo "paste 'Backtrace: 0x...' line now: "
+      read tmp backtrace
+      elf=build/ardumower-modem_sim.elf
+      for x in $backtrace; do
+        {{.A2L_CMD}} -pfiaC -e $elf ${x%:*}
+      done
+    silent: true
+
+  trace:
+    cmds:
+    - |
+      echo "paste 'Backtrace: 0x...' line now: "
+      read tmp backtrace
+      elf=build/ardumower-modem.elf
+      for x in $backtrace; do
+        {{.A2L_CMD}} -pfiaC -e $elf ${x%:*}
+      done
+    silent: true

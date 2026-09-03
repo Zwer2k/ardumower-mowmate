@@ -1,0 +1,100 @@
+<script lang="ts">
+  import type { SocketState } from "../../stores/socket";
+  import MowAreaToggles from "../MowAreaToggles.svelte";
+
+  export let compassRotation: number;
+  export let socketState: SocketState;
+  export let perimeterPoints: number;
+  export let exclusionPoints: number[];
+  export let dockpointsPoints: number;
+  export let waypointsPoints: number;
+  export let totalPoints: number;
+  export let needsUpload: boolean;
+  export let selectedExclusionIndex: number | null = null;
+  export let onCompassDown: (e: MouseEvent) => void;
+  export let mouseMapPos: { x: number; y: number } | null = null;
+</script>
+
+  <div class="map-top-right" role="group" aria-label="Map overlay controls" on:wheel|stopPropagation>
+  <button class="compass-btn" on:mousedown={onCompassDown} title="Karte drehen (ziehen für feine Ausrichtung)">
+    <svg viewBox="-12 -12 24 24" width="28" height="28">
+      <g transform="rotate({compassRotation})">
+        <circle cx="0" cy="0" r="10" fill="white" stroke="#999" stroke-width="1.5"/>
+        <polygon points="0,-8 -4,0 0,-2 4,0" fill="#d32f2f"/>
+        <polygon points="0,8 -4,0 0,2 4,0" fill="#999"/>
+      </g>
+    </svg>
+  </button>
+  {#if mouseMapPos}
+    <div class="map-coords">
+      {mouseMapPos.x.toFixed(2)}, {-mouseMapPos.y.toFixed(2)}
+    </div>
+  {/if}
+  <div class="map-point-counts">
+    <div><strong>Area:</strong> {(socketState.currentMapMeta?.area ?? 0).toFixed(1)} m²</div>
+    <div><strong>Perimeter:</strong> {perimeterPoints}</div>
+    {#each exclusionPoints as ep, i}
+      <div class:active={selectedExclusionIndex === i}><strong>Excl #{i}:</strong> {ep}</div>
+    {/each}
+    <div><strong>Dock:</strong> {dockpointsPoints}</div>
+    <div><strong>Way:</strong> {waypointsPoints}</div>
+    <div><strong>Total:</strong> {totalPoints}</div>
+    <div class:sync-ok={!needsUpload} class:sync-warn={needsUpload}>{needsUpload ? '⚠' : '✓'} {needsUpload ? 'not synced' : 'synced'}</div>
+  </div>
+  <MowAreaToggles />
+</div>
+
+<style>
+  .map-top-right {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.5rem;
+    z-index: 100;
+    pointer-events: none;
+  }
+  :global(.map-top-right > *) {
+    pointer-events: auto;
+  }
+  .compass-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+  }
+  .map-point-counts {
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    min-width: 120px;
+  }
+  .map-coords {
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    border-radius: 4px;
+    padding: 0.35rem 0.5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.75rem;
+    min-width: 120px;
+    text-align: right;
+    box-sizing: border-box;
+  }
+  .map-point-counts .active {
+    background: #fff9c4;
+    border-radius: 2px;
+    margin: -0.1rem -0.25rem;
+    padding: 0.1rem 0.25rem;
+  }
+  .sync-ok {
+    color: #2e7d32;
+  }
+  .sync-warn {
+    color: #c62828;
+  }
+</style>

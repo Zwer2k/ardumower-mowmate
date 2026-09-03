@@ -1,0 +1,497 @@
+export namespace Settings {
+  export interface General {
+    name: string;
+    encryption: boolean;
+    password: number;
+    has_password: boolean;
+  }
+  export interface Web {
+    protected: boolean;
+    username: string;
+    password: string;
+    has_password: boolean;
+  }
+  export interface WiFi {
+    mode: "sta" | "ap" | "off";
+    sta_ssid: string;
+    sta_psk: string;
+    has_sta_psk: boolean;
+    sta_ip_mode: "dhcp" | "static";
+    sta_ip: string;
+    sta_gateway: string;
+    sta_subnet: string;
+    sta_dns: string;
+    ap_ssid: string;
+    ap_psk: string;
+    has_ap_psk: boolean;
+  }
+  export interface Bluetooth {
+    enabled: boolean;
+    pin_enabled: boolean;
+    pin: number;
+    has_pin: boolean;
+  }
+
+  export interface PS4Controller {
+    enabled: boolean;
+    use_ps4_mac: boolean;
+    ps4_mac: string;
+  }
+  export interface Mqtt {
+    enabled: boolean;
+    server: string;
+    prefix: string;
+    username: string;
+    password: string;
+    has_password: boolean;
+    publish_status: boolean;
+    publish_format: "json" | "text" | "both";
+    publish_interval: number;
+    ha: boolean;
+    iob: boolean;
+  }
+  export interface Prometheus {
+    enabled: boolean;
+  }
+  export interface Time {
+    tz: string;
+    ntp_server1: string;
+    ntp_server2: string;
+  }
+  export interface Position {
+    mode: "relative" | "absolute";
+    lon: number;
+    lat: number;
+  }
+}
+
+export interface Settings {
+  initialized: boolean;
+  revision: number;
+  general: Settings.General;
+  time: Settings.Time;
+  web: Settings.Web;
+  wifi: Settings.WiFi;
+  bluetooth: Settings.Bluetooth;
+  ps4controller: Settings.PS4Controller;
+  mqtt: Settings.Mqtt;
+  prometheus: Settings.Prometheus;
+  position: Settings.Position;
+}
+
+export interface Info {
+  git_hash: string;
+  git_time: string;
+  git_tag: string;
+  build_time: string;
+  uptime: number;
+  bt_mac: string;
+}
+
+export interface Status {
+  uptime: number;
+}
+
+export interface ChangeEventValue {
+  event: Event;
+  value: any;
+}
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface Position extends Point {
+  delta: number;
+  solution: number;
+  age: number;
+  accuracy: number;
+  visible_satellites: number;
+  visible_satellites_dgps: number;
+  mow_point_index: number;
+}
+
+export interface ValueDescriptions {
+  job: { [jobId: number]: string };
+  posSolution: { [jobId: number]: string };
+  logLevel: number;
+}
+
+export const SensorDescriptions: { [sensorId: number]: string } = {
+  0: "none",
+  1: "bat undervoltage",
+  2: "obstacle",
+  3: "gps fix timeout",
+  4: "imu timeout",
+  5: "imu tilt",
+  6: "kidnapped",
+  7: "overload",
+  8: "motor error",
+  9: "gps invalid",
+  10: "odometry error",
+  11: "no route",
+  12: "mem overflow",
+  13: "bumper",
+  14: "sonar",
+  15: "lift",
+  16: "rain",
+  17: "stop button",
+  18: "temp out of range",
+};
+
+export interface Stats {
+  idle: number;
+  charge: number;
+  mow: number;
+  mow_invalid: number;
+  mow_float: number;
+  mow_fix: number;
+  mow_traveled: number;
+  gps_chk_sum_errors: number;
+  dgps_chk_sum_errors: number;
+  invalid_recoveries: number;
+  float_recoveries: number;
+  imu_triggered: number;
+  gps_motion_timeout: number;
+  sonar_triggered: number;
+  bumper_triggered: number;
+  obstacles: number;
+  gps_jumps: number;
+  max_cycle: number;
+  max_dpgs_age: number;
+  serial_buffer_size: number;
+  free_memory: number;
+  reset_cause: number;
+  temp_min: number;
+  temp_max: number;
+}
+
+export interface State {
+  timestamp: number;
+  battery_voltage: number;
+  position: Position;
+  target: Point;
+  job: number;
+  sensor: number;
+  amps: number;
+  map_crc: number;
+  progressPct?: number;
+  progressMsg?: string;
+  progressOp?: string;
+}
+
+export interface SensorSummary {
+  timestamp: number;
+  sonar_left: number;
+  sonar_center: number;
+  sonar_right: number;
+  sonar_obstacle: boolean;
+  sonar_near_obstacle: boolean;
+  bumper_left: boolean;
+  bumper_right: boolean;
+  bumper_obstacle: boolean;
+  bumper_near_obstacle: boolean;
+  lidar_obstacle: boolean;
+  lidar_near_obstacle: boolean;
+  lift_triggered: boolean;
+  rain_triggered: boolean;
+}
+
+export interface GpsSatellite {
+  gnssId: number;
+  svId: number;
+  sigId: number;
+  cno: number;
+  qualityInd: number;
+  prUsed: boolean;
+  crCorrUsed: boolean;
+  prRes: number;
+  elevation: number;
+  azimuth: number;
+}
+
+export interface GpsDetails {
+  timestamp: number;
+  numSV: number;
+  numSVdgps: number;
+  solution: number;
+  hAccuracy: number;
+  vAccuracy: number;
+  dgpsAge: number;
+  satellites: GpsSatellite[];
+}
+
+export interface DesiredState {
+  speed: number;
+  mower_motor_enabled: boolean;
+  finish_and_restart: boolean;
+  op: number;
+  fix_timeout: number;
+}
+
+export interface ModemLog {
+  log: LogLine[];
+}
+
+export enum LogLevel {
+  COMM = 32,
+  DBG = 16,
+  INFO = 8,
+  WARN = 4,
+  ERR = 2,
+  CRIT = 1,
+}
+
+export type LogLevelDescT = { [nr: number]: string };
+
+export let LogLevelDesc: LogLevelDescT = {
+  32: "COMM",
+  16: "DBG",
+  8: "INFO",
+  4: "WARN",
+  2: "ERR",
+  1: "CRIT",
+};
+
+export interface LogLine {
+  nr: number;
+  level: LogLevel;
+  text: String;
+  freeHeap: number;
+}
+
+export interface ConsoleLine {
+  nr: number;
+  isSend: boolean;
+  text: string;
+}
+
+export interface ConsoleResponseData {
+  lines: ConsoleLine[];
+}
+
+// Add map as a new response type
+export interface UbxResponse {
+  timestamp: number;
+  hex: string;
+}
+
+export interface MowSettings {
+  timestamp: number;
+  pattern: number;
+  width: number;
+  angle: number;
+  distanceToBorder: number;
+  borderLaps: number;
+  mowBorderCcw: boolean;
+  // Runtime toggles: already calculated areas can be switched on/off at runtime
+  doMowArea: boolean;
+  doMowPerimeter: boolean;
+  doMowBorder: boolean;
+  doMowExclusions: boolean;
+  doMowExclusionBorder: boolean;
+}
+
+export enum ResponseDataType {
+  hello = 0,
+  mowerState,
+  mowerStats,
+  desiredState,
+  modemLog,
+  mowerConsole,
+  map,
+  sensorSummary,
+  gpsDetails,
+  ubxResponse,
+  logExport,
+  mowSettings,
+  operationProgress,
+  mapList,
+  drivenTrack,
+  mowerMap,
+  schedule,
+  clock,
+  obstacles,
+}
+
+export interface ScheduleEntry {
+  id: number;
+  enabled: boolean;
+  name: string;
+  mapId: string;
+  mapName: string;
+  mode: 0 | 1 | 2; // daily | weekly | monthly
+  hour: number;
+  minute: number;
+  daysOfWeek: number; // bitmask bit0=So ... bit6=Sa
+  daysOfMonth: number; // bitmask bit0=1st ... bit30=31st
+}
+
+export interface ScheduleData {
+  enabled: boolean;
+  entries: ScheduleEntry[];
+  nextRun?: number;
+  nextRunEntryId?: number;
+  nextRunMapName?: string;
+  dirty?: boolean;
+}
+
+export interface ClockData {
+  epoch: number;
+  ntpSynced: boolean;
+}
+
+export interface DrivenTrackData {
+  points: { x: number; y: number; t: number }[];
+  size: number;
+}
+
+export interface ObstaclePolygon {
+  crc: number;
+  points: { x: number; y: number }[];
+}
+
+export interface ObstaclesData {
+  timestamp: number;
+  polygons: ObstaclePolygon[];
+}
+
+// Map data for WebSocket
+export interface MapPoint {
+  X: number;
+  Y: number;
+  delta?: number;
+  timestamp?: string;
+  sol?: number;
+  /** 1 wenn der Punkt eine automatisch berechnete Verbindung ist (Connector). */
+  conn?: number;
+  /** Interner Kategorie-Tag (Backend). 0=none, 1=area, 2=perimeter, 3=border,
+   *  4=exclusion_border, 5=exclusion_area, 6=connector, 7=transit, ... */
+  tag?: number;
+}
+
+export interface MapRaw {
+  perimeter: MapPoint[];
+  exclusions: MapPoint[][];
+  waypoints?: MapPoint[];
+  dockpoints?: MapPoint[];
+}
+
+export interface MapMeta {
+  id: string;
+  name: string;
+  area: number;
+  hash: string;
+  crc: number;
+  rotation: number;
+  timestamp: number;
+  unsaved: boolean;
+  requiresRename?: boolean;
+}
+
+export interface MapListData {
+  activeId: string;
+  currentId?: string;
+  unsaved?: boolean;
+  maps: MapMeta[];
+}
+
+export interface ResponseSocketMessage {
+  type: ResponseDataType;
+  data: State | DesiredState | ModemLog | ConsoleResponseData | MapRaw | MowSettings | MapListData | ScheduleData | ClockData;
+}
+
+export enum RequestDataType {
+  hello = 0,
+  modemLogSettings,
+  mowerConsoleRequest,
+  requestGpsDetails,
+  stopGpsDetails,
+  requestSensorSummary,
+  stopSensorSummary,
+  requestUbx,
+  requestLogExport,
+  joystickMove,
+  navigateTo,
+  setMap,
+  uploadMap,
+  robotCommand,
+  setMowSettings,
+  requestMowSettings,
+  clearWaypoints,
+  calculateWaypoints,
+  listMaps,
+  loadMap,
+  saveMap,
+  renameMap,
+  deleteMap,
+  discardMap,
+  setActiveMap,
+  importMap,
+  exportMap,
+  setSchedule,
+  saveSchedule,
+  requestSchedule,
+  requestClock,
+}
+
+export interface MowSettingsData {
+  pattern: number;
+  width: number;
+  angle: number;
+  distanceToBorder: number;
+  borderLaps: number;
+  mowBorderCcw: boolean;
+  doMowArea: boolean;
+  doMowPerimeter: boolean;
+  doMowBorder: boolean;
+  doMowExclusions: boolean;
+  doMowExclusionBorder: boolean;
+}
+
+export interface NavigateToData {
+  x: number;
+  y: number;
+}
+
+export interface ModemLogSettings {
+  logLevel: number;
+}
+
+export interface ConsoleRequestData {
+  cmd: string;
+}
+
+export interface JoystickMoveData {
+  linear: number;
+  angular: number;
+}
+
+export interface MapSetData {
+  perimeter: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[];
+  exclusions: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[][];
+  dockpoints: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[];
+  searchWire: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[];
+  waypoints: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[];
+  rotation: number;
+  dateTime?: string;
+  source?: string;
+}
+
+export interface RequestSocketMessage {
+  type: RequestDataType;
+  data:
+    | ModemLogSettings
+    | ConsoleRequestData
+    | JoystickMoveData
+    | NavigateToData
+    | MapSetData
+    | MowSettingsData
+    | { id: string }
+    | { id: string; name: string }
+    | { name: string; rotation: number }
+    | { action: string; [key: string]: any }
+    | { hex: string }
+    | Record<string, never>;
+}

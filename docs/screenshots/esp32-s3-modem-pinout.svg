@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 950 640" font-family="Arial, Helvetica, sans-serif" font-size="12">
+  <defs>
+    <linearGradient id="board" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2a5c2a"/>
+      <stop offset="100%" stop-color="#1e7a1e"/>
+    </linearGradient>
+    <filter id="shadow" x="-2" y="-2" width="6" height="6">
+      <feDropShadow dx="1" dy="1" stdDeviation="1" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#1a1a2e"/>
+
+  <text x="475" y="30" text-anchor="middle" fill="#ddd" font-size="16" font-weight="bold">ESP32-S3-DevKitC-1 — Modem Pinout</text>
+
+  <!-- Board -->
+  <rect x="280" y="55" width="390" height="490" rx="8" fill="url(#board)" stroke="#0a3a0a" stroke-width="2"/>
+  <rect x="290" y="65" width="370" height="470" rx="4" fill="none" stroke="#3a8a3a" stroke-width="1" stroke-dasharray="4,4"/>
+
+  <rect x="320" y="190" width="310" height="120" rx="4" fill="#1a4a1a" stroke="#3a8a3a" stroke-width="1"/>
+  <text x="475" y="230" text-anchor="middle" fill="#8c8" font-size="13" font-weight="bold">ESP32-S3-WROOM-1</text>
+  <text x="475" y="253" text-anchor="middle" fill="#6a6" font-size="10">240 MHz · 16 MB Flash · 8 MB PSRAM</text>
+  <text x="475" y="270" text-anchor="middle" fill="#6a6" font-size="10">WiFi + BLE 5.0</text>
+  <text x="475" y="290" text-anchor="middle" fill="#6a6" font-size="10">Pin header J1 (left) · J3 (right)</text>
+
+  <!-- J1 -->
+  <rect x="262" y="65" width="20" height="470" rx="2" fill="#222" stroke="#555" stroke-width="1"/>
+  <text x="272" y="300" text-anchor="middle" fill="#666" font-size="9" transform="rotate(-90, 272, 300)">J1</text>
+
+  <!-- J3 -->
+  <rect x="668" y="65" width="20" height="470" rx="2" fill="#222" stroke="#555" stroke-width="1"/>
+  <text x="678" y="300" text-anchor="middle" fill="#666" font-size="9" transform="rotate(90, 678, 300)">J3</text>
+
+  <!-- ===== J1 PIN MARKERS (spacing 44px, first pin y=140) ===== -->
+  <!-- Pin 5: 140 -->
+  <!-- Pin 7: 140 + 2*44 = 228 -->
+  <!-- Pin 8 (GPIO15): 140 + 3*44 = 272 -->
+  <!-- Pin 9 (GPIO16): 140 + 4*44 = 316 -->
+  <!-- Pin 10 (GPIO17): 140 + 5*44 = 360 -->
+  <!-- Pin 11 (GPIO18): 140 + 6*44 = 404 -->
+
+  <rect x="278" y="140" width="28" height="20" rx="2" fill="#e74c3c" filter="url(#shadow)"/>
+  <text x="292" y="154" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold">5</text>
+
+  <rect x="278" y="228" width="28" height="20" rx="2" fill="#e74c3c" filter="url(#shadow)"/>
+  <text x="292" y="242" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold">7</text>
+
+  <rect x="278" y="272" width="28" height="20" rx="2" fill="#2ecc71" filter="url(#shadow)"/>
+  <text x="292" y="286" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold">15</text>
+
+  <rect x="278" y="316" width="28" height="20" rx="2" fill="#2ecc71" filter="url(#shadow)"/>
+  <text x="292" y="330" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold">16</text>
+
+  <rect x="278" y="360" width="28" height="20" rx="2" fill="#3498db" filter="url(#shadow)"/>
+  <text x="292" y="374" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold">17</text>
+
+  <rect x="278" y="404" width="28" height="20" rx="2" fill="#3498db" filter="url(#shadow)"/>
+  <text x="292" y="418" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold">18</text>
+
+  <!-- ===== J3 PIN MARKERS ===== -->
+  <!-- Pin 2 (GPIO43): 140 - 3*44 = 8 → too high. Let's use 100 -->
+  <!-- Pin 3 (GPIO44): 100 + 44 = 144 -->
+  <!-- Pin 16 (GPIO48): 100 + 14*44 = 716 → too low. Let's use 490 -->
+
+  <rect x="644" y="100" width="28" height="20" rx="2" fill="#f39c12" filter="url(#shadow)"/>
+  <text x="658" y="114" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold">43</text>
+
+  <rect x="644" y="144" width="28" height="20" rx="2" fill="#f39c12" filter="url(#shadow)"/>
+  <text x="658" y="158" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold">44</text>
+
+  <rect x="644" y="490" width="28" height="20" rx="2" fill="#9b59b6" filter="url(#shadow)"/>
+  <text x="658" y="504" text-anchor="middle" fill="#fff" font-size="9" font-weight="bold">48</text>
+
+  <!-- ===== LEFT LABELS ===== -->
+  <!-- Each label box at pin_y - 2, h=24. Desc at pin_y + 26. Next pin at pin_y + 44 -->
+
+  <!-- GPIO5: pin_y=140 -->
+  <rect x="15" y="138" width="225" height="24" rx="3" fill="#e74c3c"/>
+  <text x="127" y="155" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">GPIO5 · BOOT0</text>
+  <text x="15" y="170" fill="#aaa" font-size="9">→ STM32 BOOT0 pin · HIGH=flash, LOW=run</text>
+  <line x1="240" y1="150" x2="278" y2="150" stroke="#e74c3c" stroke-width="1.5"/>
+
+  <!-- GPIO7: pin_y=228 -->
+  <rect x="15" y="226" width="225" height="24" rx="3" fill="#e74c3c"/>
+  <text x="127" y="243" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">GPIO7 · NRST</text>
+  <text x="15" y="258" fill="#aaa" font-size="9">→ STM32 NRST pin · LOW pulse to reset</text>
+  <line x1="240" y1="238" x2="278" y2="238" stroke="#e74c3c" stroke-width="1.5"/>
+
+  <!-- GPIO15: pin_y=272 -->
+  <rect x="15" y="270" width="225" height="24" rx="3" fill="#2ecc71"/>
+  <text x="127" y="287" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">GPIO15 · TERMINAL_RX</text>
+  <text x="15" y="302" fill="#aaa" font-size="9">← Mower UART receive (Serial1 RX)</text>
+  <line x1="240" y1="282" x2="278" y2="282" stroke="#2ecc71" stroke-width="1.5"/>
+
+  <!-- GPIO16: pin_y=316 -->
+  <rect x="15" y="314" width="225" height="24" rx="3" fill="#2ecc71"/>
+  <text x="127" y="331" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">GPIO16 · TERMINAL_TX</text>
+  <text x="15" y="346" fill="#aaa" font-size="9">→ Mower UART transmit (Serial1 TX)</text>
+  <line x1="240" y1="326" x2="278" y2="326" stroke="#2ecc71" stroke-width="1.5"/>
+
+  <!-- GPIO17: pin_y=360 -->
+  <rect x="15" y="358" width="225" height="24" rx="3" fill="#3498db"/>
+  <text x="127" y="375" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">GPIO17 · ROUTER_TX</text>
+  <text x="15" y="390" fill="#aaa" font-size="9">→ Mower UART RX (AT commands, Serial2)</text>
+  <line x1="240" y1="370" x2="278" y2="370" stroke="#3498db" stroke-width="1.5"/>
+
+  <!-- GPIO18: pin_y=404 -->
+  <rect x="15" y="402" width="225" height="24" rx="3" fill="#3498db"/>
+  <text x="127" y="419" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">GPIO18 · ROUTER_RX</text>
+  <text x="15" y="434" fill="#aaa" font-size="9">← Mower UART TX (AT responses, Serial2)</text>
+  <line x1="240" y1="414" x2="278" y2="414" stroke="#3498db" stroke-width="1.5"/>
+
+  <!-- Serial1 note -->
+  <rect x="15" y="455" width="225" height="36" rx="3" fill="rgba(46,204,113,0.12)" stroke="#2ecc71" stroke-width="1"/>
+  <text x="127" y="468" text-anchor="middle" fill="#2ecc71" font-size="8">Serial1 shared: Terminal + OTA flash</text>
+  <text x="127" y="482" text-anchor="middle" fill="#2ecc71" font-size="8">GPIO5 + 7 only used for STM32 OTA</text>
+
+  <!-- ===== RIGHT LABELS ===== -->
+  <!-- GPIO43 -->
+  <rect x="700" y="95" width="230" height="24" rx="3" fill="#f39c12"/>
+  <text x="815" y="112" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">GPIO43 · U0TXD (Console)</text>
+  <text x="815" y="133" text-anchor="middle" fill="#f39c12" font-size="9">USB-to-UART bridge → Debug console TX</text>
+  <line x1="672" y1="110" x2="700" y2="110" stroke="#f39c12" stroke-width="1.5"/>
+
+  <!-- GPIO44 -->
+  <rect x="700" y="144" width="230" height="24" rx="3" fill="#f39c12"/>
+  <text x="815" y="161" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">GPIO44 · U0RXD (Console)</text>
+  <text x="815" y="182" text-anchor="middle" fill="#f39c12" font-size="9">USB-to-UART bridge → Debug console RX</text>
+  <line x1="672" y1="154" x2="700" y2="154" stroke="#f39c12" stroke-width="1.5"/>
+
+  <!-- GPIO48 -->
+  <rect x="700" y="488" width="230" height="24" rx="3" fill="#9b59b6"/>
+  <text x="815" y="505" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">GPIO48 · RGB LED (unused)</text>
+  <text x="815" y="524" text-anchor="middle" fill="#9b59b6" font-size="9">Onboard, not driven by firmware</text>
+  <line x1="672" y1="500" x2="700" y2="500" stroke="#9b59b6" stroke-width="1.5"/>
+
+  <!-- ===== LEGEND ===== -->
+  <rect x="25" y="560" width="900" height="60" rx="4" fill="rgba(0,0,0,0.4)" stroke="#555" stroke-width="1"/>
+  <text x="45" y="578" fill="#ccc" font-size="11" font-weight="bold">Legend:</text>
+
+  <rect x="45" y="588" width="14" height="14" rx="3" fill="#e74c3c"/>
+  <text x="65" y="600" fill="#bbb" font-size="9">STM32 OTA control</text>
+
+  <rect x="230" y="588" width="14" height="14" rx="3" fill="#2ecc71"/>
+  <text x="250" y="600" fill="#bbb" font-size="9">Terminal / OTA flash (Serial1)</text>
+
+  <rect x="460" y="588" width="14" height="14" rx="3" fill="#3498db"/>
+  <text x="480" y="600" fill="#bbb" font-size="9">Router · AT commands (Serial2)</text>
+
+  <rect x="700" y="588" width="14" height="14" rx="3" fill="#f39c12"/>
+  <text x="720" y="600" fill="#bbb" font-size="9">USB debug console</text>
+
+  <rect x="45" y="608" width="14" height="14" rx="3" fill="#9b59b6"/>
+  <text x="65" y="620" fill="#bbb" font-size="9">RGB LED (not driven by firmware)</text>
+</svg>
