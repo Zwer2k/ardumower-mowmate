@@ -9,9 +9,9 @@ Alternatively, the **ESP32-S3-WROOM-1 module can be soldered directly onto a cus
 - **USB-to-UART bridge** (e.g., CP2102 or CH340C) for the serial console (GPIO43/44) and flashing
 - **5V power supply** (from mower PSU or USB)
 
-![ESP32-S3-DevKitC-1 Pinout (Modem)](screenshots/esp32-s3-modem-pinout.svg)
+![ESP32-S3-DevKitC-1 Pinout (MATRIX MOW800 / STM32)](screenshots/esp32-s3-mow800-stm32-pinout.svg)
 
-## Connections (ArduMower Modem)
+## Connections (MATRIX MOW800 / STM32)
 
 | Pin | Signal      | Direction | Connected to           | Description |
 |-----|-------------|-----------|------------------------|-------------|

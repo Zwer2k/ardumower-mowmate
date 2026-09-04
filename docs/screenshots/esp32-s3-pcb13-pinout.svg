@@ -1,0 +1,603 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 980 690"
+   font-family="Arial, Helvetica, sans-serif"
+   font-size="12"
+   version="1.1"
+   id="svg38"
+   sodipodi:docname="esp32-s3-pcb13-pinout.svg"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview38"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="0.96102398"
+     inkscape:cx="468.25054"
+     inkscape:cy="304.88313"
+     inkscape:window-width="1440"
+     inkscape:window-height="828"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg38" />
+  <defs
+     id="defs4">
+    <rect
+       x="442.22222"
+       y="259.25926"
+       width="10.37037"
+       height="20"
+       id="rect42" />
+    <linearGradient
+       id="pcb"
+       x1="0"
+       y1="0"
+       x2="1"
+       y2="0">
+      <stop
+         offset="0%"
+         stop-color="#1f4f1f"
+         id="stop1" />
+      <stop
+         offset="100%"
+         stop-color="#2f7a2f"
+         id="stop2" />
+    </linearGradient>
+    <linearGradient
+       id="esp"
+       x1="659.68399"
+       y1="58.468904"
+       x2="1110.4877"
+       y2="58.468904"
+       gradientTransform="matrix(0.84759878,0,0,1.063785,-0.19771717,6.8501487)"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0%"
+         stop-color="#2b2b2b"
+         id="stop3" />
+      <stop
+         offset="100%"
+         stop-color="#3c3c3c"
+         id="stop4" />
+    </linearGradient>
+    <filter
+       id="shadow"
+       x="-2"
+       y="-2"
+       width="6"
+       height="6">
+      <feDropShadow
+         dx="1"
+         dy="1"
+         stdDeviation="1"
+         flood-opacity="0.5" />
+    </filter>
+  </defs>
+  <rect
+     width="100%"
+     height="100%"
+     fill="#1a1a2e"
+     id="rect4" />
+  <text
+     x="490"
+     y="30"
+     text-anchor="middle"
+     fill="#ddd"
+     font-size="16"
+     font-weight="bold"
+     id="text4">ArduMower PCB 1.3 → ESP32-S3-DevKitC-1</text>
+  <!-- LEFT: PCB 1.3 -->
+  <rect
+     x="40"
+     y="70"
+     width="380"
+     height="480"
+     rx="10"
+     fill="url(#pcb)"
+     stroke="#0b3a0b"
+     stroke-width="2"
+     id="rect5" />
+  <rect
+     x="55"
+     y="85"
+     width="350"
+     height="450"
+     rx="5"
+     fill="none"
+     stroke="#4a9a4a"
+     stroke-width="1"
+     stroke-dasharray="4,4"
+     id="rect6" />
+  <text
+     x="230"
+     y="112"
+     text-anchor="middle"
+     fill="#cfe6cf"
+     font-size="15"
+     font-weight="bold"
+     id="text6">ArduMower PCB 1.3</text>
+  <rect
+     x="85"
+     y="140"
+     width="280"
+     height="58"
+     rx="5"
+     fill="#25395f"
+     stroke="#5b7fd4"
+     stroke-width="1.5"
+     id="rect7" />
+  <text
+     x="225"
+     y="161"
+     text-anchor="middle"
+     fill="#fff"
+     font-size="12"
+     font-weight="bold"
+     id="text7">P44 (WLAN)</text>
+  <text
+     x="225"
+     y="180"
+     text-anchor="middle"
+     fill="#bcd0ff"
+     font-size="10"
+     id="text8">Router / AT UART</text>
+  <rect
+     x="85"
+     y="220"
+     width="280"
+     height="58"
+     rx="5"
+     fill="#234d35"
+     stroke="#63c78a"
+     stroke-width="1.5"
+     stroke-dasharray="6,4"
+     id="rect8" />
+  <text
+     x="225"
+     y="241"
+     text-anchor="middle"
+     fill="#fff"
+     font-size="12"
+     font-weight="bold"
+     id="text9">P27 (PX0/RX0)</text>
+  <text
+     x="225"
+     y="260"
+     text-anchor="middle"
+     fill="#bff0d0"
+     font-size="10"
+     id="text10">Terminal · optional</text>
+  <rect
+     x="85"
+     y="300"
+     width="280"
+     height="58"
+     rx="5"
+     fill="#5f2b2b"
+     stroke="#d47f7f"
+     stroke-width="1.5"
+     stroke-dasharray="6,4"
+     id="rect10" />
+  <text
+     x="225"
+     y="321"
+     text-anchor="middle"
+     fill="#fff"
+     font-size="12"
+     font-weight="bold"
+     id="text11">P23 (MP-R)</text>
+  <text
+     x="225"
+     y="340"
+     text-anchor="middle"
+     fill="#ffd0d0"
+     font-size="10"
+     id="text12">Reset · optional</text>
+  <rect
+     x="84.961128"
+     y="397.96112"
+     width="280.07773"
+     height="52.129463"
+     rx="5.0013881"
+     fill="#173f2a"
+     stroke="#4a9a4a"
+     stroke-width="1.42226"
+     id="rect12" />
+  <text
+     x="225"
+     y="419"
+     text-anchor="middle"
+     fill="#ffffff"
+     font-size="12px"
+     font-weight="bold"
+     id="text13">JP11</text>
+  <text
+     x="225"
+     y="438"
+     text-anchor="middle"
+     fill="#bde8cf"
+     font-size="10px"
+     id="text14">3.3V logic only</text>
+  <rect
+     x="84.84198"
+     y="474.06421"
+     width="280.31604"
+     height="36.093815"
+     rx="5.0056434"
+     fill="#3a3a3a"
+     stroke="#888888"
+     stroke-width="1.18396"
+     id="rect14" />
+  <text
+     x="225"
+     y="495"
+     text-anchor="middle"
+     fill="#ffffff"
+     font-size="12px"
+     font-weight="bold"
+     id="text15">GND</text>
+  <!-- RIGHT: ESP32-S3 -->
+  <rect
+     x="559.94989"
+     y="69.949913"
+     width="380.10016"
+     height="477.75534"
+     rx="10.002636"
+     fill="url(#esp)"
+     stroke="#222222"
+     stroke-width="2.01251"
+     id="rect16"
+     style="fill:url(#esp)" />
+  <rect
+     x="574.97168"
+     y="84.972153"
+     width="350.05667"
+     height="445.33157"
+     rx="5.0008097"
+     fill="none"
+     stroke="#777777"
+     stroke-width="1"
+     stroke-dasharray="4, 4"
+     id="rect17" />
+  <text
+     x="750"
+     y="112"
+     text-anchor="middle"
+     fill="#ddd"
+     font-size="15"
+     font-weight="bold"
+     id="text17">ESP32-S3-DevKitC-1</text>
+  <rect
+     x="600"
+     y="140"
+     width="300"
+     height="34"
+     rx="4"
+     fill="#3498db"
+     id="rect18" />
+  <text
+     x="750"
+     y="162"
+     text-anchor="middle"
+     fill="#fff"
+     font-size="11"
+     font-weight="bold"
+     id="text18">GPIO17 · ROUTER_TX</text>
+  <rect
+     x="600"
+     y="190"
+     width="300"
+     height="34"
+     rx="4"
+     fill="#3498db"
+     id="rect19" />
+  <text
+     x="750"
+     y="212"
+     text-anchor="middle"
+     fill="#fff"
+     font-size="11"
+     font-weight="bold"
+     id="text19">GPIO18 · ROUTER_RX</text>
+  <rect
+     x="600"
+     y="250"
+     width="300"
+     height="34"
+     rx="4"
+     fill="#2ecc71"
+     stroke="#2ecc71"
+     stroke-dasharray="6,4"
+     id="rect20" />
+  <text
+     x="750"
+     y="272"
+     text-anchor="middle"
+     fill="#fff"
+     font-size="11"
+     font-weight="bold"
+     id="text20">GPIO15 · TERMINAL_RX</text>
+  <rect
+     x="600"
+     y="300"
+     width="300"
+     height="34"
+     rx="4"
+     fill="#e74c3c"
+     stroke="#e74c3c"
+     stroke-dasharray="6,4"
+     id="rect21" />
+  <text
+     x="750"
+     y="322"
+     text-anchor="middle"
+     fill="#fff"
+     font-size="11"
+     font-weight="bold"
+     id="text21">GPIO7 · NRST</text>
+  <rect
+     x="600"
+     y="360"
+     width="300"
+     height="34"
+     rx="4"
+     fill="#8e44ad"
+     id="rect22" />
+  <text
+     x="750"
+     y="382"
+     text-anchor="middle"
+     fill="#fff"
+     font-size="11"
+     font-weight="bold"
+     id="text22">GPIO5 · BOOT0 (not used)</text>
+  <rect
+     x="600"
+     y="412"
+     width="300"
+     height="46"
+     rx="4"
+     fill="#f39c12"
+     id="rect23" />
+  <text
+     x="750"
+     y="432"
+     text-anchor="middle"
+     fill="#ffffff"
+     font-size="11px"
+     font-weight="bold"
+     id="text23">GPIO43/44 · Debug Console</text>
+  <text
+     x="750"
+     y="449"
+     text-anchor="middle"
+     fill="#ffe0b3"
+     font-size="9px"
+     id="text24"
+     style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:13.3333px;font-family:Arial, Helvetica, sans-serif;-inkscape-font-specification:'Arial, Helvetica, sans-serif, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-anchor:middle;fill:#ffe0b3"><tspan
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:10.6667px;font-family:Sans;-inkscape-font-specification:'Sans, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal"
+       id="tspan38">USB-to-UART on DevKitC-1</tspan></text>
+  <rect
+     x="600"
+     y="478"
+     width="300"
+     height="34"
+     rx="4"
+     fill="#3a3a3a"
+     stroke="#888888"
+     stroke-width="1.5"
+     id="rect24" />
+  <text
+     x="750"
+     y="498"
+     text-anchor="middle"
+     fill="#ffffff"
+     font-size="11px"
+     font-weight="bold"
+     id="text25">GND</text>
+  <text
+     x="748.33136"
+     y="126.61237"
+     text-anchor="middle"
+     fill="#ffb3ab"
+     font-size="11px"
+     font-weight="bold"
+     id="text26">No 5V on GPIOs</text>
+  <!-- CONNECTIONS -->
+  <line
+     x1="364.84692"
+     y1="157.08287"
+     x2="600.15308"
+     y2="156.91713"
+     stroke="#3498db"
+     stroke-width="3"
+     id="line26" />
+  <text
+     x="326.15588"
+     y="161.57104"
+     fill="#8fc3ff"
+     font-size="9px"
+     transform="rotate(-0.20751158)"
+     id="text27"><tspan
+       sodipodi:role="line"
+       id="tspan45"
+       x="326.15588"
+       y="161.57104">Pin 3 TX</tspan></text>
+  <line
+     x1="364.55844"
+     y1="188.65181"
+     x2="600.44153"
+     y2="206.34819"
+     stroke="#3498db"
+     stroke-width="3"
+     id="line27" />
+  <text
+     x="323.89117"
+     y="195.42685"
+     fill="#8fc3ff"
+     font-size="9px"
+     transform="rotate(-0.78927001)"
+     id="text28"><tspan
+       sodipodi:role="line"
+       id="tspan47"
+       x="323.89117"
+       y="195.42685">Pin 4 RX</tspan></text>
+  <line
+     x1="365"
+     y1="249"
+     x2="600"
+     y2="267"
+     stroke="#2ecc71"
+     stroke-width="3"
+     stroke-dasharray="8,5"
+     id="line28" />
+  <text
+     x="324.39648"
+     y="247.38165"
+     fill="#8ee6a9"
+     font-size="9px"
+     transform="rotate(0.76157908)"
+     id="text29"><tspan
+       sodipodi:role="line"
+       id="tspan42"
+       x="324.39648"
+       y="247.38165">Pin 4 TX0</tspan></text>
+  <line
+     x1="365"
+     y1="329"
+     x2="600"
+     y2="317"
+     stroke="#e74c3c"
+     stroke-width="3"
+     stroke-dasharray="8,5"
+     id="line29" />
+  <text
+     x="304.31647"
+     y="337.586"
+     fill="#ff9d9d"
+     font-size="9px"
+     transform="rotate(-0.86049059)"
+     id="text30"><tspan
+       sodipodi:role="line"
+       id="tspan40"
+       x="304.31647"
+       y="337.586">Pin 11 Reset</tspan></text>
+  <line
+     x1="364.37549"
+     y1="490.99551"
+     x2="598.67621"
+     y2="493.00449"
+     stroke="#bbbbbb"
+     stroke-width="2.96365"
+     id="line30" />
+  <!-- Legend -->
+  <rect
+     x="40"
+     y="620"
+     width="900"
+     height="50"
+     rx="4"
+     fill="rgba(0,0,0,0.4)"
+     stroke="#555"
+     id="rect31" />
+  <text
+     x="60"
+     y="640"
+     fill="#ccc"
+     font-size="11"
+     font-weight="bold"
+     id="text32">Legend:</text>
+  <rect
+     x="60"
+     y="650"
+     width="14"
+     height="14"
+     rx="3"
+     fill="#3498db"
+     id="rect32" />
+  <text
+     x="80"
+     y="662"
+     fill="#bbb"
+     font-size="9"
+     id="text33">Router UART</text>
+  <rect
+     x="170"
+     y="650"
+     width="14"
+     height="14"
+     rx="3"
+     fill="#2ecc71"
+     stroke="#2ecc71"
+     stroke-dasharray="4,3"
+     id="rect33" />
+  <text
+     x="190"
+     y="662"
+     fill="#bbb"
+     font-size="9"
+     id="text34">Optional Terminal</text>
+  <rect
+     x="310"
+     y="650"
+     width="14"
+     height="14"
+     rx="3"
+     fill="#e74c3c"
+     stroke="#e74c3c"
+     stroke-dasharray="4,3"
+     id="rect34" />
+  <text
+     x="330"
+     y="662"
+     fill="#bbb"
+     font-size="9"
+     id="text35">Optional Reset</text>
+  <rect
+     x="450"
+     y="650"
+     width="14"
+     height="14"
+     rx="3"
+     fill="#f39c12"
+     id="rect35" />
+  <text
+     x="470"
+     y="662"
+     fill="#bbb"
+     font-size="9"
+     id="text36">Debug console</text>
+  <rect
+     x="580"
+     y="650"
+     width="14"
+     height="14"
+     rx="3"
+     fill="#c0392b"
+     id="rect36" />
+  <text
+     x="600"
+     y="662"
+     fill="#bbb"
+     font-size="9"
+     id="text37">Electrical warning</text>
+  <text
+     x="760"
+     y="662"
+     fill="#aaa"
+     font-size="9"
+     id="text38">Dashed = optional connection</text>
+  <text
+     xml:space="preserve"
+     id="text42"
+     style="fill:#000000;writing-mode:lr-tb;text-orientation:auto;direction:ltr;-inkscape-font-specification:'Sans, Normal';font-family:Sans;font-weight:normal;font-style:normal;font-stretch:normal;font-variant:normal;font-size:10.66666667px;font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;white-space:pre;shape-inside:url(#rect42)" />
+</svg>

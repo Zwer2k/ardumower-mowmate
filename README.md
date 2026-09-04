@@ -186,7 +186,31 @@ Before building or flashing the firmware, install the following tools:
 
 ## Hardware Pinout
 
-The ESP32-S3 pinout (GPIO assignments for STM32 communication, OTA control, and debug console) is described in the separate [Pinout documentation](docs/pinout.md). It applies to the **ESP32-S3-DevKitC-1** development board as well as to soldering an **ESP32-S3-WROOM-1 module** directly onto a custom PCB.
+The ESP32-S3 pinout is described in the separate [Pinout documentation](docs/pinout.md). It applies to the **ESP32-S3-DevKitC-1** development board as well as to soldering an **ESP32-S3-WROOM-1 module** directly onto a custom PCB.
+
+### MATRIX MOW800 / STM32
+
+For the MATRIX MOW800 with STM32 controller, MowMate uses:
+
+- `GPIO17` / `GPIO18` for the main mower UART (Router / AT commands, `Serial2`)
+- `GPIO15` / `GPIO16` for the terminal UART (`Serial1`)
+- `GPIO5` (`BOOT0`) and `GPIO7` (`NRST`) for STM32 OTA control
+- `GPIO43` / `GPIO44` for the USB debug console
+
+See the [ESP32-S3 MOW800/STM32 pinout](docs/screenshots/esp32-s3-mow800-stm32-pinout.svg) for the STM32-oriented wiring.
+
+### ArduMower PCB 1.3
+
+For the classic **ArduMower PCB 1.3**, the wiring is different from the MATRIX MOW800 / STM32 setup:
+
+- `P44 (WLAN)` is used for the main mower UART
+- `P27 (PX0/RX0)` can be used as an optional read-only terminal input
+- `P23 (MP-R)` provides the mower reset line
+- `JP11` must be set to **3.3V logic**
+- the ESP32-S3 GPIOs are **not 5V tolerant**
+
+See the [ESP32-S3 PCB 1.3 pinout](docs/screenshots/esp32-s3-pcb13-pinout.svg) for the board-specific wiring diagram.
+
 
 ## Flashing the MowMate firmware
 
