@@ -215,6 +215,38 @@ void MqttAdapter::onMqttMessage(String topic, String payload)
     return;
   }
 
+  // HA actor topics
+  if (topic.endsWith("ha/button/start") || topic.endsWith("ha/button/stop") ||
+      topic.endsWith("ha/button/dock") || topic.endsWith("ha/button/skip_waypoint") ||
+      topic.endsWith("ha/button/upload"))
+  {
+    if (settings.mqtt.ha) {
+      int lastSlash = topic.lastIndexOf('/');
+      if (lastSlash > 0) {
+        String button = topic.substring(lastSlash + 1);
+        if (button == "upload")
+          ha.onUploadMessage(payload);
+        else
+          ha.onButtonMessage(button, payload);
+      }
+    }
+    return;
+  }
+
+  if (topic.endsWith("ha/number/speed/set"))
+  {
+    if (settings.mqtt.ha)
+      ha.onSpeedMessage(payload);
+    return;
+  }
+
+  if (topic.endsWith("ha/select/map/set"))
+  {
+    if (settings.mqtt.ha)
+      ha.onMapSelectMessage(payload);
+    return;
+  }
+
   if (topic.indexOf("/iob/command/") != -1) 
   {
     if (settings.mqtt.iob)
@@ -286,7 +318,8 @@ bool MqttAdapter::handleConnection(const uint32_t now)
         WiFiClient connected(fd);
         net = connected;
 
-        client.setWill(topic("/online").c_str(), "false");
+        // LWT: retained so broker remembers our last state
+        client.setWill(topic("/online").c_str(), "false", true, 0);
 
         if (!client.connect(settings.general.name.c_str(), settings.mqtt.username.c_str(), settings.mqtt.password.c_str(), true))
         {
@@ -382,7 +415,8 @@ bool MqttAdapter::handleConnection(const uint32_t now)
     WiFiClient connected(fd);
     net = connected;
 
-    client.setWill(topic("/online").c_str(), "false");
+    // LWT: retained so broker remembers our last state
+    client.setWill(topic("/online").c_str(), "false", true, 0);
 
     if (!client.connect(settings.general.name.c_str(), settings.mqtt.username.c_str(), settings.mqtt.password.c_str(), true))
     {
@@ -408,22 +442,42 @@ bool MqttAdapter::onMqttConnected()
     return false;
   }
 
-  if (!client.publish(topic("/online").c_str(), "true")) {
-    Log(ERR, "%scan not subscribe /online", _LOG_);
+  // Publish online state as retained so HA availability works after restart
+  if (!client.publish(topic("/online").c_str(), "true", true, 0)) {
+    Log(ERR, "%scan not publish /online", _LOG_);
     return false;
   }
 
   if (settings.mqtt.ha)
   {
-    // if (!client.subscribe(topic("/command").c_str()))
-    //   return false;
-
     if (!client.subscribe(topic("/ha/set_fan_speed").c_str()))
       return false;
 
-    ArduMower::Modem::HomeAssistant::DiscoveryDocument disco(settings);
-    if (!client.publish(disco.topic().c_str(), disco.toJson(topic("")).c_str()))
+    // Subscribe to HA actor topics
+    if (!client.subscribe(topic("/ha/button/start").c_str()))
       return false;
+    if (!client.subscribe(topic("/ha/button/stop").c_str()))
+      return false;
+    if (!client.subscribe(topic("/ha/button/dock").c_str()))
+      return false;
+    if (!client.subscribe(topic("/ha/button/skip_waypoint").c_str()))
+      return false;
+    if (!client.subscribe(topic("/ha/button/upload").c_str()))
+      return false;
+    if (!client.subscribe(topic("/ha/number/speed/set").c_str()))
+      return false;
+    if (!client.subscribe(topic("/ha/select/map/set").c_str()))
+      return false;
+
+    ArduMower::Modem::HomeAssistant::DiscoveryDocument disco(settings);
+    auto publishFn = [this](const String &t, const String &payload, bool retained) -> bool {
+      return client.publish(t.c_str(), payload.c_str(), retained, 0);
+    };
+    if (!disco.publishAll(publishFn, topic(""), source.mapList()))
+    {
+      Log(ERR, "%sHA discovery publish failed", _LOG_);
+      return false;
+    }
   }
 
   if (!iob.subscribeTopics())

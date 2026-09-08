@@ -28,6 +28,11 @@ const char * _t_position = "position";
 const char * _t_position_mode = "mode";
 const char * _t_position_lon = "lon";
 const char * _t_position_lat = "lat";
+const char * _t_mower = "mower";
+const char * _t_mower_mow_speed = "mow_speed";
+const char * _t_mower_goto_speed = "goto_speed";
+const char * _t_mower_fix_timeout = "fix_timeout";
+const char * _t_mower_finish_and_restart = "finish_and_restart";
 
 const char * _t_sta_ssid = "sta_ssid";
 const char * _t_sta_psk = "sta_psk";
@@ -171,6 +176,9 @@ bool Settings::valid(String &invalid) const
   return general.valid(invalid) && time.valid(invalid) && web.valid(invalid) && wifi.valid(invalid) && mqtt.valid(invalid) && position.valid(invalid);
 }
 
+// Mower has no strict validation - all values are optional with defaults
+// bool Mower::valid(String &invalid) const { return true; }
+
 void Settings::marshal(JsonObject o) const
 {
   o[_t_revision] = revision;
@@ -185,6 +193,7 @@ void Settings::marshal(JsonObject o) const
   { auto _j = o[_t_mqtt].to<JsonObject>(); mqtt.marshal(_j); }
   { auto _j = o[_t_prometheus].to<JsonObject>(); prometheus.marshal(_j); }
   { auto _j = o[_t_position].to<JsonObject>(); position.marshal(_j); }
+  { auto _j = o[_t_mower].to<JsonObject>(); mower.marshal(_j); }
 }
 
 #define mustContain(component, o, prop)                      \
@@ -224,6 +233,9 @@ bool Settings::unmarshal(JsonObject o)
   mustContainAndSucceed("Settings", o, _t_prometheus, prometheus.unmarshal(o[_t_prometheus]));
   if (o[_t_position].is<JsonVariant>()) {
     mustContainAndSucceed("Settings", o, _t_position, position.unmarshal(o[_t_position]));
+  }
+  if (o[_t_mower].is<JsonVariant>()) {
+    mustContainAndSucceed("Settings", o, _t_mower, mower.unmarshal(o[_t_mower]));
   }
 
   return true;
@@ -361,6 +373,31 @@ bool Position::unmarshal(JsonObject o)
 }
 
 void Position::stripSecrets(const JsonObject &) const
+{
+}
+
+void Mower::marshal(JsonObject o) const
+{
+  o[_t_mower_mow_speed] = mowSpeed;
+  o[_t_mower_goto_speed] = gotoSpeed;
+  o[_t_mower_fix_timeout] = fixTimeout;
+  o[_t_mower_finish_and_restart] = finishAndRestart;
+}
+
+bool Mower::unmarshal(JsonObject o)
+{
+  if (o[_t_mower_mow_speed].is<JsonVariant>())
+    mowSpeed = o[_t_mower_mow_speed].as<float>();
+  if (o[_t_mower_goto_speed].is<JsonVariant>())
+    gotoSpeed = o[_t_mower_goto_speed].as<float>();
+  if (o[_t_mower_fix_timeout].is<JsonVariant>())
+    fixTimeout = o[_t_mower_fix_timeout].as<int>();
+  if (o[_t_mower_finish_and_restart].is<JsonVariant>())
+    finishAndRestart = o[_t_mower_finish_and_restart].as<bool>();
+  return true;
+}
+
+void Mower::stripSecrets(const JsonObject &) const
 {
 }
 

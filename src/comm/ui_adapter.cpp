@@ -277,6 +277,27 @@ void UiAdapter::handleApiPostRobotCommand(AsyncWebServerRequest *request, JsonVa
     ok = _cmd.tuneParam(json.as<JsonObject>()["index"] | 0, json.as<JsonObject>()["value"] | 0.0f);
   else if (action == "customCmd")
     ok = _cmd.customCmd(json.as<JsonObject>()["cmd"] | "");
+  else if (action == "saveMowerDefaults") {
+    auto *desired = _source.desiredStateP();
+    _settings.mower.mowSpeed = desired->speed;
+    _settings.mower.fixTimeout = desired->fixTimeout;
+    _settings.mower.finishAndRestart = desired->finishAndRestart;
+    ok = _settings.save();
+  }
+  else if (action == "resetMowerDefaults") {
+    _settings.mower = ArduMower::Modem::Settings::Mower();
+    ok = _settings.save();
+    if (ok) {
+      auto *desired = _source.desiredStateP();
+      desired->speed = _settings.mower.mowSpeed;
+      desired->fixTimeout = _settings.mower.fixTimeout;
+      desired->finishAndRestart = _settings.mower.finishAndRestart;
+      // Apply to mower immediately
+      _cmd.changeSpeed(_settings.mower.mowSpeed);
+      _cmd.setFixTimeout(_settings.mower.fixTimeout);
+      _cmd.finishAndRestartEnabled(_settings.mower.finishAndRestart);
+    }
+  }
   else {
     reject(request, 400, "command", "unknown action: " + action);
     return;

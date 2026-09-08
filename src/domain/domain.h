@@ -175,7 +175,7 @@ namespace ArduMower
         int op;
         int fixTimeout;
 
-        DesiredState() : timestamp(1), speed(0), mowerMotorEnabled(false), finishAndRestart(false), op(-1), fixTimeout(-1){};
+        DesiredState() : timestamp(1), speed(0.2f), mowerMotorEnabled(false), finishAndRestart(false), op(-1), fixTimeout(-1){};
         void marshal(JsonObject o) const;
       };
 
@@ -495,6 +495,7 @@ namespace ArduMower
         virtual int currentMapCrc() { return 0; }
         virtual double currentMapArea() { return 0.0; }
         virtual double currentMapRotation() { return 0.0; }
+        virtual String lastUploadedMapId() { return ""; }
 
         // Mower-compatible JSON import/export helpers.
         // Returns true on successful import, the map is placed into outMap.

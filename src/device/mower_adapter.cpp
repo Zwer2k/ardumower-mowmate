@@ -491,6 +491,12 @@ void MowerAdapter::begin()
   enc.setPassword(settings.general.password);
   router.sniffRx(this);
   router.sniffTx(this);
+
+  // Initialize desiredState from persisted mower settings
+  _desiredState.speed = settings.mower.mowSpeed;
+  _desiredState.fixTimeout = settings.mower.fixTimeout;
+  _desiredState.finishAndRestart = settings.mower.finishAndRestart;
+
   // Position settings werden erst nach dem ersten erfolgreichen Versions-Austausch
   // (parseVersionResponse) an den Mower gesendet. Hier wäre die Verbindung noch nicht bereit.
 
@@ -982,6 +988,17 @@ bool MowerAdapter::requestSensorSummary()
   if (!assertSendIsInitialized())
     return false;
   return sendCommand("AT+S3", true);
+}
+
+bool MowerAdapter::requestControl()
+{
+  uint32_t now = millis();
+  if (_lastControlRequest != 0 && now - _lastControlRequest < 5000) return true;
+  _lastControlRequest = now ? now : 1;
+  Log(DBG, "%srequestControl", _LOG_);
+  if (!assertSendIsInitialized())
+    return false;
+  return sendCommand("AT+C", true);
 }
 
 bool MowerAdapter::requestObstacles()
@@ -2066,6 +2083,7 @@ void MowerAdapter::processMapUpload()
       _mapUploadState.snapshot = ArduMower::Domain::Robot::MowerMap();
       _mapUploadState.phase = MapUploadState::done;
       _mapUploadState.active = false;
+      _lastUploadedMapId = _currentMapId;
       Log(INFO, "%sprocessMapUpload: Map upload complete (%d perimeter, %d exclusions, %d dockpoints, %d waypoints) CRC %d",
           _LOG_, _map.perimeter.size(), _map.exclusions.size(), _map.dockpoints.size(), _map.waypoints.size(), _currentMapCrc);
       Log(INFO, "%sprocessMapUpload: upload complete", _LOG_);
@@ -2102,8 +2120,11 @@ void MowerAdapter::loop()
   case 2: // AT+S3 (sensor summary)
     requestSensorSummary();
     break;
+  case 3: // AT+C (control state incl. speed)
+    requestControl();
+    break;
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
-  case 3: // AT+S4 (GPS details incl. satellites)
+  case 4: // AT+S4 (GPS details incl. satellites)
     requestGpsDetails();
     break;
 #endif

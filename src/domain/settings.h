@@ -187,6 +187,21 @@ namespace ArduMower
         virtual void stripSecrets(const JsonObject &o) const override;
       };
 
+      class Mower : public Group
+      {
+      public:
+        Mower() : mowSpeed(0.3f), gotoSpeed(0.5f), fixTimeout(60), finishAndRestart(false) {}
+
+        float mowSpeed;
+        float gotoSpeed;
+        int fixTimeout;
+        bool finishAndRestart;
+
+        virtual void marshal(JsonObject o) const override;
+        virtual bool unmarshal(JsonObject o) override;
+        virtual void stripSecrets(const JsonObject &o) const override;
+      };
+
       class Settings
       {
       private:
@@ -205,6 +220,7 @@ namespace ArduMower
         MQTT mqtt;
         Prometheus prometheus;
         Position position;
+        Mower mower;
 
         Settings(String filename);
         Settings() : Settings(defaultSettingsFilename) {}

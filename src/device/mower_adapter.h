@@ -68,11 +68,13 @@ namespace ArduMower
       ArduMower::Domain::Robot::MowerMap _map;
       ArduMower::Domain::Robot::MowSettings _mowSettings;
       ArduMower::Modem::MapManager _mapManager;
+      String _lastUploadedMapId;
       uint32_t _lastStateRequest = 0;
       uint32_t _lastStatsRequest = 0;
       uint32_t _lastSensorSummaryRequest = 0;
       uint32_t _lastObstaclesRequest = 0;
       uint32_t _lastGpsDetailsRequest = 0;
+      uint32_t _lastControlRequest = 0;
       PendingCommand _pendingCommand;
       MapUploadState _mapUploadState;
       volatile bool _mapUploadPending = false;
@@ -200,6 +202,7 @@ namespace ArduMower
 
       virtual bool importMowerMap(const String &json, ArduMower::Domain::Robot::MowerMap &outMap) override;
       virtual String exportMowerMap(const ArduMower::Domain::Robot::MowerMap &map) override;
+      virtual String lastUploadedMapId() override { return _lastUploadedMapId; }
 
       // Zugriff auf gecachte rohe Antworten (für HTTP-Cache)
       virtual String cachedRawState() { return _cachedRawState; }
@@ -226,6 +229,7 @@ namespace ArduMower
       virtual bool requestStats();
       virtual bool requestStatsNow();
       virtual bool requestSensorSummary();
+      virtual bool requestControl();
       virtual bool requestObstacles();
       virtual bool applyPositionSettings();
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
