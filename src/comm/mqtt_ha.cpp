@@ -201,13 +201,6 @@ void Adapter::loopStats(const uint32_t now)
   snprintf(buf, sizeof(buf), "%lu", (unsigned long)stats->obstacles.count);
   tx("/ha/stats/obstacles", buf);
 
-  // Temperature min/max
-  snprintf(buf, sizeof(buf), "%.1f", stats->tempMin);
-  tx("/ha/stats/temp_min", buf);
-
-  snprintf(buf, sizeof(buf), "%.1f", stats->tempMax);
-  tx("/ha/stats/temp_max", buf);
-
   // GPS checksum errors
   snprintf(buf, sizeof(buf), "%lu", (unsigned long)stats->gpsChecksumErrors);
   tx("/ha/stats/gps_checksum_errors", buf);
@@ -760,36 +753,6 @@ void DiscoveryDocument::addStatsObstaclesSensor(JsonDocument &doc, const String 
   addDeviceBlock(dev);
 }
 
-void DiscoveryDocument::addStatsTempMinSensor(JsonDocument &doc, const String &topicPrefix)
-{
-  doc["name"] = deviceName + " Temp Min";
-  doc["unique_id"] = "ardumower-" + chipIdStr + "-temp_min";
-  doc["state_topic"] = topicPrefix + "/ha/stats/temp_min";
-  doc["unit_of_measurement"] = "°C";
-  doc["device_class"] = "temperature";
-  doc["icon"] = "mdi:thermometer-low";
-  doc["availability_topic"] = topicPrefix + "/online";
-  doc["payload_available"] = "true";
-  doc["payload_not_available"] = "false";
-  auto dev = doc["device"].to<JsonObject>();
-  addDeviceBlock(dev);
-}
-
-void DiscoveryDocument::addStatsTempMaxSensor(JsonDocument &doc, const String &topicPrefix)
-{
-  doc["name"] = deviceName + " Temp Max";
-  doc["unique_id"] = "ardumower-" + chipIdStr + "-temp_max";
-  doc["state_topic"] = topicPrefix + "/ha/stats/temp_max";
-  doc["unit_of_measurement"] = "°C";
-  doc["device_class"] = "temperature";
-  doc["icon"] = "mdi:thermometer-high";
-  doc["availability_topic"] = topicPrefix + "/online";
-  doc["payload_available"] = "true";
-  doc["payload_not_available"] = "false";
-  auto dev = doc["device"].to<JsonObject>();
-  addDeviceBlock(dev);
-}
-
 void DiscoveryDocument::addStatsGpsChecksumErrorsSensor(JsonDocument &doc, const String &topicPrefix)
 {
   doc["name"] = deviceName + " GPS Checksum Errors";
@@ -1099,8 +1062,6 @@ bool DiscoveryDocument::publishAll(std::function<bool(const String &, const Stri
   PUBLISH_DISCOVERY("sensor", "charge_duration", addStatsChargeDurationSensor);
   PUBLISH_DISCOVERY("sensor", "idle_duration", addStatsIdleDurationSensor);
   PUBLISH_DISCOVERY("sensor", "obstacles", addStatsObstaclesSensor);
-  PUBLISH_DISCOVERY("sensor", "temp_min", addStatsTempMinSensor);
-  PUBLISH_DISCOVERY("sensor", "temp_max", addStatsTempMaxSensor);
   PUBLISH_DISCOVERY("sensor", "gps_checksum_errors", addStatsGpsChecksumErrorsSensor);
   PUBLISH_DISCOVERY("sensor", "gps_jumps", addStatsGpsJumpsSensor);
   PUBLISH_DISCOVERY("sensor", "free_memory", addStatsFreeMemorySensor);
@@ -1143,7 +1104,7 @@ bool DiscoveryDocument::publishAll(std::function<bool(const String &, const Stri
 
   #undef PUBLISH_DISCOVERY
 
-  Log(INFO, "HA Discovery: published %d entities", 35);
+  Log(INFO, "HA Discovery: published %d entities", 33);
   return true;
 }
 

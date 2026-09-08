@@ -679,7 +679,17 @@ void UiSocketHandler::processWsEvents() {
       _pendingHellos.pop_front();
       xSemaphoreGive(_helloMutex);
 
-      // Send hello using the library's locked API
+      // Send hello using the library's locked API.
+      // If a chunked map transfer is active, defer the hello to avoid
+      // interleaving a text frame with fragmented frames (WebSocket spec
+      // violation → "Invalid frame header" / "Could not decode a text frame").
+      if (mapChunkSendState.active) {
+        // Re-queue at the front for later
+        xSemaphoreTake(_helloMutex, portMAX_DELAY);
+        _pendingHellos.push_front(std::move(hello));
+        xSemaphoreGive(_helloMutex);
+        break;
+      }
       _ws->text(hello.clientId, hello.json.c_str(), hello.json.length());
       markClientActivity();
 

@@ -3,9 +3,22 @@
     import { page } from '$app/stores';
     import { afterNavigate } from '$app/navigation';
     import { browser } from '$app/environment';
-    import { socketService } from '../../../stores/socket';
+    import { socketService, socketStore } from '../../../stores/socket';
     import { gpsStore } from '../../../stores/gpsStore';
     import type { PositionSample } from '../../../stores/gpsStore';
+
+    // Settings reference position for converting relative mower coords to absolute
+    let settingsPos = $derived($socketStore.settings?.position);
+
+    // Convert relative mower position (meters) to absolute lat/lon
+    function relativeToAbsolute(x: number, y: number): [number, number] | null {
+        if (!settingsPos || settingsPos.mode !== 'relative') return null;
+        const metersPerDegLat = 111320;
+        const metersPerDegLon = 111320 * Math.cos(settingsPos.lat * Math.PI / 180);
+        const lat = settingsPos.lat + y / metersPerDegLat;
+        const lon = settingsPos.lon + x / metersPerDegLon;
+        return [lat, lon];
+    }
 
     const TIME_WINDOWS: { label: string; ms: number }[] = [
         { label: '5 min', ms: 5 * 60 * 1000 },
@@ -112,12 +125,32 @@
         if (roverMarker) { map.removeLayer(roverMarker); roverMarker = null; }
         if (accuracyCircle) { map.removeLayer(accuracyCircle); accuracyCircle = null; }
 
-        if (pvt && pvt.fixOk && pvt.fixType >= 2) {
-            const pos: [number, number] = [pvt.lat, pvt.lon];
+        // Determine rover position: prefer UBX NAV-PVT, fallback to mower state position
+        let roverPos: [number, number] | null = null;
+        let roverHeading = 0;
+        let roverAccuracy = 0;
 
+        if (pvt && pvt.fixOk && pvt.fixType >= 2) {
+            roverPos = [pvt.lat, pvt.lon];
+            roverHeading = pvt.heading;
+            roverAccuracy = pvt.hAcc;
+        } else {
+            // Fallback: use mower state position (relative coordinates) converted to absolute
+            const mowerState = $socketStore.state;
+            if (mowerState?.position && settingsPos?.mode === 'relative') {
+                const abs = relativeToAbsolute(mowerState.position.x, mowerState.position.y);
+                if (abs) {
+                    roverPos = abs;
+                    roverHeading = (mowerState.position.delta * 180 / Math.PI);
+                    roverAccuracy = mowerState.position.accuracy;
+                }
+            }
+        }
+
+        if (roverPos) {
             const roverIcon = L.divIcon({
                 className: 'rover-marker',
-                html: `<div class="rover-marker-inner" style="transform: rotate(${pvt.heading}deg)">
+                html: `<div class="rover-marker-inner" style="transform: rotate(${roverHeading}deg)">
                         <div class="rover-arrow"></div>
                         <div class="rover-body"></div>
                        </div>`,
@@ -125,11 +158,11 @@
                 iconAnchor: [12, 12],
             });
 
-            roverMarker = L.marker(pos, { icon: roverIcon, zIndexOffset: 1000 }).addTo(map);
+            roverMarker = L.marker(roverPos, { icon: roverIcon, zIndexOffset: 1000 }).addTo(map);
 
-            if (showAccuracy && pvt.hAcc > 0) {
-                accuracyCircle = L.circle(pos, {
-                    radius: pvt.hAcc,
+            if (showAccuracy && roverAccuracy > 0) {
+                accuracyCircle = L.circle(roverPos, {
+                    radius: roverAccuracy,
                     color: '#006064',
                     fillColor: '#006064',
                     fillOpacity: 0.15,
@@ -142,19 +175,21 @@
         // ─── Auto-fit or center ─────────────────────────────────────────
         if (trackLatLngs.length >= 2) {
             const bounds = L.latLngBounds(trackLatLngs);
-            if (pvt && pvt.fixOk) bounds.extend([pvt.lat, pvt.lon]);
+            if (roverPos) bounds.extend(roverPos);
             if (!map._livemap_fitted) {
                 map.fitBounds(bounds, { padding: [40, 40], maxZoom: 18 });
                 map._livemap_fitted = true;
             }
-        } else if (pvt && pvt.fixOk) {
-            map.setView([pvt.lat, pvt.lon], 18);
+        } else if (roverPos) {
+            map.setView(roverPos, 18);
             map._livemap_fitted = true;
         }
     }
 
     // React to store changes
     $effect(() => {
+        // Track state.position changes to trigger re-render
+        const state = $socketStore.state;
         if (map && L) {
             updateLayers();
         }
@@ -241,6 +276,13 @@
                     <span class="stat-item">{(p.lat ?? 0).toFixed(6)}°, {(p.lon ?? 0).toFixed(6)}°</span>
                     <span class="stat-item">±{(p.hAcc ?? 0).toFixed(2)} m</span>
                     <span class="stat-item">{(p.gSpeed ?? 0).toFixed(2)} m/s</span>
+                {:else if $socketStore.state?.position && settingsPos?.mode === 'relative'}
+                    {@const mowerPos = $socketStore.state.position}
+                    {@const abs = relativeToAbsolute(mowerPos.x, mowerPos.y)}
+                    {#if abs}
+                        <span class="stat-item">{abs[0].toFixed(6)}°, {abs[1].toFixed(6)}°</span>
+                        <span class="stat-item">±{(mowerPos.accuracy ?? 0).toFixed(2)} m</span>
+                    {/if}
                 {:else}
                     <span class="stat-item stat-wait">Waiting for GPS…</span>
                 {/if}

@@ -8,7 +8,10 @@
   $: y = position != null ? -position.y : 0;
   $: delta = position?.delta ?? 0;
   $: headingDeg = 90 - delta * 180 / Math.PI;
-  $: hasPos = position != null && (x !== 0 || y !== 0);
+  // Show position as soon as we have a position object with a valid GPS solution.
+  // Requiring non-zero coordinates hid the marker at the origin or before the
+  // first fix was applied.
+  $: hasPos = position != null && (position.solution ?? 0) > 0;
   $: accuracy = position?.accuracy ?? 0;
 
   // Arrow length in map units

@@ -88,8 +88,6 @@ namespace ArduMower
         void addStatsChargeDurationSensor(JsonDocument &doc, const String &topicPrefix);
         void addStatsIdleDurationSensor(JsonDocument &doc, const String &topicPrefix);
         void addStatsObstaclesSensor(JsonDocument &doc, const String &topicPrefix);
-        void addStatsTempMinSensor(JsonDocument &doc, const String &topicPrefix);
-        void addStatsTempMaxSensor(JsonDocument &doc, const String &topicPrefix);
         void addStatsGpsChecksumErrorsSensor(JsonDocument &doc, const String &topicPrefix);
         void addStatsGpsJumpsSensor(JsonDocument &doc, const String &topicPrefix);
         void addStatsFreeMemorySensor(JsonDocument &doc, const String &topicPrefix);
