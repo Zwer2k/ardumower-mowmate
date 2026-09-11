@@ -339,14 +339,15 @@ namespace ArduMower
       struct TrackPoint {
         float x, y;
         uint32_t timestamp;
+        uint32_t sequence;
       };
 
       class DrivenTrack {
       public:
-        static const size_t MAX_POINTS = 500;
+        static const size_t MAX_POINTS = 50;
         static constexpr float MIN_DISTANCE = 0.1f; // meters
 
-        DrivenTrack() : _head(0), _count(0), _lastX(0.0f), _lastY(0.0f), _hasLast(false) {
+        DrivenTrack() : _head(0), _count(0), _nextSequence(1), _lastX(0.0f), _lastY(0.0f), _hasLast(false) {
           _points.resize(MAX_POINTS);
         }
 
@@ -359,6 +360,7 @@ namespace ArduMower
           _points[_head].x = x;
           _points[_head].y = y;
           _points[_head].timestamp = timestamp;
+          _points[_head].sequence = _nextSequence++;
           _head = (_head + 1) % MAX_POINTS;
           if (_count < MAX_POINTS) _count++;
           _lastX = x;
@@ -367,18 +369,23 @@ namespace ArduMower
         }
 
         size_t size() const { return _count; }
+        uint32_t latestSequence() const { return _count == 0 ? 0 : _nextSequence - 1; }
 
-        void marshal(JsonObject o) const {
+        void marshal(JsonObject o, uint32_t afterSequence = 0, bool full = true) const {
           JsonArray arr = o["points"].to<JsonArray>();
           size_t start = (_count < MAX_POINTS) ? 0 : _head;
           for (size_t i = 0; i < _count; i++) {
             size_t idx = (start + i) % MAX_POINTS;
+            if (!full && _points[idx].sequence <= afterSequence) continue;
             JsonObject p = arr.add<JsonObject>();
             p["x"] = _points[idx].x;
             p["y"] = _points[idx].y;
             p["t"] = _points[idx].timestamp;
+            p["seq"] = _points[idx].sequence;
           }
           o["size"] = (uint32_t)_count;
+          o["full"] = full;
+          o["sequence"] = latestSequence();
         }
 
         void clear() { _count = 0; _head = 0; _hasLast = false; }
@@ -387,6 +394,7 @@ namespace ArduMower
         std::vector<TrackPoint> _points;
         size_t _head;
         size_t _count;
+        uint32_t _nextSequence;
         float _lastX;
         float _lastY;
         bool _hasLast;
@@ -498,6 +506,7 @@ namespace ArduMower
         virtual double currentMapArea() { return 0.0; }
         virtual double currentMapRotation() { return 0.0; }
         virtual String lastUploadedMapId() { return ""; }
+        virtual int lastUploadedMapCrc() { return 0; }
 
         // Mower-compatible JSON import/export helpers.
         // Returns true on successful import, the map is placed into outMap.

@@ -217,9 +217,16 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     }
     break;
 
-  case RequestDataType::uploadMap:
-    _socketHandler->uploadMapToMower();
+  case RequestDataType::uploadMap: {
+    const String requestedMapId = jsonData["mapId"] | "";
+    if (requestedMapId == _source.currentMapId() && requestedMapId.length() > 0) {
+      _socketHandler->uploadMapToMower();
+    } else {
+      Log(WARN, "%s uploadMap: request for map %s rejected; current map is %s", _LOG_,
+          requestedMapId.c_str(), _source.currentMapId().c_str());
+    }
     break;
+  }
 
   case RequestDataType::robotCommand:
     {
@@ -251,6 +258,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
    case RequestDataType::setMap:
     {
       using namespace ArduMower::Domain::Robot;
+      const uint32_t syncId = jsonData["syncId"] | 0;
+      const String requestedMapId = jsonData["mapId"] | "";
       MowerMap map;
       Log(DBG, "%s setMap: parsing perimeter, exclusions, dockpoints, search wire, waypoints", _LOG_);
       auto readDouble = [](JsonObject p, const char* key1, const char* key2) -> double {
@@ -264,6 +273,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
         if (p["timestamp"].is<JsonVariant>()) pt.timestamp = p["timestamp"].as<String>();
         if (p["sol"].is<JsonVariant>()) pt.sol = p["sol"];
         if (p["tag"].is<JsonVariant>()) pt.tag = p["tag"];
+        if (p["conn"].is<JsonVariant>()) pt.isConnector = p["conn"].as<bool>();
         return pt;
       };
       if (jsonData["dateTime"].is<JsonVariant>()) map.dateTime = jsonData["dateTime"].as<String>();
@@ -307,13 +317,27 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       map.doMowExclusionBorder = settings.doMowExclusionBorder;
         Log(DBG, "%s setMap: parsed perimeter=%d exclusions=%d dockpoints=%d searchWire=%d waypoints=%d rotation=%.1f", _LOG_,
           map.perimeter.size(), map.exclusions.size(), map.dockpoints.size(), map.searchWire.size(), map.waypoints.size(), map.rotation);
-      _socketHandler->setMap(map);
+      const bool mapIdMatches = requestedMapId.length() > 0 && requestedMapId == _source.currentMapId();
+      const bool accepted = mapIdMatches && !_source.isMowerMapReading();
+      if (accepted) {
+        _socketHandler->setMap(map);
+      } else if (!mapIdMatches) {
+        Log(WARN, "%s setMap: sync %u for map %s rejected; current map is %s", _LOG_, syncId,
+            requestedMapId.c_str(), _source.currentMapId().c_str());
+      }
+      _socketHandler->sendMapAck(this, syncId, accepted);
     }
     break;
 
    case RequestDataType::setMowSettings:
     {
       using namespace ArduMower::Domain::Robot;
+      const String requestedMapId = jsonData["mapId"] | "";
+      if (requestedMapId.length() == 0 || requestedMapId != _source.currentMapId()) {
+        Log(WARN, "%s setMowSettings: request for map %s rejected; current map is %s", _LOG_,
+            requestedMapId.c_str(), _source.currentMapId().c_str());
+        break;
+      }
       MowSettings s = _source.mowSettings();
       if (!jsonData["pattern"].isNull()) s.pattern = jsonData["pattern"];
       if (!jsonData["width"].isNull()) s.width = jsonData["width"];
@@ -355,8 +379,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     if (_source.createMap(name)) {
       _socketHandler->abortMapChunkSend();
       yield();
-      _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+      _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -367,8 +391,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     if (_source.copyMap(name)) {
       _socketHandler->abortMapChunkSend();
       yield();
-      _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+      _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -381,8 +405,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     if (readyToLoad && _source.loadMap(id)) {
       _socketHandler->abortMapChunkSend();
       yield();
-      _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+      _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
     } else {
       // Die aktuelle Karte bei einem Ladefehler behalten. Die Map-Liste
@@ -423,6 +447,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     if (_source.deleteMap(id)) {
       _socketHandler->abortMapChunkSend();
       yield();
+      _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
     }
@@ -433,6 +458,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     if (_source.discardMap()) {
       _socketHandler->abortMapChunkSend();
       yield();
+      _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
     }
@@ -458,8 +484,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
         _socketHandler->setMap(imported);
         _socketHandler->abortMapChunkSend();
         yield();
-        _socketHandler->sendData(ResponseDataType::map, NULL, true);
         _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+        _socketHandler->sendData(ResponseDataType::map, NULL, true);
         _socketHandler->sendMapList(NULL);
       }
     }
@@ -1666,12 +1692,11 @@ void UiSocketHandler::processUploadToMower() {
   _uploadToMowerPending = false;
   if (_cmd.uploadMapToMowerSuccess()) {
     sendProgress("upload", 100, "Upload complete");
-    Log(INFO, "%s processUploadToMower: upload complete, broadcasting map and state", _LOG_);
+    Log(INFO, "%s processUploadToMower: upload complete, refreshing mower state", _LOG_);
   } else {
     sendProgress("upload", 100, "Upload failed");
     Log(WARN, "%s processUploadToMower: upload failed", _LOG_);
   }
-  sendData(ResponseDataType::map, NULL, true);
   sendData(ResponseDataType::mowerState, NULL, true);
   _cmd.requestStatusNow(); // refresh state/crc immediately after upload
 }
@@ -1879,6 +1904,13 @@ void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
   JsonDocument doc;
   doc["type"] = dataType;
   auto _j = doc["data"].to<JsonObject>(); data.marshal(_j);
+  if (dataType == ResponseDataType::mowerState) {
+    _j["uploaded_map_id"] = _source.lastUploadedMapId();
+    _j["uploaded_map_crc"] = _source.lastUploadedMapCrc();
+  }
+  if (dataType == ResponseDataType::mowSettings) {
+    _j["mapId"] = _source.currentMapId();
+  }
 
   if (dataType == ResponseDataType::mowerState && !_progressOp.isEmpty()) {
     doc["progressPct"] = _progressPct;
@@ -1953,6 +1985,32 @@ void UiSocketHandler::sendMapList(UiSocketItem *sendTo)
       _ws->cleanupClients();
     }
   }
+}
+
+void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted)
+{
+  const auto map = _source.mowerMap();
+  if (accepted) {
+    oldDataTimestamp[ResponseDataType::map] = map.timestamp;
+  }
+
+  JsonDocument doc;
+  doc["type"] = ResponseDataType::mapAck;
+  doc["timestamp"] = map.timestamp;
+  auto data = doc["data"].to<JsonObject>();
+  data["hash"] = _source.currentMapHash();
+  data["crc"] = _source.currentMapCrc();
+  data["area"] = _source.currentMapArea();
+  data["rotation"] = _source.currentMapRotation();
+  data["unsaved"] = true;
+  data["syncId"] = syncId;
+  data["mapId"] = _source.currentMapId();
+  data["accepted"] = accepted;
+
+  String json;
+  serializeJson(doc, json);
+  sanitizeUtf8InPlace(json);
+  sendTo->sendText(json);
 }
 
 bool UiSocketHandler::setSchedule(bool enabled, const std::vector<ArduMower::Modem::Schedule::Entry> &entries)
@@ -2154,22 +2212,34 @@ void UiSocketHandler::sendDrivenTrack(UiSocketItem *sendTo)
     return;
   }
 
+  if (sendTo == NULL) {
+    std::vector<uint32_t> clientIds;
+    lockClients();
+    clientIds.reserve(itemMap.size());
+    for (const auto &entry : itemMap) clientIds.push_back(entry.first);
+    unlockClients();
+    for (uint32_t clientId : clientIds) {
+      UiSocketItem *item = findClient(clientId);
+      if (item != NULL && item->drivenTrackSequence() < _track.latestSequence()) {
+        sendDrivenTrack(item);
+      }
+    }
+    return;
+  }
+
+  const bool full = sendTo->drivenTrackSequence() == 0;
   JsonDocument doc;
   doc["type"] = ResponseDataType::drivenTrack;
   doc["timestamp"] = millis();
   auto dataObj = doc["data"].to<JsonObject>();
-  _track.marshal(dataObj);
+  _track.marshal(dataObj, sendTo->drivenTrackSequence(), full);
 
   String json;
   serializeJson(doc, json);
   sanitizeUtf8InPlace(json);
 
-  if (sendTo != NULL) {
-    sendTo->sendText(json);
-  } else {
-    if (!sendTextAllWithRetry(json)) {
-      _ws->cleanupClients();
-    }
+  if (sendTo->sendText(json)) {
+    sendTo->setDrivenTrackSequence(_track.latestSequence());
   }
 }
 

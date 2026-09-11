@@ -69,6 +69,7 @@ namespace ArduMower
       ArduMower::Domain::Robot::MowSettings _mowSettings;
       ArduMower::Modem::MapManager _mapManager;
       String _lastUploadedMapId;
+      int _lastUploadedMapCrc = 0;
       uint32_t _lastStateRequest = 0;
       uint32_t _lastStatsRequest = 0;
       uint32_t _lastSensorSummaryRequest = 0;
@@ -214,6 +215,7 @@ namespace ArduMower
       virtual bool importMowerMap(const String &json, ArduMower::Domain::Robot::MowerMap &outMap) override;
       virtual String exportMowerMap(const ArduMower::Domain::Robot::MowerMap &map) override;
       virtual String lastUploadedMapId() override { return _lastUploadedMapId; }
+      virtual int lastUploadedMapCrc() override { return _lastUploadedMapCrc; }
 
       // Zugriff auf gecachte rohe Antworten (für HTTP-Cache)
       virtual String cachedRawState() { return _cachedRawState; }

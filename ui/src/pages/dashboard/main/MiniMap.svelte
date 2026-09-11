@@ -6,6 +6,7 @@
     import { socketStore } from '../../../stores/socket';
     import { mowSettingsStore } from '../../../map/mow-settings';
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
+    import { isMowerMapSynced } from '../../../map/services/map-sync';
     import Obstacles from '../../../map/Obstacles.svelte';
 
     export let mowPointIndex: number = -1;
@@ -33,8 +34,7 @@
                          (map?.exclusions ?? []).some((ex) => (ex.points?.length ?? 0) > 0);
 
     $: storedCrc = $socketStore?.currentMapMeta?.crc ?? 0;
-    $: mowerCrc = $socketStore?.state?.map_crc ?? 0;
-    $: isMapSynced = mowerCrc !== 0 && storedCrc !== 0 && mowerCrc === storedCrc;
+    $: isMapSynced = isMowerMapSynced($socketStore.state, $socketStore.currentMapId, storedCrc);
     $: uploadOp = ($socketStore?.state as any)?.progressOp;
     $: uploadMsg = $socketStore?.state?.progressMsg ?? '';
     $: uploadPct = $socketStore?.state?.progressPct ?? 0;

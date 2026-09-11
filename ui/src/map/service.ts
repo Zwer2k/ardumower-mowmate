@@ -21,6 +21,23 @@ export { rotatePointsAroundOrigin, pointsToEdges, pointsForPolygon, edgeArrowPat
 export const drivenTrackStore = writable<DrivenTrackData | null>(null);
 export const currentMapRotationStore = writable<number>(0);
 
+export function updateDrivenTrack(incoming: DrivenTrackData): void {
+  drivenTrackStore.update((current) => {
+    if (incoming.full !== false || current === null) {
+      return { ...incoming, points: incoming.points.slice(-50) };
+    }
+    const lastSequence = current.sequence ?? current.points.at(-1)?.seq ?? 0;
+    const added = incoming.points.filter((point) => point.seq === undefined || point.seq > lastSequence);
+    const points = [...current.points, ...added].slice(-50);
+    return {
+      points,
+      size: points.length,
+      full: true,
+      sequence: incoming.sequence ?? added.at(-1)?.seq ?? lastSequence,
+    };
+  });
+}
+
 export interface StoredMap {
   map: Map;
   presentation: MapPresentation;
@@ -96,11 +113,12 @@ export function buildMapFromChunkStores(): Map {
 }
 
 export function buildMapSetData(map: Map, rotation: number = 0): MapSetData {
-  const toMapPoint = (p: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }) => {
-    const pt: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number } = { x: p.x, y: p.y };
+  const toMapPoint = (p: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number }) => {
+    const pt: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number } = { x: p.x, y: p.y };
     if (p.delta !== undefined) pt.delta = p.delta;
     if (p.timestamp !== undefined) pt.timestamp = p.timestamp;
     if (p.sol !== undefined) pt.sol = p.sol;
+    if (p.conn !== undefined) pt.conn = p.conn;
     if (p.tag !== undefined) pt.tag = p.tag;
     return pt;
   };

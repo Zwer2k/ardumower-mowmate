@@ -83,6 +83,7 @@ namespace ArduMower
         schedule,
         clock,
         obstacles,
+        mapAck,
         responseDataTypeLength
       };
 
@@ -126,11 +127,14 @@ namespace ArduMower
         void ping();
         AwsClientStatus status();
         uint32_t clientId() { return _clientId; }
+        uint32_t drivenTrackSequence() const { return _drivenTrackSequence; }
+        void setDrivenTrackSequence(uint32_t sequence) { _drivenTrackSequence = sequence; }
         ~UiSocketItem();
       
       private:
         UiSocketHandler *_socketHandler;
         uint32_t _clientId;
+        uint32_t _drivenTrackSequence = 0;
         ArduMower::Domain::Robot::StateSource &_source;
       };
 
@@ -181,6 +185,7 @@ namespace ArduMower
         bool cmdToMower(String cmd);
         void sendData(ResponseDataType dataType, UiSocketItem *sendTo = NULL, bool force = false);
         void sendMapList(UiSocketItem *sendTo = NULL);
+        void sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted);
         void sendSchedule(UiSocketItem *sendTo = NULL);
         void sendClock(UiSocketItem *sendTo = NULL);
         bool setSchedule(bool enabled, const std::vector<ArduMower::Modem::Schedule::Entry> &entries);

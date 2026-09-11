@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { get } from "svelte/store";
-import { cloneMap, emptyMap, MapStore, buildMapFromChunkStores, currentMapRotationStore } from "../service";
+import { cloneMap, emptyMap, MapStore, buildMapFromChunkStores, buildMapSetData, currentMapRotationStore } from "../service";
 import { handleMapChunk, mapChunkProgress, MapPointType, resetMapChunkBuffer } from "../map-chunk-buffer";
 
 describe("cloneMap", () => {
@@ -40,6 +40,15 @@ describe("buildMapFromChunkStores", () => {
     expect(map.waypoints.points).toEqual([{ x: 30, y: -40 }]);
     expect(map.dockpoints.points).toEqual([{ x: 50, y: -60 }]);
     expect(map.exclusions).toEqual([{ points: [{ x: 70, y: -80 }] }]);
+  });
+});
+
+describe("buildMapSetData", () => {
+  it("preserves waypoint connector metadata for backend synchronization", () => {
+    const map = emptyMap();
+    map.waypoints.points = [{ x: 1, y: 2, tag: 1, conn: true }];
+
+    expect(buildMapSetData(map).waypoints).toEqual([{ x: 1, y: 2, tag: 1, conn: true }]);
   });
 });
 

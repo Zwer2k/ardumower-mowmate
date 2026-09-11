@@ -31,7 +31,7 @@ import {
 import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer } from "../map/map-chunk-buffer";
 import { MapPointType } from "../map/map-chunk-buffer";
 import { mowSettingsStore } from "../map/mow-settings";
-import { drivenTrackStore, currentMapRotationStore } from "../map/service";
+import { currentMapRotationStore, updateDrivenTrack } from "../map/service";
 import { mapWorkflowStore } from "../map/workflow/map-workflow-store";
 import { setMapDirty } from "../map/services/map-sync";
 import { saveCachedMap, isCachedMapCurrent, loadCachedMap } from "../map/map-cache";
@@ -140,6 +140,9 @@ class SocketService {
   private lastMessageTime: number = 0;
   private isPageVisible = true;
   private pendingMessages: RequestSocketMessage[] = [];
+  private nextMapSyncId = 1;
+  private pendingUpload: { mapData: import("../model").MapSetData; syncId: number; mapId: string } | null = null;
+  private pendingUploadRetry: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (browser) {
@@ -427,6 +430,44 @@ class SocketService {
                   }
                   break;
                 }
+                case ResponseDataType.mapAck: {
+                  const data = jsonData.data as {
+                    hash: string;
+                    crc: number;
+                    area: number;
+                    rotation: number;
+                    unsaved: boolean;
+                    syncId: number;
+                    mapId: string;
+                    accepted: boolean;
+                  };
+                  if (!data.accepted) {
+                    if (this.pendingUpload?.syncId === data.syncId) {
+                      if (this.pendingUpload.mapId === data.mapId) {
+                        this.schedulePendingUploadRetry();
+                      } else {
+                        this.pendingUpload = null;
+                      }
+                    }
+                    break;
+                  }
+                  if (data.mapId !== newState.currentMapId) break;
+                  const meta = {
+                    hash: data.hash,
+                    crc: data.crc || 0,
+                    area: data.area,
+                    rotation: data.rotation || 0,
+                  };
+                  newState.currentMapMeta = meta;
+                  newState.currentMapUnsaved = data.unsaved;
+                  mapMetaStore.set(meta);
+                  setMapDirty(data.unsaved);
+                  if (this.pendingUpload?.syncId === data.syncId && this.pendingUpload.mapId === data.mapId) {
+                    this.pendingUpload = null;
+                    this.sendUploadMap(data.mapId);
+                  }
+                  break;
+                }
                 case ResponseDataType.mapList: {
                   const listData = jsonData.data as MapListData;
                   newState.maps = listData.maps || [];
@@ -517,7 +558,9 @@ class SocketService {
                   newState.ubxResponse = jsonData.data as UbxResponse;
                   break;
                 case ResponseDataType.mowSettings:
-                  mowSettingsStore.set(jsonData.data as MowSettings);
+                  if ((jsonData.data as MowSettings & { mapId?: string }).mapId === newState.currentMapId) {
+                    mowSettingsStore.set(jsonData.data as MowSettings);
+                  }
                   break;
                 case ResponseDataType.mowerMap: {
                   const data = jsonData.data as { json: string };
@@ -528,7 +571,7 @@ class SocketService {
                   break;
                 }
                 case ResponseDataType.drivenTrack:
-                  drivenTrackStore.set(jsonData.data as DrivenTrackData);
+                  updateDrivenTrack(jsonData.data as DrivenTrackData);
                   break;
                 case ResponseDataType.obstacles:
                   newState.obstacles = jsonData.data as ObstaclesData;
@@ -719,17 +762,48 @@ class SocketService {
   }
 
   sendMap(mapData: import("../model").MapSetData) {
+    const syncId = this.nextMapSyncId++;
+    const mapId = get(socketStore).currentMapId;
     const req: RequestSocketMessage = {
       type: RequestDataType.setMap,
-      data: mapData,
+      data: { ...mapData, syncId, mapId },
     };
     this.sendMessage(req);
   }
 
-  sendUploadMap() {
+  sendMapAndUpload(mapData: import("../model").MapSetData) {
+    const syncId = this.nextMapSyncId++;
+    const mapId = get(socketStore).currentMapId;
+    this.pendingUpload = { mapData, syncId, mapId };
+    this.sendPendingUploadMap();
+  }
+
+  private sendPendingUploadMap() {
+    const pendingUpload = this.pendingUpload;
+    if (!pendingUpload) return;
+    const req: RequestSocketMessage = {
+      type: RequestDataType.setMap,
+      data: {
+        ...pendingUpload.mapData,
+        syncId: pendingUpload.syncId,
+        mapId: pendingUpload.mapId,
+      },
+    };
+    this.sendMessage(req);
+  }
+
+  private schedulePendingUploadRetry() {
+    if (this.pendingUploadRetry) clearTimeout(this.pendingUploadRetry);
+    this.pendingUploadRetry = setTimeout(() => {
+      this.pendingUploadRetry = null;
+      this.sendPendingUploadMap();
+    }, 150);
+  }
+
+  sendUploadMap(mapId = get(socketStore).currentMapId) {
     const req: RequestSocketMessage = {
       type: RequestDataType.uploadMap,
-      data: {},
+      data: { mapId },
     };
     this.sendMessage(req);
   }
@@ -737,7 +811,7 @@ class SocketService {
   sendMowSettings(data: Partial<MowSettingsData>) {
     const req: RequestSocketMessage = {
       type: RequestDataType.setMowSettings,
-      data,
+      data: { ...data, mapId: get(socketStore).currentMapId },
     };
     this.sendMessage(req);
   }
@@ -793,6 +867,11 @@ class SocketService {
   }
 
   sendLoadMap(id: string, discardCurrent = false) {
+    this.pendingUpload = null;
+    if (this.pendingUploadRetry) {
+      clearTimeout(this.pendingUploadRetry);
+      this.pendingUploadRetry = null;
+    }
     // currentMapId sofort auf die Ziel-ID setzen, damit das Frontend während
     // des Ladens weiß, welche Karte geladen wird, und finishLoadMap korrekt
     // ausgelöst wird. startLoadMap versucht denselben Zustand über updateSocket

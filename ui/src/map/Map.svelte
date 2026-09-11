@@ -15,7 +15,7 @@
   import { filterWaypointsByToggles } from "./core/waypoint-filter";
   import { openConfirm } from "../stores/confirm-dialog";
   import { mapWorkflowStore, isMapDirty } from "./map-workflow";
-import { setMapDirty } from "./services/map-sync";
+  import { isMowerMapSynced, setMapDirty } from "./services/map-sync";
   import { get } from "svelte/store";
   import MowSettingsDialog from "./MowSettingsDialog.svelte";
   import MapToolbar from "./toolbar/MapToolbar.svelte";
@@ -329,6 +329,16 @@ import { setMapDirty } from "./services/map-sync";
     const name = $mapWorkflowStore.pendingName || effectiveMapName || `Karte ${$socketStore.maps.length + 1}`;
     mapWorkflowStore.startSaveMap(name, compassRotation);
     socketService.sendSaveMap(name, compassRotation);
+  }
+
+  function onUploadMap() {
+    if (mapSyncTimer) {
+      clearTimeout(mapSyncTimer);
+      mapSyncTimer = null;
+    }
+    const mapData = buildMapSetData(get(MapStore).map, compassRotation);
+    lastSyncedMap = JSON.stringify(mapData);
+    socketService.sendMapAndUpload(mapData);
   }
 
   async function onDiscardMap() {
@@ -875,7 +885,7 @@ import { setMapDirty } from "./services/map-sync";
   // ─── Sync-Status: CRC aus Metadaten ────────────────────────────────────────
   $: hasState = $socketStore.state !== null;
   $: storedCrc = $socketStore.currentMapMeta?.crc ?? 0;
-  $: sync = { needsUpload: hasState && ($socketStore.state?.map_crc ?? 0) !== storedCrc };
+  $: sync = { needsUpload: hasState && !isMowerMapSynced($socketStore.state, $socketStore.currentMapId, storedCrc) };
 
   $: if (!edit && wasEditing && $MapStore && $MapStore.map) {
     if (mapSyncTimer) {
@@ -974,7 +984,7 @@ import { setMapDirty } from "./services/map-sync";
               $mapWorkflowStore.state === "intercepting" ||
               $mapWorkflowStore.pendingName !== effectiveMapName
             )}
-            onUpload={() => socketService.sendUploadMap()}
+            onUpload={onUploadMap}
             onToggleManage={toggleManage}
             onToggleEdit={toggleEdit}
             onToggleCalculate={toggleCalculate}

@@ -176,6 +176,8 @@ export interface State {
   sensor: number;
   amps: number;
   map_crc: number;
+  uploaded_map_id?: string;
+  uploaded_map_crc?: number;
   progressPct?: number;
   progressMsg?: string;
   progressOp?: string;
@@ -313,6 +315,7 @@ export enum ResponseDataType {
   schedule,
   clock,
   obstacles,
+  mapAck,
 }
 
 export interface ScheduleEntry {
@@ -343,8 +346,10 @@ export interface ClockData {
 }
 
 export interface DrivenTrackData {
-  points: { x: number; y: number; t: number }[];
+  points: { x: number; y: number; t: number; seq?: number }[];
   size: number;
+  full?: boolean;
+  sequence?: number;
 }
 
 export interface ObstaclePolygon {
@@ -439,6 +444,7 @@ export enum RequestDataType {
 }
 
 export interface MowSettingsData {
+  mapId?: string;
   pattern: number;
   width: number;
   angle: number;
@@ -471,14 +477,16 @@ export interface JoystickMoveData {
 }
 
 export interface MapSetData {
-  perimeter: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[];
-  exclusions: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[][];
-  dockpoints: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[];
-  searchWire: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[];
-  waypoints: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }[];
+  perimeter: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number }[];
+  exclusions: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number }[][];
+  dockpoints: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number }[];
+  searchWire: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number }[];
+  waypoints: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number }[];
   rotation: number;
   dateTime?: string;
   source?: string;
+  syncId?: number;
+  mapId?: string;
 }
 
 export interface RequestSocketMessage {
@@ -493,6 +501,7 @@ export interface RequestSocketMessage {
     | { id: string }
     | { id: string; name: string }
     | { name: string; rotation: number }
+    | { mapId: string }
     | { action: string; [key: string]: any }
     | { hex: string }
     | Record<string, never>;

@@ -108,6 +108,8 @@ void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
   }
   _map = map;
   _map.timestamp = millis();
+  _lastUploadedMapId = "";
+  _lastUploadedMapCrc = 0;
   _currentMapUnsaved = true;
   _mapListDirty = true;
   updateCurrentMapMeta();
@@ -135,6 +137,8 @@ void MowerAdapter::updateCurrentMapMeta() {
 void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s) {
   _mowSettings = s;
   _mowSettings.timestamp = millis();
+  _lastUploadedMapId = "";
+  _lastUploadedMapCrc = 0;
   // Mäh-Einstellungen als Teil der aktuellen Karte speichern, damit sie beim
   // Speichern/Laden/Export der Map erhalten bleiben.
   _map.pattern = _mowSettings.pattern;
@@ -2034,8 +2038,6 @@ void MowerAdapter::processMapUpload()
       Log(WARN, "%sprocessMapUpload: command failed in phase %d (retry %d/3)", _LOG_, _mapUploadState.phase, _mapUploadState.chunkRetry);
       if (_mapUploadState.chunkRetry >= 3) {
         Log(ERR, "%sprocessMapUpload: command failed in phase %d after 3 retries", _LOG_, _mapUploadState.phase);
-        _map = _mapUploadState.snapshot;
-        _map.timestamp = millis();
         _map.endRead();
         _mapUploadState.snapshot = ArduMower::Domain::Robot::MowerMap();
         _mapUploadState.phase = MapUploadState::error;
@@ -2175,18 +2177,23 @@ void MowerAdapter::processMapUpload()
       break;
 
     case MapUploadState::finalizing:
-      _map = _mapUploadState.snapshot;
-      _map.timestamp = millis();
+      {
+      const auto uploadedCrc = _mapUploadState.snapshot.computeMapCrc();
+      const auto uploadedPerimeter = _mapUploadState.snapshot.perimeter.size();
+      const auto uploadedExclusions = _mapUploadState.snapshot.exclusions.size();
+      const auto uploadedDockpoints = _mapUploadState.snapshot.dockpoints.size();
+      const auto uploadedWaypoints = _mapUploadState.snapshot.waypoints.size();
       _map.endRead();
-      updateCurrentMapMeta();
       _mapUploadState.snapshot = ArduMower::Domain::Robot::MowerMap();
       _mapUploadState.phase = MapUploadState::done;
       _mapUploadState.active = false;
       _lastUploadedMapId = _currentMapId;
+      _lastUploadedMapCrc = uploadedCrc;
       Log(INFO, "%sprocessMapUpload: Map upload complete (%d perimeter, %d exclusions, %d dockpoints, %d waypoints) CRC %d",
-          _LOG_, _map.perimeter.size(), _map.exclusions.size(), _map.dockpoints.size(), _map.waypoints.size(), _currentMapCrc);
+          _LOG_, uploadedPerimeter, uploadedExclusions, uploadedDockpoints, uploadedWaypoints, uploadedCrc);
       Log(INFO, "%sprocessMapUpload: upload complete", _LOG_);
       break;
+      }
 
     case MapUploadState::done:
     case MapUploadState::error:

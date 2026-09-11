@@ -12,6 +12,7 @@
     import MiniMap from './MiniMap.svelte';
     import MowAreaToggles from '../../../map/MowAreaToggles.svelte';
     import { MapStore } from '../../../map/service';
+    import { isMowerMapSynced } from '../../../map/services/map-sync';
     import { onMount } from 'svelte';
 
     let clockInterval: ReturnType<typeof setInterval> | null = null;
@@ -118,9 +119,8 @@
         {@const totalPoints = ($MapStore?.map?.waypoints?.points?.length ?? 0)}
         {@const currentPoint = (pos?.mow_point_index ?? -1) >= 0 ? (pos?.mow_point_index ?? -1) + 1 : 0}
         {@const storedCrc = $socketStore?.currentMapMeta?.crc ?? 0}
-        {@const mowerCrc = state?.map_crc ?? 0}
         {@const hasMapData = ($MapStore?.map?.perimeter?.points?.length ?? 0) > 0}
-        {@const isMapSynced = mowerCrc !== 0 && storedCrc !== 0 && mowerCrc === storedCrc}
+        {@const isMapSynced = isMowerMapSynced(state, $socketStore.currentMapId, storedCrc)}
 
         <Row narrow class="metrics-row">
             <Column sm={4} md={8} lg={5} class="metrics-col">
