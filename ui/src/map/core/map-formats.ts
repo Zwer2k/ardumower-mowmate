@@ -5,12 +5,13 @@ export type MapFormat = "mower" | "geojson";
 
 interface GeoJsonFeature {
   type: "Feature";
+  idx?: number;
   properties?: {
     name?: string;
     type?: string;
     [key: string]: unknown;
   };
-  geometry: {
+  geometry?: {
     type: "Polygon" | "LineString" | "Point";
     coordinates: number[][][] | number[][] | number[];
   };
@@ -21,12 +22,29 @@ interface GeoJsonFeatureCollection {
   features: GeoJsonFeature[];
 }
 
+const MAX_REFERENCE_OFFSET_METERS = 10000;
+
+export interface GeoJsonReference {
+  lon: number;
+  lat: number;
+}
+
 function toPoint(arr: number[]): Point {
   return { x: arr[0], y: -arr[1] };
 }
 
-function fromPoint(p: Point): number[] {
-  return [p.x, -p.y];
+function absoluteToRelative(arr: number[], reference: GeoJsonReference): Point {
+  const metersPerDegree = 111111;
+  const x = (arr[0] - reference.lon) * metersPerDegree * Math.cos(reference.lat * Math.PI / 180);
+  const y = (arr[1] - reference.lat) * metersPerDegree;
+  return { x: x === 0 ? 0 : x, y: y === 0 ? 0 : -y };
+}
+
+function relativeToAbsolute(point: Point, reference: GeoJsonReference): number[] {
+  const metersPerDegree = 111111;
+  const lon = point.x / (metersPerDegree * Math.cos(reference.lat * Math.PI / 180)) + reference.lon;
+  const lat = -point.y / metersPerDegree + reference.lat;
+  return [lon, lat];
 }
 
 function ringClosed(pts: Point[]): Point[] {
@@ -41,12 +59,13 @@ function ringClosed(pts: Point[]): Point[] {
 
 /**
  * CaSSAndRA-spezifisches GeoJSON:
- * - Perimeter: Feature mit geometry.type Polygon, type/perimeter
- * - Exclusions: Feature mit geometry.type Polygon, type/exclusion_N
- * - Dockpoints: Feature mit geometry.type LineString, type/dockpoints
- * - Search Wire: Feature mit geometry.type LineString, type/search_wire
+ * - Original: Klassifizierung über properties.name, Koordinaten als WGS84
+ * - MowMate-Export: Klassifizierung über properties.type, lokale Koordinaten
  */
-export function importGeoJson(json: string): { map: Map; rotation: number } | null {
+export function importGeoJson(
+  json: string,
+  reference?: GeoJsonReference,
+): { map: Map; rotation: number } | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -60,29 +79,39 @@ export function importGeoJson(json: string): { map: Map; rotation: number } | nu
   }
 
   const fc = parsed as GeoJsonFeatureCollection;
+  if (!Array.isArray(fc.features)) return null;
   const map = emptyMap();
   let rotation = 0;
 
   for (const feature of fc.features) {
     const geom = feature.geometry;
-    const type = feature.properties?.type?.toLowerCase() ?? "";
+    if (!geom || !Array.isArray(geom.coordinates)) continue;
+    const declaredType = feature.properties?.type?.trim().toLowerCase() ?? "";
+    const name = feature.properties?.name?.trim().toLowerCase() ?? "";
+    const type = (declaredType || name).replace(/[\s-]+/g, "_");
+    const cassandraCoordinates = declaredType === "" && name !== "";
+    if (cassandraCoordinates && !reference) return null;
+    const convertPoint = cassandraCoordinates
+      ? (point: number[]) => absoluteToRelative(point, reference!)
+      : toPoint;
 
-    if (geom.type === "Polygon" && Array.isArray(geom.coordinates)) {
+    if (geom.type === "Polygon") {
       const rings = geom.coordinates as number[][][];
-      const outer = rings[0] as number[][];
-      const points = outer.map(toPoint);
+      const outer = rings[0];
+      if (!Array.isArray(outer)) continue;
+      const points = outer.filter((point) => Array.isArray(point) && point.length >= 2).map(convertPoint);
       if (type.startsWith("exclusion")) {
         if (points.length >= 3) {
           map.exclusions.push({ points });
         }
-      } else if (type === "perimeter" || type === "" || type === "map") {
+      } else if (type === "perimeter" || type === "" || type === "map" || type === "current_map") {
         if (points.length >= 3) {
           map.perimeter.points = points;
         }
       }
-    } else if (geom.type === "LineString" && Array.isArray(geom.coordinates)) {
+    } else if (geom.type === "LineString") {
       const coords = geom.coordinates as number[][];
-      const points = coords.map(toPoint);
+      const points = coords.filter((point) => Array.isArray(point) && point.length >= 2).map(convertPoint);
       if (type === "dockpoints" || type === "docking") {
         map.dockpoints.points = points;
       } else if (type === "search_wire" || type === "searchwire") {
@@ -97,21 +126,34 @@ export function importGeoJson(json: string): { map: Map; rotation: number } | nu
     return null;
   }
 
+  if (map.perimeter.points.some((point) =>
+    !Number.isFinite(point.x) || !Number.isFinite(point.y) ||
+    Math.abs(point.x) > MAX_REFERENCE_OFFSET_METERS || Math.abs(point.y) > MAX_REFERENCE_OFFSET_METERS
+  )) {
+    return null;
+  }
+
   // Falls Perimeter nicht geschlossen, schließen.
   map.perimeter.points = ringClosed(map.perimeter.points);
 
   return { map, rotation };
 }
 
-export function exportGeoJson(map: Map, options: { rotation?: number; name?: string } = {}): string {
+export function exportGeoJson(map: Map, reference: GeoJsonReference): string {
+  if (!Number.isFinite(reference.lon) || !Number.isFinite(reference.lat) ||
+      (reference.lon === 0 && reference.lat === 0)) {
+    throw new Error("A valid Position reference is required for CaSSAndRA GeoJSON export.");
+  }
+
   const features: GeoJsonFeature[] = [];
+  const convertPoint = (point: Point) => relativeToAbsolute(point, reference);
 
   features.push({
     type: "Feature",
-    properties: { name: options.name ?? "perimeter", type: "perimeter" },
+    properties: { name: "perimeter" },
     geometry: {
       type: "Polygon",
-      coordinates: [ringClosed(map.perimeter.points).map(fromPoint)],
+      coordinates: [ringClosed(map.perimeter.points).map(convertPoint)],
     },
   });
 
@@ -119,36 +161,33 @@ export function exportGeoJson(map: Map, options: { rotation?: number; name?: str
     if (ex.points.length >= 3) {
       features.push({
         type: "Feature",
-        properties: { name: `exclusion_${idx}`, type: `exclusion_${idx}` },
+        properties: { name: "exclusion" },
+        idx,
         geometry: {
           type: "Polygon",
-          coordinates: [ringClosed(ex.points).map(fromPoint)],
+          coordinates: [ringClosed(ex.points).map(convertPoint)],
         },
       });
     }
   });
 
-  if (map.dockpoints.points.length > 0) {
-    features.push({
-      type: "Feature",
-      properties: { name: "dockpoints", type: "dockpoints" },
-      geometry: {
-        type: "LineString",
-        coordinates: map.dockpoints.points.map(fromPoint),
-      },
-    });
-  }
+  features.splice(1, 0, {
+    type: "Feature",
+    properties: { name: "dockpoints" },
+    geometry: {
+      type: "LineString",
+      coordinates: map.dockpoints.points.map(convertPoint),
+    },
+  });
 
-  if (map.searchWire.points.length >= 2) {
-    features.push({
-      type: "Feature",
-      properties: { name: "search_wire", type: "search_wire" },
-      geometry: {
-        type: "LineString",
-        coordinates: map.searchWire.points.map(fromPoint),
-      },
-    });
-  }
+  features.splice(2, 0, {
+    type: "Feature",
+    properties: { name: "search wire" },
+    geometry: {
+      type: "LineString",
+      coordinates: map.searchWire.points.map(convertPoint),
+    },
+  });
 
   const fc: GeoJsonFeatureCollection = {
     type: "FeatureCollection",
@@ -158,6 +197,15 @@ export function exportGeoJson(map: Map, options: { rotation?: number; name?: str
   return JSON.stringify(fc, null, 2);
 }
 
-export function isValidGeoJson(json: string): boolean {
-  return importGeoJson(json) !== null;
+export function isValidGeoJson(json: string, reference?: GeoJsonReference): boolean {
+  return importGeoJson(json, reference) !== null;
+}
+
+export function isGeoJsonFeatureCollection(json: string): boolean {
+  try {
+    const parsed = JSON.parse(json) as { type?: unknown };
+    return parsed?.type === "FeatureCollection";
+  } catch {
+    return false;
+  }
 }

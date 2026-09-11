@@ -15,12 +15,14 @@
   import {
     exportGeoJson,
     importGeoJson,
-    isValidGeoJson,
+    isGeoJsonFeatureCollection,
   } from "./core/map-formats";
   import type { MapFormat } from "./core/map-formats";
   import type { Map } from "../model";
   import { SaveSuccess } from "../stores/success";
   import type { MowSettingsData } from "../model";
+  import { BackendSettings } from "../stores/backend";
+  import { get } from "svelte/store";
 
   export let open = false;
   export let map: Map;
@@ -49,8 +51,17 @@
 
   function doExport(): string {
     if (format === "geojson") {
-      return exportGeoJson(map, { rotation });
+      const position = get(BackendSettings)?.position;
+      const hasReference = position && Number.isFinite(position.lon) && Number.isFinite(position.lat) &&
+        (position.lon !== 0 || position.lat !== 0);
+      if (!hasReference) {
+        exportError = "Configure the reference longitude/latitude in Position settings before exporting CaSSAndRA GeoJSON.";
+        return "";
+      }
+      exportError = "";
+      return exportGeoJson(map, { lon: position.lon, lat: position.lat });
     }
+    exportError = "";
     return exportMowerMap(map, { rotation });
   }
 
@@ -125,14 +136,15 @@
       return;
     }
 
-    if (format === "geojson") {
-      if (!isValidGeoJson(trimmed)) {
-        importError = "Invalid GeoJSON: expected FeatureCollection with a perimeter Polygon.";
-        return;
-      }
-      const result = importGeoJson(trimmed);
+    if (format === "geojson" || isGeoJsonFeatureCollection(trimmed)) {
+      const position = get(BackendSettings)?.position;
+      const hasReference = position && Number.isFinite(position.lon) && Number.isFinite(position.lat) &&
+        (position.lon !== 0 || position.lat !== 0);
+      const result = importGeoJson(trimmed, hasReference ? { lon: position.lon, lat: position.lat } : undefined);
       if (!result) {
-        importError = "Failed to import GeoJSON map.";
+        importError = hasReference
+          ? `Failed to import CaSSAndRA GeoJSON. Check Position reference longitude/latitude (${position.lon}, ${position.lat}).`
+          : "Failed to import CaSSAndRA GeoJSON. Configure the reference longitude/latitude in Position settings first.";
         return;
       }
       onImport(result.map, result.rotation, new Date().toISOString(), "CaSSAndRA GeoJSON");

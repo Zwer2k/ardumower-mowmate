@@ -9,7 +9,7 @@
   import Dockpoints from "./Dockpoints.svelte";
   import MowerPosition from "./MowerPosition.svelte";
   import Obstacles from "./Obstacles.svelte";
-  import { MapStore, cloneMap, buildMapSetData } from "./service";
+  import { MapStore, cloneMap, buildMapSetData, calculatePresentation } from "./service";
   import { socketStore, socketService } from "../stores/socket";
   import { mowSettingsStore } from "./mow-settings";
   import { filterWaypointsByToggles } from "./core/waypoint-filter";
@@ -49,6 +49,7 @@
   import { currentMapRotationStore } from "./service";
   import { mapChunkProgress } from "./map-chunk-buffer";
   import type { Point, MapArea } from "./model";
+  import type { MowSettingsData } from "../model";
   import { gamepadStore, GamepadButton } from "../stores/gamepad";
   import { gamepadMode } from "../stores/gamepad-mode";
   import { remoteControlOpen } from "../stores/remote-control";
@@ -457,6 +458,7 @@
     settings?: Partial<import("../model").MowSettingsData>,
   ) {
     currentMapRotationStore.set(((rotation % 360) + 360) % 360);
+    MapStore.set({ map, presentation: calculatePresentation(map, 0) });
     if (settings) {
       socketService.sendMowSettings(settings as MowSettingsData);
     }
@@ -472,6 +474,7 @@
         perimeter: map.perimeter.points.map(toBackendPoint),
         exclusions: map.exclusions.map((e) => e.points.map(toBackendPoint)),
         dockpoints: map.dockpoints.points.map(toBackendPoint),
+        searchWire: map.searchWire.points.map(toBackendPoint),
         waypoints: map.waypoints.points.map(toBackendPoint),
         rotation,
       }),

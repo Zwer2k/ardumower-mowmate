@@ -199,6 +199,7 @@ namespace ArduMower {
                     perimeter.clear();
                     exclusions.clear();
                     dockpoints.clear();
+                    searchWire.clear();
                     waypoints.clear();
 
                     JsonArray perim = obj["perimeter"];
@@ -237,6 +238,13 @@ namespace ArduMower {
                     if (docks) {
                         for (JsonObject p : docks) {
                             dockpoints.push_back(unmarshalMapPoint(p));
+                        }
+                    }
+
+                    JsonArray wire = obj["searchWire"];
+                    if (wire) {
+                        for (JsonObject p : wire) {
+                            searchWire.push_back(unmarshalMapPoint(p));
                         }
                     }
 
