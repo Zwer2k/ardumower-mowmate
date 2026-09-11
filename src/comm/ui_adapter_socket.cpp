@@ -302,18 +302,18 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
    case RequestDataType::setMowSettings:
     {
       using namespace ArduMower::Domain::Robot;
-      MowSettings s;
-      s.pattern = jsonData["pattern"] | 0;
-      s.width = jsonData["width"] | 0.3f;
-      s.angle = jsonData["angle"] | 0;
-      s.distanceToBorder = jsonData["distanceToBorder"] | 0;
-      s.borderLaps = jsonData["borderLaps"] | 0;
-      s.mowBorderCcw = jsonData["mowBorderCcw"] | false;
-      s.doMowArea = jsonData["doMowArea"] | true;
-      s.doMowPerimeter = jsonData["doMowPerimeter"] | true;
-      s.doMowBorder = jsonData["doMowBorder"] | false;
-      s.doMowExclusions = jsonData["doMowExclusions"] | true;
-      s.doMowExclusionBorder = jsonData["doMowExclusionBorder"] | false;
+      MowSettings s = _source.mowSettings();
+      if (!jsonData["pattern"].isNull()) s.pattern = jsonData["pattern"];
+      if (!jsonData["width"].isNull()) s.width = jsonData["width"];
+      if (!jsonData["angle"].isNull()) s.angle = jsonData["angle"];
+      if (!jsonData["distanceToBorder"].isNull()) s.distanceToBorder = jsonData["distanceToBorder"];
+      if (!jsonData["borderLaps"].isNull()) s.borderLaps = jsonData["borderLaps"];
+      if (!jsonData["mowBorderCcw"].isNull()) s.mowBorderCcw = jsonData["mowBorderCcw"];
+      if (!jsonData["doMowArea"].isNull()) s.doMowArea = jsonData["doMowArea"];
+      if (!jsonData["doMowPerimeter"].isNull()) s.doMowPerimeter = jsonData["doMowPerimeter"];
+      if (!jsonData["doMowBorder"].isNull()) s.doMowBorder = jsonData["doMowBorder"];
+      if (!jsonData["doMowExclusions"].isNull()) s.doMowExclusions = jsonData["doMowExclusions"];
+      if (!jsonData["doMowExclusionBorder"].isNull()) s.doMowExclusionBorder = jsonData["doMowExclusionBorder"];
       Log(INFO, "%s setMowSettings received: pattern=%d width=%.2f angle=%d distToBorder=%d laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusions=%d doMowExclusionBorder=%d",
           _LOG_, s.pattern, s.width, s.angle, s.distanceToBorder, s.borderLaps,
           s.doMowArea, s.doMowPerimeter, s.doMowBorder, s.doMowExclusions, s.doMowExclusionBorder);
@@ -1432,6 +1432,14 @@ bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<Ard
   doc["timestamp"] = timestamp;
   doc["transferId"] = mapChunkSendState.transferId;
   auto dataObj = doc["data"].to<JsonObject>();
+  size_t transferTotal = mapChunkSendState.snapshot.perimeter.size()
+    + mapChunkSendState.snapshot.dockpoints.size()
+    + mapChunkSendState.snapshot.searchWire.size()
+    + mapChunkSendState.snapshot.waypoints.size();
+  for (const auto &exclusion : mapChunkSendState.snapshot.exclusions) {
+    transferTotal += exclusion.size();
+  }
+  dataObj["transferTotal"] = transferTotal;
   if (reset) {
     dataObj["reset"] = true;
     dataObj["pointType"] = static_cast<int>(pointType);

@@ -21,6 +21,7 @@ export interface MapChunk {
   points?: MapPoint[];
   reset?: boolean;
   complete?: boolean;
+  transferTotal?: number;
 }
 
 // Buffer für alle Typen
@@ -87,6 +88,23 @@ function publishSnapshot() {
 // Progress during chunk reception (download from backend)
 export const mapChunkProgress = writable<{ received: number; total: number; label: string } | null>(null);
 
+function receivedPointCount(): number {
+  return perimeterBuffer.filter(Boolean).length
+    + dockpointsBuffer.filter(Boolean).length
+    + searchWireBuffer.filter(Boolean).length
+    + waypointsBuffer.filter(Boolean).length
+    + exclusionsBuffer.reduce((sum, buffer) => sum + (buffer?.filter(Boolean).length ?? 0), 0);
+}
+
+function updateTransferProgress(chunk: MapChunk, label: string) {
+  if (chunk.transferId === undefined) return;
+  mapChunkProgress.set({
+    received: receivedPointCount(),
+    total: chunk.transferTotal ?? 0,
+    label,
+  });
+}
+
 export function handleMapChunk(chunk: MapChunk) {
   const atomicTransfer = chunk.transferId !== undefined;
   if (atomicTransfer && chunk.transferId !== activeTransferId) {
@@ -105,6 +123,7 @@ export function handleMapChunk(chunk: MapChunk) {
     exclusionsBuffer = [];
     exclusionsTotal = [];
     receivedTypes = new Set<MapPointType>();
+    mapChunkProgress.set({ received: 0, total: chunk.transferTotal ?? 0, label: 'Preparing map' });
   }
 
   if (atomicTransfer && chunk.complete) {
@@ -112,6 +131,7 @@ export function handleMapChunk(chunk: MapChunk) {
       publishSnapshot();
       publishedTransferId = activeTransferId;
       activeTransferId = null;
+      mapChunkProgress.set(null);
     }
     return;
   }
@@ -150,6 +170,7 @@ export function handleMapChunk(chunk: MapChunk) {
   if (chunk.reset) {
     if (atomicTransfer) receivedTypes.add(chunk.pointType);
     resetType(chunk.pointType ?? MapPointType.Perimeter);
+    updateTransferProgress(chunk, 'Loading map');
     if (!atomicTransfer) publishSnapshot();
     return;
   }
@@ -189,6 +210,7 @@ export function handleMapChunk(chunk: MapChunk) {
         publishSnapshot();
       }
     }
+    updateTransferProgress(chunk, 'Loading exclusions');
     return;
   }
 
@@ -216,7 +238,8 @@ export function handleMapChunk(chunk: MapChunk) {
   if (!atomicTransfer) {
     publishSnapshot();
   }
-  if (progressLabel && chunk.total > 0) {
+  updateTransferProgress(chunk, progressLabel ? `Loading ${progressLabel.toLowerCase()}` : 'Loading map');
+  if (!atomicTransfer && progressLabel && chunk.total > 0) {
     const received = Math.min(startIndex + points.length, chunk.total);
     mapChunkProgress.set({ received, total: chunk.total, label: progressLabel });
     if (received >= chunk.total) {
@@ -246,6 +269,7 @@ export function resetMapChunkBuffer() {
   waypointsStore.set([]);
   exclusionsStore.set([]);
   mapSnapshotStore.set({ perimeter: [], exclusions: [], dockpoints: [], searchWire: [], waypoints: [] });
+  mapChunkProgress.set(null);
 }
 
 export function clearWaypointsBuffer() {

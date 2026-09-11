@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { get } from "svelte/store";
 import { cloneMap, emptyMap, MapStore, buildMapFromChunkStores, currentMapRotationStore } from "../service";
-import { handleMapChunk, MapPointType, resetMapChunkBuffer } from "../map-chunk-buffer";
+import { handleMapChunk, mapChunkProgress, MapPointType, resetMapChunkBuffer } from "../map-chunk-buffer";
 
 describe("cloneMap", () => {
   it("should create a deep copy of all point arrays", () => {
@@ -106,5 +106,22 @@ describe("MapStore", () => {
     handleMapChunk({ transferId: 9, pointType: MapPointType.Waypoints, total: 0, complete: true });
 
     expect(get(MapStore).map.perimeter.points).toEqual([{ x: 10, y: -20 }]);
+  });
+
+  it("reports cumulative loading progress until the transfer completes", () => {
+    handleMapChunk({ transferId: 12, transferTotal: 2, pointType: MapPointType.Perimeter, total: 0, reset: true });
+    handleMapChunk({ transferId: 12, transferTotal: 2, pointType: MapPointType.Exclusion, total: 0, reset: true });
+    handleMapChunk({ transferId: 12, transferTotal: 2, pointType: MapPointType.Dockpoints, total: 0, reset: true });
+    handleMapChunk({ transferId: 12, transferTotal: 2, pointType: MapPointType.SearchWire, total: 0, reset: true });
+    handleMapChunk({ transferId: 12, transferTotal: 2, pointType: MapPointType.Waypoints, total: 0, reset: true });
+    handleMapChunk({ transferId: 12, transferTotal: 2, pointType: MapPointType.Perimeter, total: 1, startIndex: 0, points: [{ X: 1, Y: 2 }] });
+
+    expect(get(mapChunkProgress)).toEqual({ received: 1, total: 2, label: "Loading perimeter" });
+
+    handleMapChunk({ transferId: 12, transferTotal: 2, pointType: MapPointType.Waypoints, total: 1, startIndex: 0, points: [{ X: 3, Y: 4 }] });
+    expect(get(mapChunkProgress)?.received).toBe(2);
+
+    handleMapChunk({ transferId: 12, pointType: MapPointType.Waypoints, total: 0, complete: true });
+    expect(get(mapChunkProgress)).toBeNull();
   });
 });

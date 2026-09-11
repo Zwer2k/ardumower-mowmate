@@ -374,6 +374,7 @@ class SocketService {
                   if (data && data.complete) {
                     handleMapChunk({
                       transferId: jsonData.transferId,
+                      transferTotal: data.transferTotal,
                       pointType: MapPointType.Waypoints,
                       total: 0,
                       complete: true,
@@ -422,7 +423,7 @@ class SocketService {
                     data.startIndex !== undefined &&
                     data.points
                   ) {
-                    handleMapChunk({ ...data, transferId: jsonData.transferId });
+                    handleMapChunk({ ...data, transferId: jsonData.transferId, transferTotal: data.transferTotal });
                   }
                   break;
                 }
