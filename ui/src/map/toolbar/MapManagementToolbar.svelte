@@ -1,27 +1,24 @@
 <script lang="ts">
   import { Button, Row, Column } from "carbon-components-svelte";
-  import IconSave from "carbon-icons-svelte/lib/Save.svelte";
-  import IconUndo from "carbon-icons-svelte/lib/Undo.svelte";
   import IconPen from "carbon-icons-svelte/lib/Pen.svelte";
   import IconTrashCan from "carbon-icons-svelte/lib/TrashCan.svelte";
   import IconStar from "carbon-icons-svelte/lib/Star.svelte";
   import IconNew from "carbon-icons-svelte/lib/DocumentAdd.svelte";
+  import IconCopy from "carbon-icons-svelte/lib/Copy.svelte";
   import IconImportExport from "carbon-icons-svelte/lib/Cloud.svelte";
   import type { MapWorkflow } from "../workflow/map-workflow-store";
 
   export let workflow: MapWorkflow;
-  export let canSave: boolean;
-  export let canRevert: boolean;
   export let canRename: boolean;
   export let effectiveMapId: string;
   export let pendingName: string;
   export let effectiveMapName: string;
-  export let onSaveMap: () => void;
-  export let onDiscardMap: () => void;
+  export let previousMapName: string;
   export let startRename: () => void;
   export let onDeleteMap: () => void;
   export let onSetDefaultMap: () => void;
   export let onNewMap: () => void;
+  export let onCopyMap: () => void;
   export let onOpenMowerMap: () => void;
   export let workflowBusy: boolean;
 </script>
@@ -29,26 +26,6 @@
 <Row class="map-mgmt-row">
   <Column style="flex-shrink: 0;">
     <div class="toolbar-btn-row">
-      <Button
-        kind="primary"
-        size="small"
-        disabled={!canSave}
-        on:click={onSaveMap}
-        icon={IconSave}
-        iconDescription="Save map"
-      >
-        <span class="btn-label">Save</span>
-      </Button>
-      <Button
-        kind="tertiary"
-        size="small"
-        disabled={!canRevert}
-        on:click={onDiscardMap}
-        icon={IconUndo}
-        iconDescription="Revert changes"
-      >
-        <span class="btn-label">Revert</span>
-      </Button>
       <Button
         kind="secondary"
         size="small"
@@ -90,9 +67,19 @@
         <span class="btn-label">New</span>
       </Button>
       <Button
+        kind="secondary"
+        size="small"
+        disabled={!effectiveMapId || workflow.renameMode || workflowBusy}
+        on:click={onCopyMap}
+        icon={IconCopy}
+        iconDescription="Copy map"
+      >
+        <span class="btn-label">Copy</span>
+      </Button>
+      <Button
         kind="tertiary"
         size="small"
-        disabled={workflowBusy}
+        disabled={workflow.renameMode || workflowBusy}
         on:click={onOpenMowerMap}
         icon={IconImportExport}
         iconDescription="Import / Export Mower map"
@@ -100,7 +87,7 @@
         <span class="btn-label">JSON</span>
       </Button>
       {#if pendingName && pendingName !== effectiveMapName}
-        <span class="pending-map-name" title="Neuer Name, noch nicht gespeichert">→ {pendingName}</span>
+        <span class="pending-map-name" title="Bisheriger Kartenname">→ {previousMapName}</span>
       {/if}
     </div>
   </Column>
@@ -119,12 +106,16 @@
   .pending-map-name {
     margin-left: 0.5rem;
     padding: 0.25rem 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: #fff3e0;
     color: #b06000;
     border: 1px solid #ffcc80;
     border-radius: 4px;
     font-size: 0.85em;
     font-weight: 600;
+    text-align: center;
     white-space: nowrap;
     max-width: 200px;
     overflow: hidden;

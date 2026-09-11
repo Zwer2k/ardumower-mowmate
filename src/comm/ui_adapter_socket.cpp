@@ -296,14 +296,6 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
         Log(DBG, "%s setMap: parsed perimeter=%d exclusions=%d dockpoints=%d searchWire=%d waypoints=%d rotation=%.1f", _LOG_,
           map.perimeter.size(), map.exclusions.size(), map.dockpoints.size(), map.searchWire.size(), map.waypoints.size(), map.rotation);
       _socketHandler->setMap(map);
-      // Abort any running chunk transfer before broadcasting the new map so the
-      // new fragmented transfer starts on a clean frame boundary.
-      _socketHandler->abortMapChunkSend();
-      // Give the TCP/WebSocket stack one scheduler tick to drain the abort
-      // before we enqueue a fresh fragmented map transfer.
-      yield();
-      _socketHandler->sendData(ResponseDataType::map, NULL, true);
-      _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
     }
     break;
 
@@ -346,24 +338,45 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     _socketHandler->sendMapList(this);
     break;
 
+   case RequestDataType::createMap: {
+    String name = jsonData["name"] | "";
+    if (_source.createMap(name)) {
+      _socketHandler->abortMapChunkSend();
+      yield();
+      _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+      _socketHandler->sendMapList(NULL);
+    }
+    break;
+  }
+
+   case RequestDataType::copyMap: {
+    String name = jsonData["name"] | "";
+    if (_source.copyMap(name)) {
+      _socketHandler->abortMapChunkSend();
+      yield();
+      _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+      _socketHandler->sendMapList(NULL);
+    }
+    break;
+  }
+
    case RequestDataType::loadMap: {
     String id = jsonData["id"] | "";
-    if (_source.loadMap(id)) {
+    bool discardCurrent = jsonData["discardCurrent"] | false;
+    bool readyToLoad = !discardCurrent || _source.discardMap();
+    if (readyToLoad && _source.loadMap(id)) {
       _socketHandler->abortMapChunkSend();
       yield();
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendMapList(NULL);
     } else {
-      // Laden ist fehlgeschlagen (z.B. Datei nicht vorhanden oder Map wird
-      // gerade gelesen). Aktuelle Karte verwerfen, damit mapList eine leere
-      // currentId liefert und das Frontend den Ladezustand sauber verlassen
-      // kann. Andernfalls bleibt der Workflow im Frontend in "loading" und
-      // die Manage-Map-Buttons dauerhaft deaktiviert.
-      _source.discardMap();
+      // Die aktuelle Karte bei einem Ladefehler behalten. Die Map-Liste
+      // liefert dem Frontend wieder die weiterhin autoritative currentId.
       _socketHandler->abortMapChunkSend();
       yield();
-      _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -429,12 +442,14 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     ArduMower::Domain::Robot::MowerMap imported;
     if (_source.importMowerMap(json, imported)) {
       imported.rotation = rotation;
-      _socketHandler->setMap(imported);
-      _socketHandler->abortMapChunkSend();
-      yield();
-      _socketHandler->sendData(ResponseDataType::map, NULL, true);
-      _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
-      _socketHandler->sendMapList(NULL);
+      if (_source.createMap(name)) {
+        _socketHandler->setMap(imported);
+        _socketHandler->abortMapChunkSend();
+        yield();
+        _socketHandler->sendData(ResponseDataType::map, NULL, true);
+        _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+        _socketHandler->sendMapList(NULL);
+      }
     }
     break;
   }
@@ -1265,7 +1280,10 @@ void UiSocketHandler::processMapChunkSend() {
   switch (mapChunkSendState.phase) {
     case 0: // Perimeter
       if (mapChunkSendState.idx == 0) {
-        sendMapChunk(MapPointType::Perimeter, map.perimeter, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx);
+        if (!sendMapChunk(MapPointType::Perimeter, map.perimeter, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
+          mapChunkSendState.lastRetryMs = millis();
+          break;
+        }
       }
       if (map.perimeter.size() > 0 && mapChunkSendState.idx < map.perimeter.size()) {
         chunkSent = sendMapChunk(MapPointType::Perimeter, map.perimeter, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, mapChunkSendState.idx, blockSize, false, nextIdx);
@@ -1281,7 +1299,10 @@ void UiSocketHandler::processMapChunkSend() {
     case 1: // Exclusions
       if (mapChunkSendState.exclusionIdx == 0 && mapChunkSendState.idx == 0) {
         static const std::vector<ArduMower::Domain::Robot::MapPoint> emptyExcl;
-        sendMapChunk(MapPointType::Exclusion, emptyExcl, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx);
+        if (!sendMapChunk(MapPointType::Exclusion, emptyExcl, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
+          mapChunkSendState.lastRetryMs = millis();
+          break;
+        }
       }
       if (map.exclusions.size() > 0 && mapChunkSendState.exclusionIdx < map.exclusions.size()) {
         const auto& excl = map.exclusions[mapChunkSendState.exclusionIdx];
@@ -1301,7 +1322,10 @@ void UiSocketHandler::processMapChunkSend() {
     case 2: // Dockpoints
       if (mapChunkSendState.idx == 0) {
         static const std::vector<ArduMower::Domain::Robot::MapPoint> emptyDockpoints;
-        sendMapChunk(MapPointType::Dockpoints, emptyDockpoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx);
+        if (!sendMapChunk(MapPointType::Dockpoints, emptyDockpoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
+          mapChunkSendState.lastRetryMs = millis();
+          break;
+        }
       }
       if (map.dockpoints.size() > 0 && mapChunkSendState.idx < map.dockpoints.size()) {
         chunkSent = sendMapChunk(MapPointType::Dockpoints, map.dockpoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, mapChunkSendState.idx, blockSize, false, nextIdx);
@@ -1317,7 +1341,10 @@ void UiSocketHandler::processMapChunkSend() {
     case 3: // Search Wire
       if (mapChunkSendState.idx == 0) {
         static const std::vector<ArduMower::Domain::Robot::MapPoint> emptySearchWire;
-        sendMapChunk(MapPointType::SearchWire, emptySearchWire, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx);
+        if (!sendMapChunk(MapPointType::SearchWire, emptySearchWire, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
+          mapChunkSendState.lastRetryMs = millis();
+          break;
+        }
       }
       if (map.searchWire.size() > 0 && mapChunkSendState.idx < map.searchWire.size()) {
         chunkSent = sendMapChunk(MapPointType::SearchWire, map.searchWire, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, mapChunkSendState.idx, blockSize, false, nextIdx);
@@ -1333,7 +1360,10 @@ void UiSocketHandler::processMapChunkSend() {
     case 4: // Waypoints
       if (mapChunkSendState.idx == 0) {
         static const std::vector<ArduMower::Domain::Robot::MapPoint> emptyWaypoints;
-        sendMapChunk(MapPointType::Waypoints, emptyWaypoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx);
+        if (!sendMapChunk(MapPointType::Waypoints, emptyWaypoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
+          mapChunkSendState.lastRetryMs = millis();
+          break;
+        }
       }
       if (map.waypoints.size() > 0 && mapChunkSendState.idx < map.waypoints.size()) {
         chunkSent = sendMapChunk(MapPointType::Waypoints, map.waypoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, mapChunkSendState.idx, blockSize, false, nextIdx);
@@ -1350,6 +1380,19 @@ void UiSocketHandler::processMapChunkSend() {
       }
       // fallthrough
     case 5:
+      {
+        JsonDocument doc;
+        doc["type"] = ResponseDataType::map;
+        doc["timestamp"] = mapChunkSendState.timestamp;
+        doc["transferId"] = mapChunkSendState.transferId;
+        doc["data"]["complete"] = true;
+        String json;
+        serializeJson(doc, json);
+        if (!sendMapChunkText(mapChunkSendState.clientId, json)) {
+          mapChunkSendState.lastRetryMs = millis();
+          break;
+        }
+      }
       mapChunkSendState.active = false;
       oldDataTimestamp[ResponseDataType::map] = map.timestamp;
       _source.endMowerMapRead();

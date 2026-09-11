@@ -28,7 +28,7 @@ import {
   type ClockData,
   type DrivenTrackData,
 } from "../model";
-import { handleMapChunk, waypointsStore, resetMapChunkBuffer } from "../map/map-chunk-buffer";
+import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer } from "../map/map-chunk-buffer";
 import { MapPointType } from "../map/map-chunk-buffer";
 import { mowSettingsStore } from "../map/mow-settings";
 import { drivenTrackStore, currentMapRotationStore } from "../map/service";
@@ -371,8 +371,18 @@ class SocketService {
                 }
                 case ResponseDataType.map: {
                   const data = jsonData.data as any;
+                  if (data && data.complete) {
+                    handleMapChunk({
+                      transferId: jsonData.transferId,
+                      pointType: MapPointType.Waypoints,
+                      total: 0,
+                      complete: true,
+                    });
+                    break;
+                  }
                   if (data && data.reset) {
                     handleMapChunk({
+                      transferId: jsonData.transferId,
                       pointType: data.pointType ?? MapPointType.Perimeter,
                       total: 0,
                       reset: true,
@@ -412,7 +422,7 @@ class SocketService {
                     data.startIndex !== undefined &&
                     data.points
                   ) {
-                    handleMapChunk(data);
+                    handleMapChunk({ ...data, transferId: jsonData.transferId });
                   }
                   break;
                 }
@@ -745,7 +755,7 @@ class SocketService {
       data: {},
     };
     this.sendMessage(req);
-    waypointsStore.set([]);
+    clearWaypointsBuffer();
   }
 
   sendCalculateWaypoints() {
@@ -765,7 +775,23 @@ class SocketService {
     this.sendMessage(req);
   }
 
-  sendLoadMap(id: string) {
+  sendCreateMap(name: string) {
+    const req: RequestSocketMessage = {
+      type: RequestDataType.createMap,
+      data: { name },
+    };
+    this.sendMessage(req);
+  }
+
+  sendCopyMap(name: string) {
+    const req: RequestSocketMessage = {
+      type: RequestDataType.copyMap,
+      data: { name },
+    };
+    this.sendMessage(req);
+  }
+
+  sendLoadMap(id: string, discardCurrent = false) {
     // currentMapId sofort auf die Ziel-ID setzen, damit das Frontend während
     // des Ladens weiß, welche Karte geladen wird, und finishLoadMap korrekt
     // ausgelöst wird. startLoadMap versucht denselben Zustand über updateSocket
@@ -774,7 +800,7 @@ class SocketService {
     mapMetaStore.set(null);
     const req: RequestSocketMessage = {
       type: RequestDataType.loadMap,
-      data: { id },
+      data: { id, discardCurrent },
     };
     this.sendMessage(req);
   }

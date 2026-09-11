@@ -70,4 +70,41 @@ describe("MapStore", () => {
 
     expect(get(MapStore).map.waypoints.points).toEqual([{ x: 30, y: -40, conn: false, tag: 3 }]);
   });
+
+  it("publishes a transfer-ID map atomically after the final waypoint chunk", () => {
+    handleMapChunk({ transferId: 7, pointType: MapPointType.Perimeter, total: 0, reset: true });
+    handleMapChunk({ transferId: 7, pointType: MapPointType.Exclusion, total: 0, reset: true });
+    handleMapChunk({ transferId: 7, pointType: MapPointType.Dockpoints, total: 0, reset: true });
+    handleMapChunk({ transferId: 7, pointType: MapPointType.SearchWire, total: 0, reset: true });
+    handleMapChunk({ transferId: 7, pointType: MapPointType.Waypoints, total: 0, reset: true });
+    handleMapChunk({ transferId: 7, pointType: MapPointType.Perimeter, total: 1, startIndex: 0, points: [{ X: 10, Y: 20 }] });
+    handleMapChunk({ transferId: 7, pointType: MapPointType.Dockpoints, total: 1, startIndex: 0, points: [{ X: 30, Y: 40 }] });
+
+    expect(get(MapStore).map.perimeter.points).toEqual([]);
+    expect(get(MapStore).map.dockpoints.points).toEqual([]);
+
+    handleMapChunk({ transferId: 7, pointType: MapPointType.Waypoints, total: 0, startIndex: 0, points: [] });
+
+    expect(get(MapStore).map.perimeter.points).toEqual([]);
+
+    handleMapChunk({ transferId: 7, pointType: MapPointType.Waypoints, total: 0, complete: true });
+
+    expect(get(MapStore).map.perimeter.points).toEqual([{ x: 10, y: -20 }]);
+    expect(get(MapStore).map.dockpoints.points).toEqual([{ x: 30, y: -40 }]);
+  });
+
+  it("ignores chunks from an older transfer after a newer map was published", () => {
+    handleMapChunk({ transferId: 10, pointType: MapPointType.Perimeter, total: 0, reset: true });
+    handleMapChunk({ transferId: 10, pointType: MapPointType.Exclusion, total: 0, reset: true });
+    handleMapChunk({ transferId: 10, pointType: MapPointType.Dockpoints, total: 0, reset: true });
+    handleMapChunk({ transferId: 10, pointType: MapPointType.SearchWire, total: 0, reset: true });
+    handleMapChunk({ transferId: 10, pointType: MapPointType.Waypoints, total: 0, reset: true });
+    handleMapChunk({ transferId: 10, pointType: MapPointType.Perimeter, total: 1, startIndex: 0, points: [{ X: 10, Y: 20 }] });
+    handleMapChunk({ transferId: 10, pointType: MapPointType.Waypoints, total: 0, startIndex: 0, points: [] });
+    handleMapChunk({ transferId: 10, pointType: MapPointType.Waypoints, total: 0, complete: true });
+    handleMapChunk({ transferId: 9, pointType: MapPointType.Perimeter, total: 1, startIndex: 0, points: [{ X: 99, Y: 99 }] });
+    handleMapChunk({ transferId: 9, pointType: MapPointType.Waypoints, total: 0, complete: true });
+
+    expect(get(MapStore).map.perimeter.points).toEqual([{ x: 10, y: -20 }]);
+  });
 });

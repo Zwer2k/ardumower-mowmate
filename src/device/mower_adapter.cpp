@@ -116,6 +116,11 @@ void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
   // processCalculateWaypoints wird die Basis separat gesetzt.
   _baseWaypoints = _map.waypoints;
   updateCurrentMapMeta();
+  if (_currentMapId.startsWith("__t_")) {
+    updateTransientMapMeta(_currentMapId, _map, _map.rotation);
+  } else {
+    storeCurrentMapDraft();
+  }
   Log(INFO, "%ssetMap: perimeter=%d exclusions=%d dockpoints=%d waypoints=%d hash=%s area=%.1f",
       _LOG_, _map.perimeter.size(), _map.exclusions.size(), _map.dockpoints.size(), _map.waypoints.size(),
       _currentMapHash.c_str(), _currentMapArea);
@@ -148,6 +153,9 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   _map.doMowBorder = _mowSettings.doMowBorder;
   _map.doMowExclusions = _mowSettings.doMowExclusions;
   _map.doMowExclusionBorder = _mowSettings.doMowExclusionBorder;
+  _map.timestamp = millis();
+  _currentMapUnsaved = true;
+  _mapListDirty = true;
 
 #ifdef ENABLE_MAP
   // Bei Änderung der Laufzeit-Toggles: alte Connectoren entfernen und die
@@ -166,6 +174,12 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
         _LOG_, (int)_baseWaypoints.size(), (int)_map.waypoints.size(), (int)baseClean.size());
   }
 #endif
+
+  if (_currentMapId.startsWith("__t_")) {
+    updateTransientMapMeta(_currentMapId, _map, _map.rotation);
+  } else {
+    storeCurrentMapDraft();
+  }
 
   Log(INFO, "%ssetMowSettings: pattern=%d width=%.2f angle=%d distToBorder=%d laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusionBorder=%d",
       _LOG_, _mowSettings.pattern, _mowSettings.width, _mowSettings.angle, _mowSettings.distanceToBorder, _mowSettings.borderLaps,
@@ -208,6 +222,7 @@ std::vector<ArduMower::Domain::Robot::MapInfo> MowerAdapter::mapList() {
         info.name = _pendingRenameName;
       }
     }
+    if (findMapDraft(info.id) != nullptr) info.unsaved = true;
     result.push_back(info);
   }
   // Transiente (RAM-only) Karten anzeigen, z. B. abgefangene Karten, die noch
@@ -240,6 +255,76 @@ void MowerAdapter::clearMapListDirty() {
   _mapListDirty = false;
 }
 
+bool MowerAdapter::createMap(const String &name) {
+  if (_map.isReading()) {
+    Log(WARN, "%screateMap: Map-Lesevorgang läuft, anlegen abgelehnt", _LOG_);
+    return false;
+  }
+
+  String mapName = name;
+  if (mapName.length() == 0) mapName = _mapManager.generateDefaultName();
+  if (isNameUsed(mapName)) {
+    Log(WARN, "%screateMap: Name '%s' ist bereits vergeben", _LOG_, mapName.c_str());
+    return false;
+  }
+
+  _map = ArduMower::Domain::Robot::MowerMap();
+  _map.timestamp = millis();
+  _currentMapId = allocateTransientId();
+  _currentMapUnsaved = true;
+  _pendingRenameId = "";
+  _pendingRenameName = "";
+  _baseWaypoints.clear();
+  updateCurrentMapMeta();
+
+  TransientMap transient;
+  transient.id = _currentMapId;
+  transient.name = mapName;
+  transient.area = _currentMapArea;
+  transient.hash = _currentMapHash;
+  transient.crc = _currentMapCrc;
+  transient.rotation = _map.rotation;
+  transient.timestamp = _map.timestamp;
+  transient.requiresRename = false;
+  transient.map = _map;
+  _transientMaps.push_back(transient);
+  _mapListDirty = true;
+  Log(INFO, "%screateMap: transiente Karte %s als '%s' angelegt", _LOG_, _currentMapId.c_str(), mapName.c_str());
+  return true;
+}
+
+bool MowerAdapter::copyMap(const String &name) {
+  if (_map.isReading() || _map.perimeter.size() < 3) return false;
+
+  String baseName = name.length() > 0 ? name : "Karte";
+  String mapName = baseName;
+  for (int suffix = 2; isNameUsed(mapName); suffix++) {
+    mapName = baseName + " " + String(suffix);
+  }
+
+  _currentMapId = allocateTransientId();
+  _currentMapUnsaved = true;
+  _pendingRenameId = "";
+  _pendingRenameName = "";
+  _map.timestamp = millis();
+  updateCurrentMapMeta();
+
+  TransientMap transient;
+  transient.id = _currentMapId;
+  transient.name = mapName;
+  transient.area = _currentMapArea;
+  transient.hash = _currentMapHash;
+  transient.crc = _currentMapCrc;
+  transient.rotation = _map.rotation;
+  transient.timestamp = _map.timestamp;
+  transient.requiresRename = false;
+  transient.map = _map;
+  _transientMaps.push_back(transient);
+  _mapListDirty = true;
+  Log(INFO, "%scopyMap: transiente Kopie %s als '%s' angelegt", _LOG_, _currentMapId.c_str(), mapName.c_str());
+  return true;
+}
+
 String MowerAdapter::saveMap(const String &name, double rotation) {
   if (_map.isReading()) {
     Log(WARN, "%ssaveMap: Map-Lesevorgang läuft, speichern abgelehnt", _LOG_);
@@ -265,6 +350,7 @@ String MowerAdapter::saveMap(const String &name, double rotation) {
     if (_currentMapId.startsWith("__t_")) {
       removeTransientMap(_currentMapId);
     }
+    removeMapDraft(id);
     _currentMapId = id;
     _currentMapUnsaved = false;
     _pendingRenameId = "";
@@ -306,6 +392,18 @@ bool MowerAdapter::loadMap(const String &id) {
     _mapListDirty = true;
     return true;
   }
+  if (const MapDraft *draft = findMapDraft(id)) {
+    _currentMapId = id;
+    _map = draft->map;
+    updateCurrentMapMeta();
+    _currentMapUnsaved = true;
+    _pendingRenameId = "";
+    _pendingRenameName = "";
+    syncMowSettingsFromMap();
+    Log(INFO, "%sloadMap: RAM-Entwurf %s geladen", _LOG_, id.c_str());
+    _mapListDirty = true;
+    return true;
+  }
   ArduMower::Domain::Robot::MowerMap loaded;
   if (!_mapManager.load(id, loaded)) return false;
   _currentMapId = id;
@@ -330,21 +428,23 @@ bool MowerAdapter::renameMap(const String &id, const String &name) {
     Log(WARN, "%srenameMap: Name '%s' ist bereits vergeben, Umbenennung abgelehnt", _LOG_, newName.c_str());
     return false;
   }
-  _pendingRenameId = id;
-  _pendingRenameName = newName;
-  _currentMapUnsaved = true;
-  _mapListDirty = true;
-  // Nach der ersten Umbenennung einer abgefangenen Karte muss der
-  // Rename-Dialog nicht erneut geöffnet werden (z. B. nach Browser-Reload).
   if (id.startsWith("__t_")) {
     for (auto &t : _transientMaps) {
       if (t.id == id) {
+        t.name = newName;
+        t.timestamp = millis();
         t.requiresRename = false;
-        break;
+        _mapListDirty = true;
+        Log(INFO, "%srenameMap: transiente Karte %s in '%s' umbenannt", _LOG_, id.c_str(), newName.c_str());
+        return true;
       }
     }
+    return false;
   }
-  Log(INFO, "%srenameMap: Karte %s pending rename to '%s'", _LOG_, id.c_str(), newName.c_str());
+
+  if (!_mapManager.rename(id, newName)) return false;
+  _mapListDirty = true;
+  Log(INFO, "%srenameMap: Karte %s in '%s' umbenannt", _LOG_, id.c_str(), newName.c_str());
   return true;
 }
 
@@ -382,6 +482,7 @@ bool MowerAdapter::deleteMap(const String &id) {
   }
 
   if (!_mapManager.remove(id)) return false;
+  removeMapDraft(id);
   if (_currentMapId == id) {
     // Gelöschte Karte war gerade geladen: aktiv gespeicherte Karte wieder
     //herstellen, falls möglich, sonst auf leere Karte zurücksetzen.
@@ -409,6 +510,10 @@ bool MowerAdapter::discardMap() {
   // Transiente Karte beim Verwerfen aus dem RAM entfernen.
   if (_currentMapId.startsWith("__t_")) {
     removeTransientMap(_currentMapId);
+  } else if (_currentMapId.length() > 0) {
+    String currentId = _currentMapId;
+    removeMapDraft(currentId);
+    return loadMap(currentId);
   }
   // Unsaved/abgefangene Karte im RAM durch eine leere Karte ersetzen. Damit
   // bleibt Frontend und Backend konsistent, wenn der Benutzer "New Map"
@@ -2348,7 +2453,35 @@ void MowerAdapter::updateTransientMapMeta(const String &id, const ArduMower::Dom
       t.crc = _mapManager.computeCrc(map);
       t.rotation = rotation;
       t.timestamp = map.timestamp;
+      t.map = map;
       break;
+    }
+  }
+}
+
+const MowerAdapter::MapDraft* MowerAdapter::findMapDraft(const String &id) const {
+  for (const auto &draft : _mapDrafts) {
+    if (draft.id == id) return &draft;
+  }
+  return nullptr;
+}
+
+void MowerAdapter::storeCurrentMapDraft() {
+  if (_currentMapId.length() == 0 || _currentMapId.startsWith("__t_")) return;
+  for (auto &draft : _mapDrafts) {
+    if (draft.id == _currentMapId) {
+      draft.map = _map;
+      return;
+    }
+  }
+  _mapDrafts.push_back({_currentMapId, _map});
+}
+
+void MowerAdapter::removeMapDraft(const String &id) {
+  for (auto it = _mapDrafts.begin(); it != _mapDrafts.end(); ++it) {
+    if (it->id == id) {
+      _mapDrafts.erase(it);
+      return;
     }
   }
 }

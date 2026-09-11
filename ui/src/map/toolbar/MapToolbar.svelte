@@ -5,6 +5,8 @@
   import IconTools from "carbon-icons-svelte/lib/Tools.svelte";
   import IconMagicWand from "carbon-icons-svelte/lib/MagicWand.svelte";
   import IconCalendar from "carbon-icons-svelte/lib/Calendar.svelte";
+  import IconSave from "carbon-icons-svelte/lib/Save.svelte";
+  import IconUndo from "carbon-icons-svelte/lib/Undo.svelte";
   import IconCheckmark from "carbon-icons-svelte/lib/Checkmark.svelte";
   import IconClose from "carbon-icons-svelte/lib/Close.svelte";
 
@@ -16,11 +18,15 @@
   export let showCalculate: boolean;
   export let showSchedule: boolean;
   export let canConfirmRename: boolean;
+  export let canSave: boolean;
+  export let canRevert: boolean;
   export let onUpload: () => void;
   export let onToggleManage: () => void;
   export let onToggleEdit: () => void;
   export let onToggleCalculate: () => void;
   export let onToggleSchedule: () => void;
+  export let onSaveMap: () => void;
+  export let onDiscardMap: () => void;
   export let onConfirmRename: () => void;
   export let onCancelRename: () => void;
 </script>
@@ -87,6 +93,24 @@
       iconDescription="Schedule"
       tooltipPosition="top"
       on:click={onToggleSchedule}
+    />
+    <Button
+      kind="primary"
+      size="small"
+      disabled={!canSave}
+      icon={IconSave}
+      iconDescription="Save map"
+      tooltipPosition="top"
+      on:click={onSaveMap}
+    />
+    <Button
+      kind="tertiary"
+      size="small"
+      disabled={!canRevert}
+      icon={IconUndo}
+      iconDescription="Revert changes"
+      tooltipPosition="top"
+      on:click={onDiscardMap}
     />
   {/if}
 </div>

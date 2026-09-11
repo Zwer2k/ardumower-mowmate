@@ -107,12 +107,20 @@ namespace ArduMower
         ArduMower::Domain::Robot::MowerMap map;
       };
       std::vector<TransientMap> _transientMaps;
+      struct MapDraft {
+        String id;
+        ArduMower::Domain::Robot::MowerMap map;
+      };
+      std::vector<MapDraft> _mapDrafts;
       uint32_t _transientIdCounter = 0;
       String allocateTransientId();
       String findOrCreateTransientMap(const ArduMower::Domain::Robot::MowerMap &map, const String &name, double rotation);
       const TransientMap* findTransientMap(const String &id) const;
       bool removeTransientMap(const String &id);
       void updateTransientMapMeta(const String &id, const ArduMower::Domain::Robot::MowerMap &map, double rotation);
+      const MapDraft* findMapDraft(const String &id) const;
+      void storeCurrentMapDraft();
+      void removeMapDraft(const String &id);
       bool isNameUsed(const String &name, const String &excludeId = "") const;
 
       void updateCurrentMapMeta();
@@ -194,6 +202,8 @@ namespace ArduMower
       virtual String currentMapId() override { return _currentMapId; }
       virtual bool mapListDirty() override;
       virtual void clearMapListDirty() override;
+      virtual bool createMap(const String &name) override;
+      virtual bool copyMap(const String &name) override;
       virtual String saveMap(const String &name, double rotation = 0.0) override;
       virtual bool loadMap(const String &id) override;
       virtual bool renameMap(const String &id, const String &name) override;

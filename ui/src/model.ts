@@ -422,6 +422,8 @@ export enum RequestDataType {
   clearWaypoints,
   calculateWaypoints,
   listMaps,
+  createMap,
+  copyMap,
   loadMap,
   saveMap,
   renameMap,

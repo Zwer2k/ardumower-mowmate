@@ -61,6 +61,9 @@ import { setMapDirty } from "./services/map-sync";
   let selectedId: string | null = null;
   let editItemId: string | null = null;
   let editItems: EditItem[] = [];
+  let mapSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  let skipNextMapSync = true;
+  let lastSyncedMap = "";
   const categoryOptions: { id: string; text: string }[] = [
     { id: "perimeter", text: "Edit Perimeter" },
     { id: "dockpoints", text: "Edit Dockingpoints" },
@@ -156,6 +159,17 @@ import { setMapDirty } from "./services/map-sync";
     }
   }
 
+  function stopEditForMapChange() {
+    if (mapSyncTimer) {
+      clearTimeout(mapSyncTimer);
+      mapSyncTimer = null;
+    }
+    edit = false;
+    wasEditing = false;
+    editItemId = null;
+    stopDraw();
+  }
+
   $: mapOptions = (() => {
     const seen = new Set<string>();
     const opts: { id: string; text: string }[] = [];
@@ -199,6 +213,29 @@ import { setMapDirty } from "./services/map-sync";
 
   onMount(() => {
     socketService.sendListMaps();
+    const unsubscribe = MapStore.subscribe(({ map }) => {
+      if (skipNextMapSync) {
+        skipNextMapSync = false;
+        return;
+      }
+      if (!edit) return;
+      if (mapSyncTimer) clearTimeout(mapSyncTimer);
+      mapSyncTimer = setTimeout(() => {
+        mapSyncTimer = null;
+        if (edit && get(isMapDirty)) {
+          const mapData = buildMapSetData(get(MapStore).map, compassRotation);
+          const serializedMap = JSON.stringify(mapData);
+          if (serializedMap !== lastSyncedMap) {
+            lastSyncedMap = serializedMap;
+            socketService.sendMap(mapData);
+          }
+        }
+      }, 250);
+    });
+    onDestroy(() => {
+      if (mapSyncTimer) clearTimeout(mapSyncTimer);
+      unsubscribe();
+    });
   });
 
   async function onSelectMap(e: CustomEvent) {
@@ -212,6 +249,7 @@ import { setMapDirty } from "./services/map-sync";
     if ($mapWorkflowStore.state === "loading" && id === $mapWorkflowStore.pendingLoadId) return;
 
     const dirty = get(isMapDirty);
+    let discardCurrent = false;
     if (dirty && id !== effectiveMapId && !!effectiveMapId) {
       const choice = await openConfirm({
         title: "Ungespeicherte Änderungen",
@@ -224,13 +262,14 @@ import { setMapDirty } from "./services/map-sync";
         onSaveMap();
       } else {
         mapWorkflowStore.resetDirtyState();
+        discardCurrent = true;
       }
     }
     selectedMapId = id;
     dropdownSelectedId = id;
-    stopDraw();
+    stopEditForMapChange();
     mapWorkflowStore.startLoadMap(id);
-    socketService.sendLoadMap(id);
+    socketService.sendLoadMap(id, discardCurrent);
   }
 
   async function onNewMap() {
@@ -246,14 +285,20 @@ import { setMapDirty } from "./services/map-sync";
         onSaveMap();
       } else {
         mapWorkflowStore.resetDirtyState();
+        socketService.sendDiscardMap();
       }
     }
-    stopDraw();
+    stopEditForMapChange();
     const defaultName = `Karte ${$socketStore.maps.length + 1}`;
     currentMapRotationStore.set(0);
-    socketService.sendDiscardMap();
     mapWorkflowStore.startNewMap(defaultName);
+    socketService.sendCreateMap(defaultName);
     showManage = true;
+  }
+
+  function onCopyMap() {
+    if (!effectiveMapId) return;
+    socketService.sendCopyMap(`${effectiveMapName || "Karte"} Kopie`);
   }
 
   $: if (
@@ -271,6 +316,15 @@ import { setMapDirty } from "./services/map-sync";
   }
 
   function onSaveMap() {
+    if (mapSyncTimer) {
+      clearTimeout(mapSyncTimer);
+      mapSyncTimer = null;
+    }
+    if ($isMapDirty) {
+      const mapData = buildMapSetData(get(MapStore).map, compassRotation);
+      lastSyncedMap = JSON.stringify(mapData);
+      socketService.sendMap(mapData);
+    }
     const name = $mapWorkflowStore.pendingName || effectiveMapName || `Karte ${$socketStore.maps.length + 1}`;
     mapWorkflowStore.startSaveMap(name, compassRotation);
     socketService.sendSaveMap(name, compassRotation);
@@ -296,8 +350,7 @@ import { setMapDirty } from "./services/map-sync";
       socketService.sendDiscardMap();
     } else {
       mapWorkflowStore.resetDirtyState();
-      mapWorkflowStore.startLoadMap(target);
-      socketService.sendLoadMap(target);
+      socketService.sendDiscardMap();
     }
   }
 
@@ -824,15 +877,19 @@ import { setMapDirty } from "./services/map-sync";
   $: sync = { needsUpload: hasState && ($socketStore.state?.map_crc ?? 0) !== storedCrc };
 
   $: if (!edit && wasEditing && $MapStore && $MapStore.map) {
+    if (mapSyncTimer) {
+      clearTimeout(mapSyncTimer);
+      mapSyncTimer = null;
+    }
     wasEditing = false;
-    const m = $MapStore.map;
-    socketService.sendMap({
-      perimeter: m.perimeter.points,
-      exclusions: m.exclusions.map((e) => e.points),
-      dockpoints: m.dockpoints.points,
-      waypoints: m.waypoints.points,
-      rotation: compassRotation,
-    });
+    if ($isMapDirty) {
+      const mapData = buildMapSetData($MapStore.map, compassRotation);
+      const serializedMap = JSON.stringify(mapData);
+      if (serializedMap !== lastSyncedMap) {
+        lastSyncedMap = serializedMap;
+        socketService.sendMap(mapData);
+      }
+    }
   } else if (edit) {
     wasEditing = true;
   }
@@ -909,6 +966,8 @@ import { setMapDirty } from "./services/map-sync";
             {edit}
             {showCalculate}
             {showSchedule}
+            {canSave}
+            {canRevert}
             canConfirmRename={!!$mapWorkflowStore.pendingName && (
               $mapWorkflowStore.state === "creating" ||
               $mapWorkflowStore.state === "intercepting" ||
@@ -919,6 +978,8 @@ import { setMapDirty } from "./services/map-sync";
             onToggleEdit={toggleEdit}
             onToggleCalculate={toggleCalculate}
             onToggleSchedule={toggleSchedule}
+            onSaveMap={onSaveMap}
+            onDiscardMap={onDiscardMap}
             onConfirmRename={confirmRename}
             onCancelRename={cancelRename}
           />
@@ -947,19 +1008,17 @@ import { setMapDirty } from "./services/map-sync";
       {#if showManage}
         <MapManagementToolbar
           workflow={$mapWorkflowStore}
-          {canSave}
-          {canRevert}
           {canRename}
           {effectiveMapId}
           pendingName={$mapWorkflowStore.pendingName}
           {effectiveMapName}
+          previousMapName={$mapWorkflowStore.lastBackendMapName}
           {workflowBusy}
-          onSaveMap={onSaveMap}
-          onDiscardMap={onDiscardMap}
           startRename={startRename}
           onDeleteMap={onDeleteMap}
           onSetDefaultMap={onSetDefaultMap}
           onNewMap={onNewMap}
+          onCopyMap={onCopyMap}
           onOpenMowerMap={() => (showMowerMapDialog = true)}
         />
       {/if}

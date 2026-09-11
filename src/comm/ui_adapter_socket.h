@@ -46,6 +46,8 @@ namespace ArduMower
         clearWaypoints,
         calculateWaypoints,
         listMaps,
+        createMap,
+        copyMap,
         loadMap,
         saveMap,
         renameMap,

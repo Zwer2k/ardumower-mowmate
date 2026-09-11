@@ -8,6 +8,7 @@ import {
   searchWireStore,
   exclusionsStore,
   waypointsStore,
+  mapSnapshotStore,
 } from "./map-chunk-buffer";
 import { calculatePresentation } from "./core/presentation";
 import { cloneMap, emptyMap, emptyPresentation } from "./core/map-utils";
@@ -137,27 +138,15 @@ function updateMapStore() {
     setMap();
   }
 
-  perimeterStore.subscribe((arr) => {
-    map.perimeter = { points: arr.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
-    setMap();
-  });
-  dockpointsStore.subscribe((arr) => {
-    map.dockpoints = { points: arr.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
-    setMap();
-  });
-  searchWireStore.subscribe((arr) => {
-    map.searchWire = { points: arr.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
-    setMap();
-  });
-  exclusionsStore.subscribe((arrs) => {
-    map.exclusions = arrs.map((arr) => ({
+  mapSnapshotStore.subscribe((snapshot) => {
+    map.perimeter = { points: snapshot.perimeter.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
+    map.dockpoints = { points: snapshot.dockpoints.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
+    map.searchWire = { points: snapshot.searchWire.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
+    map.exclusions = snapshot.exclusions.map((arr) => ({
       points: arr.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })),
     }));
-    setMap();
-  });
-  waypointsStore.subscribe((arr) => {
     map.waypoints = {
-      points: arr.map(({ X, Y, delta, timestamp, sol, conn, tag }) => ({
+      points: snapshot.waypoints.map(({ X, Y, delta, timestamp, sol, conn, tag }) => ({
         x: X,
         y: -Y,
         delta,
