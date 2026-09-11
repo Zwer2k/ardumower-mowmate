@@ -80,7 +80,7 @@ Nicht verwendete Waypoint-Tags:
 - `DOCK_TRANSIT`: Sunray verwendet seine eigene Dockingroute.
 - `SEARCH_WIRE`: Der Search Wire ist eine eigene Kartenlinie, keine Mähroute.
 
-Der Runtime-Filter `filterRouteByToggles()` arbeitet auf der vollständigen Basisroute. Bei einer Schalteränderung entfernt er alte automatisch erzeugte Connectoren, behält die aktiven Kategorien und erzeugt nur erforderliche Connectoren neu.
+Der Runtime-Filter `filterRouteByToggles()` arbeitet beim Sunray-Upload auf einer Kopie der vollständigen Basisroute. Eine Schalteränderung verändert oder berechnet die gespeicherte Route nicht neu. Der Filter behält die aktiven Kategorien und erzeugt nur in der temporären Upload-Kopie erforderliche Connectoren.
 
 Connectoren haben dabei eine Abhängigkeit von ihrer Herkunft:
 
@@ -124,7 +124,7 @@ Regeln für die Übertragung:
 - Map-Chunks verwenden `MapPoint::marshalFull()`, damit `tag` und `conn` die UI erreichen.
 - `ui/src/map/service.ts` muss `tag` beim Aufbau des `MapStore` beibehalten. Ohne diesen Wert verwendet die UI nur den ungenauen Legacy-Fallback.
 - Der Grauonline-JSON-Export schreibt `tag` bei Waypoints, wenn der Wert ungleich `0` ist.
-- Die Firmware-Persistenz speichert Tags nur für nichtflüchtige Waypoints. Automatische Connectoren werden bei Toggle-Wechseln neu erzeugt.
+- Die Firmware-Persistenz speichert die vollständige berechnete Route einschließlich Tags und Connectoren. Die drei Mow-Area-Schalter werden als kartenspezifische Standardvorgabe gespeichert, verändern aber die persistierten Waypoints nicht.
 - `tag` ist Metadatum und gehört weder in Geometrie-Hash noch Sunray-CRC.
 
 GeoJSON überträgt Kartenobjekte als einzelne Features:

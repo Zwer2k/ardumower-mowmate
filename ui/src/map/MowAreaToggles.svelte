@@ -49,20 +49,8 @@
     doMowBorder: boolean;
     doMowExclusionBorder: boolean;
   }>) {
-    const s = $mowSettingsStore;
-    socketService.sendMowSettings({
-      pattern: s.pattern,
-      width: s.width,
-      angle: s.angle,
-      distanceToBorder: s.distanceToBorder,
-      borderLaps: s.borderLaps,
-      mowBorderCcw: s.mowBorderCcw,
-      doMowArea: updates.doMowArea ?? s.doMowArea,
-      doMowPerimeter: updates.doMowBorder ?? s.doMowPerimeter,
-      doMowBorder: updates.doMowBorder ?? s.doMowBorder,
-      doMowExclusions: s.doMowExclusions,
-      doMowExclusionBorder: updates.doMowExclusionBorder ?? s.doMowExclusionBorder,
-    });
+    mowSettingsStore.update((settings) => ({ ...settings, ...updates }));
+    socketService.sendMowSettings(updates);
   }
 
   function onChange(e: Event) {

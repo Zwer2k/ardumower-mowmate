@@ -110,11 +110,6 @@ void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
   _map.timestamp = millis();
   _currentMapUnsaved = true;
   _mapListDirty = true;
-  // Die Basis-Route für die Toggle-Filterung ist die ungefilterte Route. Wenn
-  // setMap vom UI kommt (z. B. nach Editieren), sind die Wegpunkte bereits
-  // gefiltert, dann ist die Basis die aktuelle Route. Beim Neuberechnen durch
-  // processCalculateWaypoints wird die Basis separat gesetzt.
-  _baseWaypoints = _map.waypoints;
   updateCurrentMapMeta();
   if (_currentMapId.startsWith("__t_")) {
     updateTransientMapMeta(_currentMapId, _map, _map.rotation);
@@ -156,24 +151,6 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   _map.timestamp = millis();
   _currentMapUnsaved = true;
   _mapListDirty = true;
-
-#ifdef ENABLE_MAP
-  // Bei Änderung der Laufzeit-Toggles: alte Connectoren entfernen und die
-  // gefilterte Route aus der Basis-Route neu berechnen.
-  if (!_baseWaypoints.empty()) {
-    // Entferne alte Connector-Punkte aus der Basis-Route, damit keine
-    // veralteten Verbindungen übrig bleiben.
-    PathPlanner::Polygon baseClean;
-    for (const auto &p : _baseWaypoints) {
-      if (!p.isConnector) baseClean.push_back(p);
-    }
-    auto filtered = ArduMower::Modem::PathPlanner::filterRouteByToggles(baseClean, _map, _mowSettings);
-    _map.waypoints = filtered;
-    updateCurrentMapMeta();
-    Log(INFO, "%ssetMowSettings: route refiltered, %d -> %d waypoints (base %d)",
-        _LOG_, (int)_baseWaypoints.size(), (int)_map.waypoints.size(), (int)baseClean.size());
-  }
-#endif
 
   if (_currentMapId.startsWith("__t_")) {
     updateTransientMapMeta(_currentMapId, _map, _map.rotation);
@@ -274,7 +251,6 @@ bool MowerAdapter::createMap(const String &name) {
   _currentMapUnsaved = true;
   _pendingRenameId = "";
   _pendingRenameName = "";
-  _baseWaypoints.clear();
   updateCurrentMapMeta();
 
   TransientMap transient;

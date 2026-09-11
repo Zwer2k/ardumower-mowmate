@@ -295,12 +295,11 @@ namespace ArduMower {
                     auto writeRing = [&](JsonArray arr, const std::vector<MapPoint> &ring) {
                         for (const auto &p : ring) writePoint(arr.add<JsonObject>(), p);
                     };
-                    auto writeRingNoConnectors = [&](JsonArray arr, const std::vector<MapPoint> &ring) {
+                    auto writeWaypoints = [&](JsonArray arr, const std::vector<MapPoint> &ring) {
                         for (const auto &p : ring) {
-                            // Connector-Punkte werden nicht persistiert; sie
-                            // werden bei jeder Änderung der Toggles neu berechnet.
-                            if (p.isConnector) continue;
-                            writePoint(arr.add<JsonObject>(), p, true);
+                            JsonObject point = arr.add<JsonObject>();
+                            writePoint(point, p, true);
+                            if (p.isConnector) point["conn"] = 1;
                         }
                     };
 
@@ -334,7 +333,7 @@ namespace ArduMower {
                     writeRing(wire, searchWire);
 
                     JsonArray wps = obj["wayPoints"].to<JsonArray>();
-                    writeRingNoConnectors(wps, waypoints);
+                    writeWaypoints(wps, waypoints);
                 }
 
     // Sunray-kompatibler CRC: px = x*100 (cm), crc = Σ(trunc16(px) + trunc16(py))

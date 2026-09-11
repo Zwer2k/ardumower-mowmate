@@ -293,6 +293,18 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
         map.waypoints.push_back(readPoint(p));
       }
       map.rotation = jsonData["rotation"] | 0.0;
+      const MowSettings settings = _source.mowSettings();
+      map.pattern = settings.pattern;
+      map.mowOfs = settings.width;
+      map.patternAngle = settings.angle;
+      map.distanceToBorder = settings.distanceToBorder;
+      map.borderLaps = settings.borderLaps;
+      map.mowBorderCcw = settings.mowBorderCcw;
+      map.doMowArea = settings.doMowArea;
+      map.doMowPerimeter = settings.doMowPerimeter;
+      map.doMowBorder = settings.doMowBorder;
+      map.doMowExclusions = settings.doMowExclusions;
+      map.doMowExclusionBorder = settings.doMowExclusionBorder;
         Log(DBG, "%s setMap: parsed perimeter=%d exclusions=%d dockpoints=%d searchWire=%d waypoints=%d rotation=%.1f", _LOG_,
           map.perimeter.size(), map.exclusions.size(), map.dockpoints.size(), map.searchWire.size(), map.waypoints.size(), map.rotation);
       _socketHandler->setMap(map);

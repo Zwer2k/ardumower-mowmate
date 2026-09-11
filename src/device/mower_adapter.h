@@ -125,10 +125,6 @@ namespace ArduMower
 
       void updateCurrentMapMeta();
       void syncMowSettingsFromMap();
-      // Basis-Route (ungefiltert) aus der letzten Wegpunkt-Berechnung. Bei
-      // Änderungen der "Mow areas"-Schalter wird daraus die gefilterte Route
-      // (inkl. Connectoren) neu berechnet.
-      std::vector<ArduMower::Domain::Robot::MapPoint> _baseWaypoints;
       // Cache für rohe Antwort-Strings (mit Checksumme) – für HTTP-Cache-Serving
       char _cachedRawState[READER_BUF_SIZE];
       char _cachedRawStats[READER_BUF_SIZE];
