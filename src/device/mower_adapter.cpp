@@ -1,4 +1,5 @@
 #include <sstream>
+#include <math.h>
 #include "mower_adapter.h"
 #include "checksum.h"
 #include "log.h"
@@ -937,12 +938,28 @@ bool MowerAdapter::applyPositionSettings()
   const bool absolute = settings.position.mode == "absolute";
   const double lon = absolute ? settings.position.lon : 0.0;
   const double lat = absolute ? settings.position.lat : 0.0;
+
+  // Skip if already applied with identical values (avoids AT+P spam after every AT+V)
+  if (_lastPosApplied && _lastPosAbsolute == absolute &&
+      fabs(_lastPosLon - lon) < 1e-9 && fabs(_lastPosLat - lat) < 1e-9) {
+    Log(DBG, "%sapplyPositionSettings: unchanged, skipping", _LOG_);
+    return true;
+  }
+
   char command[96];
   snprintf(command, sizeof(command), "AT+P,%d,%.8f,%.8f",
            absolute ? 1 : 0, lon, lat);
   Log(INFO, "%sapplyPositionSettings: mode=%s lon=%.8f lat=%.8f", _LOG_,
       absolute ? "absolute" : "relative", lon, lat);
-  return sendCommand(command, true);
+
+  bool ok = sendCommand(command, true);
+  if (ok) {
+    _lastPosApplied = true;
+    _lastPosAbsolute = absolute;
+    _lastPosLon = lon;
+    _lastPosLat = lat;
+  }
+  return ok;
 }
 
 bool MowerAdapter::requestStatus()
@@ -1029,7 +1046,7 @@ bool MowerAdapter::sendUbx(const String &hexCmd)
   Log(DBG, "%ssendUbx(%s)", _LOG_, hexCmd.c_str());
   if (!assertSendIsInitialized())
     return false;
-  return sendCommand("AT+U," + hexCmd, true);
+  return sendCommand("AT+UBX," + hexCmd, true);
 }
 
 void MowerAdapter::parseUbxResponse(const char* line)
@@ -1672,6 +1689,7 @@ bool MowerAdapter::assertSendIsInitialized()
       }
       _state.timestamp = 0;
       sendIsInitialized = false;
+      _lastPosApplied = false;  // Force re-send of AT+P after Sunray reboot
     } else {
       return true;
     }

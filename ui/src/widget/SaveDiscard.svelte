@@ -11,21 +11,27 @@
   import type { Readable } from "svelte/store";
   import type { Settings } from "../model";
 
-  interface settable {
-    commit(it: Settings): any;
-  }
-
-  const copy = (from: Readable<Settings>, to: settable) =>
-    from.subscribe((s: Settings) => {
-      to.commit(JSON.parse(JSON.stringify(s)));
-    })();
+  // Read current value from store without creating a subscription.
+  // This avoids the endless loop: subscribe -> set -> subscribe -> ...
+  const getSnapshot = (store: Readable<Settings>): Settings | undefined => {
+    let value: Settings | undefined;
+    const unsub = store.subscribe((s: Settings) => { value = s; });
+    unsub();
+    return value;
+  };
 
   function save() {
-    copy(FrontendSettings, BackendSettings);
+    const snapshot = getSnapshot(FrontendSettings);
+    if (snapshot) {
+      BackendSettings.commit(JSON.parse(JSON.stringify(snapshot)));
+    }
   }
 
   function revert() {
-    copy(BackendSettings, FrontendSettings);
+    const snapshot = getSnapshot(BackendSettings);
+    if (snapshot) {
+      FrontendSettings.set(JSON.parse(JSON.stringify(snapshot)));
+    }
   }
 </script>
 

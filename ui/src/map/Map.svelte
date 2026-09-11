@@ -396,14 +396,19 @@ import { setMapDirty } from "./services/map-sync";
     if (settings) {
       socketService.sendMowSettings(settings as MowSettingsData);
     }
+    // MowerMap::fromJson() (backend) expects the same X/Y convention as the
+    // persisted map format (Y not flipped), unlike the setMap handler which
+    // flips Y itself. Convert frontend points (Y-up) back to that convention
+    // here, otherwise the imported map ends up mirrored on the Y axis.
+    const toBackendPoint = (p: Point) => ({ ...p, X: p.x, Y: -p.y, x: undefined, y: undefined });
     socketService.sendImportMap(
       JSON.stringify({
         dateTime: dateTime ?? new Date().toISOString(),
         source: source ?? "MowMate",
-        perimeter: map.perimeter.points,
-        exclusions: map.exclusions.map((e) => e.points),
-        dockpoints: map.dockpoints.points,
-        waypoints: map.waypoints.points,
+        perimeter: map.perimeter.points.map(toBackendPoint),
+        exclusions: map.exclusions.map((e) => e.points.map(toBackendPoint)),
+        dockpoints: map.dockpoints.points.map(toBackendPoint),
+        waypoints: map.waypoints.points.map(toBackendPoint),
         rotation,
       }),
       $mapWorkflowStore.pendingName || effectiveMapName || `Karte ${$socketStore.maps.length + 1}`,

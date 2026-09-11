@@ -78,6 +78,11 @@ namespace ArduMower
       PendingCommand _pendingCommand;
       MapUploadState _mapUploadState;
       volatile bool _mapUploadPending = false;
+      // Track last applied position settings to avoid redundant AT+P commands
+      bool _lastPosApplied = false;
+      bool _lastPosAbsolute = false;
+      double _lastPosLon = 0.0;
+      double _lastPosLat = 0.0;
       bool _mapListDirty = true;
       String _currentMapId;
       String _currentMapHash;
