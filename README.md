@@ -218,17 +218,17 @@ Flashing the firmware onto the ESP32 for the first time requires some effort. Su
 
 ### Pre-built binaries
 
-Download the latest release binary from the [releases page](https://github.com/Zwer2k/ardumower-mowmate/releases). Use the [modem_install](util/modem_install/modem_install.ino) Arduino Sketch (from the `util` folder of the release) to flash it onto your ESP32. This Sketch requires nothing but a vanilla Arduino setup with the ESP32 package installed. No additional libraries are required.
+Download the latest release binary and installation files from the [releases page](https://github.com/Zwer2k/ardumower-mowmate/releases). Follow the flashing instructions included with the release package.
 
 ### Compiling with PlatformIO (recommended)
 
 Install [PlatformIO](https://platformio.org/) and run:
 ```
-task compile-pio PIO_ENV=esp32-S3-N16-R8
+task compile-pio ESP_TARGET=esp32-S3
 ```
-For the ESP32 variant:
+For the ESP32 variant (without map management):
 ```
-task compile-pio PIO_ENV=esp32
+task compile-pio ESP_TARGET=esp32
 ```
 
 The `compile-pio` task depends on `package-ui`, so the UI is built and packaged automatically before the firmware build starts.
@@ -386,29 +386,32 @@ All libraries are managed via PlatformIO:
 | `compile` | Compile with Arduino CLI |
 | `build` | Build all variants (firmware, sim, test) |
 | `build-firmware` | Build the firmware variant |
-| `flash` | Flash firmware via serial |
-| `run` | Build + flash + serial monitor |
-| `ota` | Update firmware via OTA |
+| `flash` | Flash an Arduino CLI-built classic ESP32 image via serial |
+| `run` | Build, flash, and monitor the classic ESP32 target |
+| `ota` | Upload `ardumower-modem.bin` from the project root to the development device |
 | `validate` | Run integration tests |
 | `clean` | Remove build artifacts |
 
-**Task parameters (as environment variables or via `--`):**
+**Task parameters (`NAME=value` after the task name):**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ESP_TARGET` | `esp32` | Target platform (`esp32` or `esp32-S3`) |
+| `ESP_TARGET` | Task-dependent | Target platform (`esp32` or `esp32-S3`); `compile-pio` defaults to `esp32-S3`, while `compile` defaults to `esp32` |
 | `VARIANT` | `ESP_MODEM_APP` | Build variant (`ESP_MODEM_APP`, `ESP_MODEM_SIM`, `ESP_MODEM_TEST`) |
-| `PIO_ENV` | `esp32-S3-N16-R8` | PlatformIO environment |
 | `SERIAL_PORT` | – | Serial port for flash/monitor |
 | `ESP_DEV_IP` | – | ESP IP address for OTA |
 | `ESP_DEV_CREDS` | – | OTA credentials (`user:pass`) |
 
 Example:
 ```
-task compile-pio PIO_ENV=esp32
+task compile-pio ESP_TARGET=esp32-S3
 task flash SERIAL_PORT=/dev/ttyUSB0 VARIANT=ESP_MODEM_SIM
 task ota ESP_DEV_IP=192.168.43.220 ESP_DEV_CREDS=admin:secret
 ```
+
+The `flash` and `run` tasks currently use the Arduino CLI `lolin32` target and
+are not ESP32-S3 flashing commands. The `ota` task expects a compatible
+`ardumower-modem.bin` file in the project root.
 
 ## Gratitude
 
