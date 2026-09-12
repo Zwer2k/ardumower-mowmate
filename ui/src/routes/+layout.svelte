@@ -5,6 +5,7 @@
         Content,
         Header,
         HeaderUtilities,
+        InlineNotification,
         Loading,
         SkipToContent,
     } from "carbon-components-svelte";
@@ -45,6 +46,8 @@
     let opPct = $state(0);
     let opMsg = $state('');
     let opActive = $state(false);
+    let connectionWarningReady = $state(false);
+    let connectionWarningTimer: ReturnType<typeof setTimeout> | null = null;
     let progressBusy = $derived(opActive && opPct < 100);
 
     $effect(() => {
@@ -66,6 +69,9 @@
                 setTimeout(() => loader.remove(), 250);
             }
             socketService.connect();
+            connectionWarningTimer = setTimeout(() => {
+                connectionWarningReady = true;
+            }, 5000);
             SettingsService.init();
             const url = new URL(window.location.href);
             if (url.pathname === '/' && !url.searchParams.has('dashboard')) {
@@ -75,6 +81,9 @@
     });
 
     onDestroy(() => {
+        if (connectionWarningTimer) {
+            clearTimeout(connectionWarningTimer);
+        }
         socketService.destroy();
     });
 </script>
@@ -147,10 +156,25 @@
         />
     {/if}
 </Header>
-{#if progressBusy}
-    <div class="progress-bar-container">
-        <div class="progress-bar {opPct === 0 ? 'indeterminate' : ''}" style="width: {opPct > 0 ? opPct + '%' : '0%'}"></div>
-        <div class="progress-bar-label">{opPct > 0 ? opPct + '%' : ''} {opMsg}</div>
+{#if (connectionWarningReady && !$socketStore.connected) || progressBusy}
+    <div class="status-stack">
+        {#if connectionWarningReady && !$socketStore.connected}
+            <div class="connection-warning" role="status" aria-live="polite">
+                <InlineNotification
+                    kind="warning"
+                    title="Keine Verbindung zum ESP"
+                    subtitle="WebSocket nicht erreichbar. Verbindung wird automatisch wiederhergestellt."
+                    hideCloseButton
+                    lowContrast
+                />
+            </div>
+        {/if}
+        {#if progressBusy}
+            <div class="progress-bar-container">
+                <div class="progress-bar {opPct === 0 ? 'indeterminate' : ''}" style="width: {opPct > 0 ? opPct + '%' : '0%'}"></div>
+                <div class="progress-bar-label">{opPct > 0 ? opPct + '%' : ''} {opMsg}</div>
+            </div>
+        {/if}
     </div>
 {/if}
 <Content>
@@ -238,6 +262,20 @@
     position: relative;
 }
 
+.status-stack {
+    position: fixed;
+    top: 3rem;
+    left: 0;
+    right: 0;
+    z-index: 9000;
+}
+
+.connection-warning :global(.bx--inline-notification) {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+}
+
 /* Dashboard-Modus: Komplett ohne Scrollbars */
 :global(body.dashboard-mode) {
     overflow: hidden !important;
@@ -269,10 +307,7 @@
 }
 
 .progress-bar-container {
-    position: fixed;
-    top: 3rem;
-    left: 0;
-    right: 0;
+    position: relative;
     height: 18px;
     background: #e0e0e0;
     overflow: hidden;
