@@ -116,9 +116,16 @@ namespace ArduMower
         bool _restart;
         uint32_t _restartTime;
         Http::ModemUploadSession *_flashSession;
+        volatile bool _githubUpdateActive;
+        volatile bool _githubUpdateSucceeded;
+        char _githubUpdateError[128];
 
         void handleUploadRequest(AsyncWebServerRequest *request);
         void handleUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
+        void handleGithubUpdateRequest(AsyncWebServerRequest *request);
+        void handleGithubUpdateStatus(AsyncWebServerRequest *request);
+        static void githubUpdateTask(void *parameter);
+        void runGithubUpdate(const String &version);
 
         void handlePostRequest(AsyncWebServerRequest *request);
         void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);

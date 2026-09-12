@@ -5,6 +5,8 @@
 #include <SPIFFS.h>
 #include <esp_task_wdt.h>
 #include <Arduino.h>
+#include <HTTPClient.h>
+#include "trust.h"
 
 using namespace ArduMower::Modem::Ota;
 using namespace std::placeholders;
@@ -17,7 +19,8 @@ const char *resultToString(Http::Result r);
 
 HttpServer::HttpServer(Settings::Settings &settings, AsyncWebServer &server, MowerUpdater &mowerUpdater)
     : ArduMower::Modem::Http::Common(settings), _server(server), _mowerUpdater(mowerUpdater),
-    _active(false), _failed(false), _restart(false), _restartTime(0) {}
+  _active(false), _failed(false), _restart(false), _restartTime(0), _flashSession(NULL),
+  _githubUpdateActive(false), _githubUpdateSucceeded(false), _githubUpdateError{} {}
 
 void HttpServer::begin()
 {
@@ -25,11 +28,223 @@ void HttpServer::begin()
   auto uploadHandler = std::bind(&HttpServer::handleUpload, this, _1, _2, _3, _4, _5, _6);
 
   _server.on("/api/modem/ota/upload", HTTP_POST, uploadRequestHandler, uploadHandler);
+  _server.on("/api/modem/ota/github", HTTP_POST, [this](AsyncWebServerRequest *request) {
+    handleGithubUpdateRequest(request);
+  });
+  _server.on("/api/modem/ota/github/status", HTTP_GET, [this](AsyncWebServerRequest *request) {
+    handleGithubUpdateStatus(request);
+  });
 
   auto postRequestHandler = std::bind(&HttpServer::handlePostRequest, this, _1);
   auto bodyHandler = std::bind(&HttpServer::handleBody, this, _1, _2, _3, _4, _5);
 
   _server.on("/api/modem/ota/post", HTTP_POST, postRequestHandler, uploadHandler, bodyHandler);
+}
+
+static bool isValidReleaseVersion(const String &version)
+{
+  if (version.length() < 6 || version[0] != 'v') return false;
+
+  int dots = 0;
+  bool digitSinceSeparator = false;
+  for (size_t i = 1; i < version.length(); i++)
+  {
+    const char c = version[i];
+    if (c >= '0' && c <= '9')
+    {
+      digitSinceSeparator = true;
+      continue;
+    }
+    if (c != '.' || !digitSinceSeparator || dots >= 2) return false;
+    dots++;
+    digitSinceSeparator = false;
+  }
+  return dots == 2 && digitSinceSeparator;
+}
+
+struct GithubUpdateContext
+{
+  HttpServer *server;
+  String version;
+};
+
+void HttpServer::handleGithubUpdateRequest(AsyncWebServerRequest *request)
+{
+  if (!auth(request)) return;
+  if (!request->hasParam("version"))
+  {
+    reject(request, 400, "github-update", "missing-version");
+    return;
+  }
+
+  const String version = request->getParam("version")->value();
+  if (!isValidReleaseVersion(version))
+  {
+    reject(request, 400, "github-update", "invalid-version");
+    return;
+  }
+  if (_githubUpdateActive || _flashSession)
+  {
+    reject(request, 409, "github-update", "update-active");
+    return;
+  }
+
+  auto context = new GithubUpdateContext{this, version};
+  _active = true;
+  _githubUpdateActive = true;
+  _githubUpdateSucceeded = false;
+  _githubUpdateError[0] = '\0';
+  otaFlashProgress = 0;
+  otaFlashTotal = 0;
+
+  if (xTaskCreate(githubUpdateTask, "github-ota", 8192, context, 1, NULL) != pdPASS)
+  {
+    delete context;
+    _active = false;
+    _githubUpdateActive = false;
+    reject(request, 500, "github-update", "task-create-failed");
+    return;
+  }
+
+  request->send(202, "application/json", "{\"success\":true,\"result\":\"started\"}");
+}
+
+void HttpServer::handleGithubUpdateStatus(AsyncWebServerRequest *request)
+{
+  if (!auth(request)) return;
+
+  AsyncJsonResponse *response = new AsyncJsonResponse();
+  JsonObject root = response->getRoot();
+  root["active"] = _githubUpdateActive;
+  root["success"] = _githubUpdateSucceeded;
+  root["progress"] = otaFlashProgress;
+  root["total"] = otaFlashTotal;
+  if (_githubUpdateError[0] != '\0') root["error"] = _githubUpdateError;
+  response->setLength();
+  request->send(response);
+}
+
+void HttpServer::githubUpdateTask(void *parameter)
+{
+  auto context = static_cast<GithubUpdateContext *>(parameter);
+  context->server->runGithubUpdate(context->version);
+  delete context;
+  vTaskDelete(NULL);
+}
+
+void HttpServer::runGithubUpdate(const String &version)
+{
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+  const char *target = "esp32-s3";
+#else
+  const char *target = "esp32";
+#endif
+  const String url = "https://github.com/Zwer2k/ardumower-mowmate/releases/download/" +
+    version + "/" + target + "-firmware.bin";
+
+  HTTPClient http;
+  http.setConnectTimeout(15000);
+  http.setTimeout(15000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+  bool updateStarted = false;
+  uint8_t *buffer = NULL;
+  const char *error = NULL;
+
+  if (!http.begin(url, tls_ca_trust))
+  {
+    error = "download-init-failed";
+  }
+  else if (http.GET() != HTTP_CODE_OK)
+  {
+    error = "download-failed";
+  }
+
+  const int total = error ? 0 : http.getSize();
+  if (!error && total <= 0)
+  {
+    error = "invalid-content-length";
+  }
+  if (!error && !Update.begin((size_t)total))
+  {
+    error = "update-begin-failed";
+  }
+  else if (!error)
+  {
+    updateStarted = true;
+  }
+
+  if (!error)
+  {
+    buffer = (uint8_t *)malloc(4096);
+    if (!buffer) error = "buffer-allocation-failed";
+  }
+
+  size_t written = 0;
+  unsigned long lastDataAt = millis();
+  WiFiClient *stream = error ? NULL : http.getStreamPtr();
+  otaFlashTotal = total;
+  otaFlashProgress = 0;
+
+  while (!error && written < (size_t)total)
+  {
+    const int available = stream->available();
+    if (available <= 0)
+    {
+      if (!http.connected() || millis() - lastDataAt > 15000)
+      {
+        error = "download-interrupted";
+        break;
+      }
+      delay(1);
+      continue;
+    }
+
+    const size_t requested = std::min((size_t)available, (size_t)4096);
+    const size_t received = stream->readBytes(buffer, requested);
+    if (received == 0)
+    {
+      error = "download-read-failed";
+      break;
+    }
+    if (written == 0 && buffer[0] != 0xe9)
+    {
+      error = "invalid-firmware-header";
+      break;
+    }
+    if (Update.write(buffer, received) != received)
+    {
+      error = "update-write-failed";
+      break;
+    }
+
+    written += received;
+    otaFlashProgress = written;
+    lastDataAt = millis();
+    yield();
+  }
+
+  if (!error && !Update.end(true)) error = "update-end-failed";
+  if (error && updateStarted) Update.abort();
+  if (buffer) free(buffer);
+  http.end();
+
+  if (error)
+  {
+    snprintf(_githubUpdateError, sizeof(_githubUpdateError), "%s", error);
+    Log(ERR, "Ota::HttpServer::github-update::%s", error);
+  }
+  else
+  {
+    otaFlashProgress = otaFlashTotal;
+    otaFlashForceSend = true;
+    _githubUpdateSucceeded = true;
+    Log(INFO, "Ota::HttpServer::github-update::success(%u)", (unsigned)written);
+  }
+
+  _githubUpdateActive = false;
+  _active = false;
+  if (!error) requestRestart();
 }
 
 void HttpServer::loop()

@@ -67,6 +67,30 @@ export class FirmwareUploader {
     }
   }
 
+  public async installGithubRelease(version: string) {
+    this._error = null;
+    this._progress.set(0);
+    this._status.set(FirmwareUploadStatus.uploading);
+
+    try {
+      const before = await getModemInfo();
+      const response = await fetch(`/api/modem/ota/github?version=${encodeURIComponent(version)}`, {
+        method: 'POST',
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || result.result || `HTTP ${response.status}`);
+      }
+
+      this._status.set(FirmwareUploadStatus.expectReboot);
+      await waitForGithubUpdate(before, 5 * 60 * 1000);
+      this._status.set(FirmwareUploadStatus.success);
+    } catch (error) {
+      this._error = error instanceof Error ? error.message : String(error);
+      this._status.set(FirmwareUploadStatus.error);
+    }
+  }
+
   private onUploadProgress(e: ProgressEvent<XMLHttpRequestEventTarget>) {
     const progress = e.loaded / e.total * 100
     this._progress.set(progress)
@@ -171,6 +195,37 @@ export const getModemInfo = async (timeout: number = 5000): Promise<ApiModemInfo
 const millis = (): number => new Date().getTime()
 
 const delay = async (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+interface GithubUpdateStatus {
+  active: boolean;
+  success: boolean;
+  error?: string;
+}
+
+const waitForGithubUpdate = async (
+  before: ApiModemInfoResponse,
+  timeout: number,
+): Promise<void> => {
+  const limit = millis() + timeout;
+  while (millis() <= limit) {
+    try {
+      const response = await fetch('/api/modem/ota/github/status');
+      if (response.ok) {
+        const status = await response.json() as GithubUpdateStatus;
+        if (status.error) throw new Error(status.error);
+      }
+    } catch (error) {
+      if (error instanceof Error && !error.message.includes('fetch')) throw error;
+    }
+
+    try {
+      const now = await getModemInfo(2000);
+      if (now.uptime < before.uptime) return;
+    } catch (_) {}
+    await delay(500);
+  }
+  throw new Error('timeout waiting for firmware update');
+}
 
 export interface ApiModemInfoResponse {
   git_hash: string

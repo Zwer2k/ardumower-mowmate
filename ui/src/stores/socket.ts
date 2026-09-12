@@ -133,7 +133,6 @@ class SocketService {
   private restartTimer: NodeJS.Timeout | null = null;
   private reconnect = true;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
   private connectionTimeout: NodeJS.Timeout | null = null;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private livenessInterval: NodeJS.Timeout | null = null;
@@ -267,10 +266,9 @@ class SocketService {
 
           if (
             this.reconnect &&
-            this.isPageVisible &&
-            this.reconnectAttempts < this.maxReconnectAttempts
+            this.isPageVisible
           ) {
-            this.reconnectAttempts++;
+            this.reconnectAttempts = Math.min(this.reconnectAttempts + 1, 6);
             const delay = Math.min(
               1000 * Math.pow(2, this.reconnectAttempts - 1),
               30000,

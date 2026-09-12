@@ -83,34 +83,3 @@ export const fetchFirmwareReleases = async (
   if (!response.ok) throw new Error(`GitHub Releases: ${response.status} ${response.statusText}`);
   return selectFirmwareReleases(await response.json() as GitHubRelease[], target);
 };
-
-export const downloadFirmware = async (
-  release: FirmwareRelease,
-  onProgress: (percent: number) => void,
-  fetcher: typeof fetch = fetch,
-): Promise<File> => {
-  const response = await fetcher(release.asset.browser_download_url);
-  if (!response.ok) throw new Error(`Firmware-Download: ${response.status} ${response.statusText}`);
-
-  const reader = response.body?.getReader();
-  if (!reader) {
-    const blob = await response.blob();
-    onProgress(100);
-    return new File([blob], release.asset.name, { type: "application/octet-stream" });
-  }
-
-  const parts: Blob[] = [];
-  let received = 0;
-  const total = Number(response.headers.get("content-length")) || release.asset.size;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = new Uint8Array(value.byteLength);
-    chunk.set(value);
-    parts.push(new Blob([chunk.buffer]));
-    received += value.length;
-    if (total > 0) onProgress(Math.min(100, received / total * 100));
-  }
-  onProgress(100);
-  return new File(parts, release.asset.name, { type: "application/octet-stream" });
-};

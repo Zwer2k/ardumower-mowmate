@@ -13,7 +13,7 @@
   import type { Readable } from "svelte/store";
   import { onDestroy } from "svelte";
   import { FirmwareFlashStatus, FirmwareUploader, FirmwareUploadStatus, FirmwareUploadType } from "./service";
-  import { downloadFirmware, type FirmwareRelease } from "./github-releases";
+  import type { FirmwareRelease } from "./github-releases";
   import { checkFirmwareUpdates, firmwareUpdateStore } from "./update-store";
 
   export let open: boolean = false;
@@ -22,7 +22,6 @@
   let source: "github" | "file" = "github";
   let ref: null | HTMLInputElement;
   let selectedReleaseVersion = "";
-  let downloadProgress: number | null = null;
   let downloadError: string | null = null;
   let downloading = false;
 
@@ -84,12 +83,8 @@
 
     resetUploadState();
     downloading = true;
-    downloadProgress = 0;
     try {
-      const file = await downloadFirmware(release, (progress) => downloadProgress = progress);
-      fileSize = file.size;
-      uploader.file = file;
-      await uploader.upload(FirmwareUploadType.modem);
+      await uploader.installGithubRelease(release.version);
     } catch (error) {
       downloadError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -103,7 +98,6 @@
     flashProgress = null;
     flashStatus = null;
     flashError = null;
-    downloadProgress = null;
     downloadError = null;
     stopReconnecting();
     stopWatchdog();
@@ -364,7 +358,7 @@
       {/if}
     {/if}
     <div style="width: 100%;">
-      {#if $uploaderStatus >= FirmwareUploadStatus.fileSelected}
+      {#if source === "file" && $uploaderStatus >= FirmwareUploadStatus.fileSelected}
         <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
           <ProgressBar
             value={$uploaderProgress}
@@ -378,11 +372,6 @@
             }
             helperText="Upload progress"
           />
-        </div>
-      {/if}
-      {#if downloading && downloadProgress != null}
-        <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
-          <ProgressBar value={downloadProgress} max={100} helperText="Downloading firmware from GitHub..." />
         </div>
       {/if}
       {#if flashProgress != null || (uploadType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success)}
@@ -431,7 +420,7 @@
           <InlineNotification
             kind="warning"
             title="Do not interrupt power"
-            subtitle="The selected firmware is downloaded from GitHub and then installed on the ESP."
+            subtitle="The ESP downloads and installs the selected firmware directly from GitHub."
             hideCloseButton
             lowContrast
           />
