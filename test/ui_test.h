@@ -68,6 +68,7 @@ testF(TestUiAdapter, get_api_modem_info)
   assertNotEqual(-1, responseBody.indexOf("uptime"));
   assertNotEqual(-1, responseBody.indexOf("git_hash"));
   assertNotEqual(-1, responseBody.indexOf(git_hash));
+  assertNotEqual(-1, responseBody.indexOf("firmware_target"));
 }
 
 testF(TestUiAdapter, get_api_modem_settings)

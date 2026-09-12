@@ -86,6 +86,7 @@ export interface Info {
   build_time: string;
   uptime: number;
   bt_mac: string;
+  firmware_target: "esp32" | "esp32-s3";
 }
 
 export interface Status {

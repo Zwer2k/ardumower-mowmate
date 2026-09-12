@@ -838,6 +838,11 @@ void PropertiesClass::marshal(JsonObject o) const
 #else
   o[_t_terminal_available] = false;
 #endif
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+  o["firmware_target"] = "esp32-s3";
+#else
+  o["firmware_target"] = "esp32";
+#endif
 
 }
 

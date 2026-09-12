@@ -1,21 +1,35 @@
 <script lang="ts">
   import {
     ComposedModal,
+    Button,
     ModalHeader,
     ModalFooter,
     ModalBody,
     ProgressBar,
     FileUploaderButton,
     Dropdown,
+    InlineNotification,
   } from "carbon-components-svelte";
   import type { Readable } from "svelte/store";
   import { onDestroy } from "svelte";
   import { FirmwareFlashStatus, FirmwareUploader, FirmwareUploadStatus, FirmwareUploadType } from "./service";
+  import { downloadFirmware, type FirmwareRelease } from "./github-releases";
+  import { checkFirmwareUpdates, firmwareUpdateStore } from "./update-store";
 
   export let open: boolean = false;
 
   let uploadType: FirmwareUploadType = FirmwareUploadType.modem;
+  let source: "github" | "file" = "github";
   let ref: null | HTMLInputElement;
+  let selectedReleaseVersion = "";
+  let downloadProgress: number | null = null;
+  let downloadError: string | null = null;
+  let downloading = false;
+
+  const sourceOptions = [
+    { id: "github", text: "GitHub Release" },
+    { id: "file", text: "Local file" },
+  ];
 
   const uploadTypeOptions = [
     { id: FirmwareUploadType.modem, text: "Modem Firmware" },
@@ -25,6 +39,17 @@
   let fileSize = 0;
 
   let uploader = new FirmwareUploader();
+
+  $: releaseOptions = $firmwareUpdateStore.releases.map((release) => ({
+    id: release.version,
+    text: `${release.version}${release.version === $firmwareUpdateStore.releases[0]?.version ? " (latest)" : ""}`,
+  }));
+  $: if (!selectedReleaseVersion && $firmwareUpdateStore.releases.length > 0) {
+    selectedReleaseVersion = $firmwareUpdateStore.releases[0].version;
+  }
+  $: if (open && !$firmwareUpdateStore.loaded && !$firmwareUpdateStore.loading) {
+    void checkFirmwareUpdates();
+  }
 
   function uploadChange(e: CustomEvent<ReadonlyArray<File>>) {
     if (!(ref && ref.files && ref.files.length > 0)) {
@@ -42,8 +67,34 @@
 
   function handleUploadTypeChange(e: CustomEvent<{ selectedId: FirmwareUploadType }>) {
     uploadType = e.detail.selectedId;
-    // Reset upload state when changing type
+    if (uploadType === FirmwareUploadType.mower) {
+      source = "file";
+    }
     resetUploadState();
+  }
+
+  function handleSourceChange(e: CustomEvent<{ selectedId: "github" | "file" }>) {
+    source = e.detail.selectedId;
+    resetUploadState();
+  }
+
+  async function installRelease() {
+    const release = $firmwareUpdateStore.releases.find((item) => item.version === selectedReleaseVersion);
+    if (!release || downloading) return;
+
+    resetUploadState();
+    downloading = true;
+    downloadProgress = 0;
+    try {
+      const file = await downloadFirmware(release, (progress) => downloadProgress = progress);
+      fileSize = file.size;
+      uploader.file = file;
+      await uploader.upload(FirmwareUploadType.modem);
+    } catch (error) {
+      downloadError = error instanceof Error ? error.message : String(error);
+    } finally {
+      downloading = false;
+    }
   }
 
   function resetUploadState() {
@@ -52,6 +103,8 @@
     flashProgress = null;
     flashStatus = null;
     flashError = null;
+    downloadProgress = null;
+    downloadError = null;
     stopReconnecting();
     stopWatchdog();
     closeWebSocket();
@@ -286,7 +339,7 @@
 </style>
 
 <ComposedModal on:click:button--primary={primary} bind:open on:close={close}>
-  <ModalHeader title="Upload Firmware" />
+  <ModalHeader title="Firmware Update" />
   <ModalBody hasForm={true}>
     {#if $uploaderStatus < FirmwareUploadStatus.fileSelected}
       <div style="width: 100%; margin-bottom: 1rem; position: relative; z-index: 1000;">
@@ -298,6 +351,17 @@
           direction="bottom"
         />
       </div>
+      {#if uploadType === FirmwareUploadType.modem}
+        <div style="width: 100%; margin-bottom: 1rem; position: relative; z-index: 999;">
+          <Dropdown
+            titleText="Update source"
+            items={sourceOptions}
+            selectedId={source}
+            on:select={handleSourceChange}
+            direction="bottom"
+          />
+        </div>
+      {/if}
     {/if}
     <div style="width: 100%;">
       {#if $uploaderStatus >= FirmwareUploadStatus.fileSelected}
@@ -316,6 +380,11 @@
           />
         </div>
       {/if}
+      {#if downloading && downloadProgress != null}
+        <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
+          <ProgressBar value={downloadProgress} max={100} helperText="Downloading firmware from GitHub..." />
+        </div>
+      {/if}
       {#if flashProgress != null || (uploadType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success)}
         <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
           <ProgressBar
@@ -327,24 +396,62 @@
         </div>
       {/if}
     </div>
-    {#if $uploaderStatus < FirmwareUploadStatus.uploading}
-      <p>Select the firmware update file on your computer.</p>
-      {#if uploadType === FirmwareUploadType.modem}
-        <p>
-          You can download the latest firmware updates on the <a
-            href="https://github.com/Zwer2k/ardumower-mowmate/releases"
-            target="_blank">GitHub Releases</a
-          > page.
-        </p>
+    {#if $uploaderStatus < FirmwareUploadStatus.uploading && source === "github"}
+      {#if $firmwareUpdateStore.loading}
+        <p>Loading releases from GitHub...</p>
+      {:else if $firmwareUpdateStore.error}
+        <InlineNotification
+          kind="error"
+          title="GitHub releases unavailable"
+          subtitle={$firmwareUpdateStore.error}
+          hideCloseButton
+          lowContrast
+        />
+        <Button kind="ghost" on:click={() => checkFirmwareUpdates(true)}>Retry</Button>
+      {:else if releaseOptions.length === 0}
+        <InlineNotification
+          kind="warning"
+          title="No compatible firmware found"
+          subtitle="No release contains firmware for this ESP target."
+          hideCloseButton
+          lowContrast
+        />
+      {:else}
+        <div class="release-picker">
+          <Dropdown
+            titleText="Version"
+            items={releaseOptions}
+            bind:selectedId={selectedReleaseVersion}
+            direction="bottom"
+          />
+          <p>
+            Installed: {$firmwareUpdateStore.modemInfo?.git_tag || $firmwareUpdateStore.modemInfo?.git_hash}
+            · Target: {$firmwareUpdateStore.modemInfo?.firmware_target}
+          </p>
+          <InlineNotification
+            kind="warning"
+            title="Do not interrupt power"
+            subtitle="The selected firmware is downloaded from GitHub and then installed on the ESP."
+            hideCloseButton
+            lowContrast
+          />
+          <Button on:click={installRelease} disabled={downloading}>Install {selectedReleaseVersion}</Button>
+        </div>
+      {/if}
+      {#if downloadError}
+        <InlineNotification kind="error" title="Download failed" subtitle={downloadError} hideCloseButton lowContrast />
       {/if}
     {/if}
-    <FileUploaderButton
-      bind:ref
-      on:change={uploadChange}
-      disabled={fileSize > 0}
-      accept={[".bin"]}
-      labelText="Select..."
-    />
+    {#if source === "file" && $uploaderStatus < FirmwareUploadStatus.uploading}
+      <p>Select the firmware update file on your computer.</p>
+      <FileUploaderButton
+        bind:ref
+        on:change={uploadChange}
+        disabled={fileSize > 0}
+        accept={[".bin"]}
+        labelText="Select..."
+      />
+    {/if}
     {#if $uploaderStatus >= FirmwareUploadStatus.fileSelected}
       <p>Size: {fileSize} bytes</p>
     {/if}

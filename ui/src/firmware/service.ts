@@ -179,4 +179,5 @@ export interface ApiModemInfoResponse {
   build_time: string
   uptime: number
   terminal_available?: boolean;
+  firmware_target: "esp32" | "esp32-s3";
 }

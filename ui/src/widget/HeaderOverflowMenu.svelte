@@ -6,6 +6,14 @@
     import IconTest from "carbon-icons-svelte/lib/Tools.svelte";
     import IconSettings from "carbon-icons-svelte/lib/Settings.svelte";
     import IconHelp from "carbon-icons-svelte/lib/Help.svelte";
+    import IconUpload from "carbon-icons-svelte/lib/CloudUpload.svelte";
+    import IconRestart from "carbon-icons-svelte/lib/Restart.svelte";
+    import IconChevronRight from "carbon-icons-svelte/lib/ChevronRight.svelte";
+    import { onMount } from 'svelte';
+    import FirmwareUpload from '../firmware/FirmwareUpload.svelte';
+    import { checkFirmwareUpdates, firmwareUpdateStore } from '../firmware/update-store';
+    import { socketStore } from '../stores/socket';
+    import { toastStore } from '../stores/toast';
 
     interface Props {
         onHelp?: () => void;
@@ -13,7 +21,16 @@
     let { onHelp }: Props = $props();
 
     let open = $state(false);
+    let restartOpen = $state(false);
+    let firmwareOpen = $state(false);
+    let wasConnected = $state(false);
     let menuRef: HTMLDivElement | null = null;
+
+    const restartOptions = [
+        { label: 'Restart modem', endpoint: '/api/modem/reboot' },
+        { label: 'Restart mower', endpoint: '/api/mower/reboot' },
+        { label: 'Restart GPS', endpoint: '/api/mower/rebootGps' },
+    ];
 
     const items = [
         { href: '/?dashboard=log',      icon: IconLog,      label: 'Log' },
@@ -25,26 +42,57 @@
     function toggle(e: Event) {
         e.stopPropagation();
         open = !open;
+        if (!open) restartOpen = false;
     }
 
     function close() {
         open = false;
+        restartOpen = false;
     }
 
     function onDocClick(e: MouseEvent) {
         if (menuRef && !menuRef.contains(e.target as Node)) {
-            open = false;
+            close();
         }
     }
 
     function onKey(e: KeyboardEvent) {
-        if (e.key === 'Escape') open = false;
+        if (e.key === 'Escape') close();
     }
 
     function clickHelp() {
         close();
         onHelp?.();
     }
+
+    function clickFirmwareUpdate() {
+        close();
+        firmwareOpen = true;
+    }
+
+    async function restartDevice(option: (typeof restartOptions)[number]) {
+        close();
+        try {
+            const response = await fetch(option.endpoint, { method: 'POST' });
+            if (!response.ok) throw new Error('Restart request failed');
+            toastStore.set({ msg: `${option.label} command sent.`, type: 'success' });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            toastStore.set({ msg: `${option.label} failed: ${message}`, type: 'error' });
+        }
+    }
+
+    onMount(() => {
+        void checkFirmwareUpdates();
+    });
+
+    $effect(() => {
+        const connected = $socketStore.connected;
+        if (connected && !wasConnected && $firmwareUpdateStore.error) {
+            void checkFirmwareUpdates(true);
+        }
+        wasConnected = connected;
+    });
 
     $effect(() => {
         if (!browser) return;
@@ -77,6 +125,36 @@
             </a>
         {/each}
         <div class="hom-divider"></div>
+        <button class="hom-item" onclick={clickFirmwareUpdate}>
+            <IconUpload />
+            <span>Update firmware</span>
+            {#if $firmwareUpdateStore.updateAvailable}
+                <span class="update-dot" title="Firmware update available" aria-label="Firmware update available"></span>
+            {/if}
+        </button>
+        <div class="hom-submenu-wrapper">
+            <button
+                class="hom-item"
+                class:submenu-active={restartOpen}
+                onclick={() => restartOpen = !restartOpen}
+                aria-haspopup="menu"
+                aria-expanded={restartOpen}
+            >
+                <IconRestart />
+                <span>Restart</span>
+                <IconChevronRight class="submenu-chevron" />
+            </button>
+            {#if restartOpen}
+                <div class="hom-submenu" role="menu">
+                    {#each restartOptions as option}
+                        <button class="hom-item" role="menuitem" onclick={() => restartDevice(option)}>
+                            <span>{option.label}</span>
+                        </button>
+                    {/each}
+                </div>
+            {/if}
+        </div>
+        <div class="hom-divider"></div>
         <button class="hom-item" onclick={clickHelp}>
             <IconHelp />
             <span>Help</span>
@@ -84,6 +162,8 @@
     </div>
     {/if}
 </div>
+
+<FirmwareUpload bind:open={firmwareOpen} />
 
 <style lang="scss">
     .hom-wrapper {
@@ -164,6 +244,37 @@
             fill: #555;
             flex-shrink: 0;
         }
+    }
+
+    .hom-submenu-wrapper {
+        position: relative;
+    }
+
+    .submenu-chevron {
+        margin-left: auto;
+    }
+
+    .submenu-active {
+        background: #f4f4f4;
+    }
+
+    .hom-submenu {
+        position: absolute;
+        top: -4px;
+        right: 100%;
+        min-width: 180px;
+        padding: 4px 0;
+        background: white;
+        border: 1px solid #ddd;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    }
+
+    .update-dot {
+        width: 8px;
+        height: 8px;
+        margin-left: auto;
+        border-radius: 50%;
+        background: #f1c21b;
     }
 
     .hom-divider {
