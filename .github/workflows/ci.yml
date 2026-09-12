@@ -10,29 +10,30 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install UI dependencies
         working-directory: ui
         run: npm ci
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
+          cache: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Install PlatformIO
         run: pip install platformio
 
       - name: Cache PlatformIO packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
@@ -52,6 +53,14 @@ jobs:
       - name: Build ESP32 firmware
         run: pio run -e esp32
 
+      - name: Collect ESP32 artifacts
+        run: |
+          mkdir -p artifacts/esp32
+          cp -v .pio/build/esp32/firmware.bin artifacts/esp32/
+          cp -v .pio/build/esp32/firmware.elf artifacts/esp32/
+          cp -v .pio/build/esp32/partitions.bin artifacts/esp32/
+          cp -v .pio/build/esp32/bootloader.bin artifacts/esp32/
+
       - name: Build ESP32-S3 UI
         working-directory: ui
         env:
@@ -67,30 +76,19 @@ jobs:
       - name: Build ESP32-S3 firmware
         run: pio run -e esp32-S3-N16-R8
 
-      - name: Prepare artifacts
+      - name: Collect ESP32-S3 artifacts
         run: |
-          mkdir -p artifacts/esp32 artifacts/esp32-s3
-          
-          # ESP32
-          src=".pio/build/esp32"
-          dst="artifacts/esp32"
-          cp -v "$src/firmware.bin" "$dst/" 2>/dev/null || true
-          cp -v "$src/firmware.elf" "$dst/" 2>/dev/null || true
-          cp -v "$src/partitions.bin" "$dst/" 2>/dev/null || true
-          cp -v "$src/bootloader.bin" "$dst/" 2>/dev/null || true
-          
-          # ESP32-S3
-          src=".pio/build/esp32-S3-N16-R8"
-          dst="artifacts/esp32-s3"
-          cp -v "$src/firmware.bin" "$dst/" 2>/dev/null || true
-          cp -v "$src/firmware.elf" "$dst/" 2>/dev/null || true
-          cp -v "$src/partitions.bin" "$dst/" 2>/dev/null || true
-          cp -v "$src/bootloader.bin" "$dst/" 2>/dev/null || true
+          mkdir -p artifacts/esp32-s3
+          cp -v .pio/build/esp32-S3-N16-R8/firmware.bin artifacts/esp32-s3/
+          cp -v .pio/build/esp32-S3-N16-R8/firmware.elf artifacts/esp32-s3/
+          cp -v .pio/build/esp32-S3-N16-R8/partitions.bin artifacts/esp32-s3/
+          cp -v .pio/build/esp32-S3-N16-R8/bootloader.bin artifacts/esp32-s3/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: firmware
           path: artifacts/
+          if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -99,24 +97,28 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: firmware
           path: artifacts
 
       - name: Prepare release assets
         run: |
-          # rename files with platform prefix
-          (cd artifacts/esp32 && for f in *; do ext="${f##*.}"; name="${f%.*}"; mv "$f" "esp32-${name}.${ext}"; done) 2>/dev/null || true
-          (cd artifacts/esp32-s3 && for f in *; do ext="${f##*.}"; name="${f%.*}"; mv "$f" "esp32-s3-${name}.${ext}"; done) 2>/dev/null || true
+          for platform in esp32 esp32-s3; do
+            test -d "artifacts/$platform"
+            for file in "artifacts/$platform"/*; do
+              test -f "$file"
+              filename="${file##*/}"
+              mv "$file" "artifacts/$platform/$platform-$filename"
+            done
+          done
 
-          # create zip archives for clearer grouping
-          (cd artifacts && zip -r -q esp32.zip esp32) || true
-          (cd artifacts && zip -r -q esp32-s3.zip esp32-s3) || true
+          (cd artifacts && zip -r -q esp32.zip esp32)
+          (cd artifacts && zip -r -q esp32-s3.zip esp32-s3)
 
       - name: Generate release notes body
         run: |
@@ -135,13 +137,14 @@ jobs:
           fi
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/esp32/*
             artifacts/esp32-s3/*
             artifacts/*.zip
           body_path: release_body.txt
+          fail_on_unmatched_files: true
 
   nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -150,11 +153,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: firmware
           path: artifacts
@@ -167,8 +170,14 @@ jobs:
 
       - name: Rename artifacts with platform prefix
         run: |
-          (cd artifacts/esp32 && for f in *; do ext="${f##*.}"; name="${f%.*}"; mv "$f" "esp32-${name}.${ext}"; done) 2>/dev/null || true
-          (cd artifacts/esp32-s3 && for f in *; do ext="${f##*.}"; name="${f%.*}"; mv "$f" "esp32-s3-${name}.${ext}"; done) 2>/dev/null || true
+          for platform in esp32 esp32-s3; do
+            test -d "artifacts/$platform"
+            for file in "artifacts/$platform"/*; do
+              test -f "$file"
+              filename="${file##*/}"
+              mv "$file" "artifacts/$platform/$platform-$filename"
+            done
+          done
 
       - name: Create/Update Nightly Release
         uses: ncipollo/release-action@v1
