@@ -137,6 +137,10 @@ namespace ArduMower
         UiSocketHandler *_socketHandler;
         uint32_t _clientId;
         uint32_t _drivenTrackSequence = 0;
+        // Per-client share of the handler's polling ref counts, so that a
+        // client which disconnects without sending stop* can be unsubscribed.
+        uint32_t _gpsDetailsRefs = 0;
+        uint32_t _sensorSummaryRefs = 0;
         ArduMower::Domain::Robot::StateSource &_source;
       };
 
@@ -149,6 +153,8 @@ namespace ArduMower
         size_t exclusionIdx = 0;
         size_t idx = 0;
         uint32_t lastRetryMs = 0;
+        // millis() of the last successfully sent chunk; drives the stall watchdog.
+        uint32_t lastProgressMs = 0;
         ArduMower::Domain::Robot::MowerMap snapshot;
         String metaHash;
         int metaCrc = 0;
@@ -248,6 +254,11 @@ namespace ArduMower
         bool sendTextToId(uint32_t clientId, const char* data, size_t len);
 
         static const uint32_t mapSendDelayMs = 1000;
+        // Abort a chunked transfer that has not delivered a single chunk for
+        // this long. While a transfer is active ALL other outgoing data is
+        // held back and setMap() is rejected, so a stalled transfer must not
+        // be allowed to block the socket indefinitely.
+        static const uint32_t mapChunkSendTimeoutMs = 15000;
         uint32_t _mapSendPendingUntil = 0;
 #ifdef MOWER_TERMINAL
         void sendBufferedTerminalTo(UiSocketItem* item, uint16_t maxChunks = 0xFFFF);
@@ -280,6 +291,7 @@ namespace ArduMower
       private:
         void startMapChunkSend(UiSocketItem* sendTo, bool force);
         void processMapChunkSend();
+        void finishMapChunkSend();
         void processScheduleTriggerStateMachine();
         bool sendMapChunk(MapPointType pointType, const std::vector<ArduMower::Domain::Robot::MapPoint>& points, uint32_t timestamp, uint32_t clientId, int exclusionIdx, size_t startIdx, size_t blockSize, bool reset, size_t &nextIdx);
         AsyncWebSocket *_ws;

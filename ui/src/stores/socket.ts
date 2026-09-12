@@ -28,7 +28,7 @@ import {
   type ClockData,
   type DrivenTrackData,
 } from "../model";
-import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer } from "../map/map-chunk-buffer";
+import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer, resetMapTransferTracking } from "../map/map-chunk-buffer";
 import { MapPointType } from "../map/map-chunk-buffer";
 import { mowSettingsStore } from "../map/mow-settings";
 import { currentMapRotationStore, updateDrivenTrack } from "../map/service";
@@ -254,6 +254,10 @@ class SocketService {
           }, SocketService.STABLE_CONNECTION_MS);
 
           this.startHeartbeat(socket);
+
+          // Neue Verbindung = möglicherweise neu gestarteter Modem mit
+          // zurückgesetzten Transfer-IDs.
+          resetMapTransferTracking();
 
           socketStore.update((s) => ({ ...s, connected: true }));
 

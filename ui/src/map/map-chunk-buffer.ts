@@ -249,6 +249,21 @@ export function handleMapChunk(chunk: MapChunk) {
 }
 
 
+/**
+ * Nach einem (Re-)Connect aufrufen. Der Modem vergibt Transfer-IDs fortlaufend
+ * ab 1 und beginnt nach einem Neustart wieder bei 1. Ohne Reset hielte
+ * isNewerTransferId() jede neue ID für veraltet und alle Chunks würden
+ * stillschweigend verworfen – die Karte würde bis zum Seiten-Reload nie mehr
+ * geladen. Die angezeigte Karte bleibt erhalten, bis der neue Transfer
+ * vollständig ist.
+ */
+export function resetMapTransferTracking() {
+  activeTransferId = null;
+  publishedTransferId = null;
+  receivedTypes = new Set<MapPointType>();
+  mapChunkProgress.set(null);
+}
+
 export function resetMapChunkBuffer() {
   activeTransferId = null;
   publishedTransferId = null;

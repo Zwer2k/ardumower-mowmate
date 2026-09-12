@@ -164,6 +164,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
 
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
   case RequestDataType::requestGpsDetails:
+    _gpsDetailsRefs++;
     _socketHandler->gpsDetailsRefCount++;
     _socketHandler->gpsDetailsActive = true;
     _socketHandler->ubxResponseActive = true;
@@ -177,6 +178,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     break;
 
   case RequestDataType::stopGpsDetails:
+    if (_gpsDetailsRefs > 0) _gpsDetailsRefs--;
     if (_socketHandler->gpsDetailsRefCount > 0) {
       _socketHandler->gpsDetailsRefCount--;
     }
@@ -189,6 +191,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
 #endif
 
   case RequestDataType::requestSensorSummary:
+    _sensorSummaryRefs++;
     _socketHandler->sensorSummaryRefCount++;
     _socketHandler->sensorSummaryActive = true;
     // Only reset polling timer on first activation (ref was 0)
@@ -199,6 +202,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     break;
 
   case RequestDataType::stopSensorSummary:
+    if (_sensorSummaryRefs > 0) _sensorSummaryRefs--;
     if (_socketHandler->sensorSummaryRefCount > 0) {
       _socketHandler->sensorSummaryRefCount--;
     }
@@ -835,13 +839,36 @@ void UiSocketHandler::processWsEvents() {
 
       case WsEvtType::DISCONNECT: {
         uint32_t cid = evt.clientId;
+        bool abortTargetedTransfer = false;
         lockClients();
         _frameBuffer.erase(cid);
         auto it = itemMap.find(cid);
         if (it != itemMap.end()) {
-          if (mapChunkSendState.clientId == cid)
-            mapChunkSendState.clientId = 0;
-          delete it->second;
+          // A transfer addressed to this client cannot complete any more.
+          // Previously it was silently turned into a broadcast, which fed
+          // the other clients a partial transfer. Abort it instead — after
+          // the lock is released, because finishing flushes broadcasts.
+          if (mapChunkSendState.active && mapChunkSendState.clientId == cid)
+            abortTargetedTransfer = true;
+          // Release this client's share of the polling subscriptions. A tab
+          // that is closed never sends stop*, and the counters were only
+          // reset once the LAST client left — so a single remaining client
+          // kept GPS/sensor polling running forever.
+          UiSocketItem *gone = it->second;
+#if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
+          if (gone->_gpsDetailsRefs > 0) {
+            gpsDetailsRefCount = (gpsDetailsRefCount > gone->_gpsDetailsRefs) ? gpsDetailsRefCount - gone->_gpsDetailsRefs : 0;
+            if (gpsDetailsRefCount == 0) {
+              gpsDetailsActive = false;
+              ubxResponseActive = false;
+            }
+          }
+#endif
+          if (gone->_sensorSummaryRefs > 0) {
+            sensorSummaryRefCount = (sensorSummaryRefCount > gone->_sensorSummaryRefs) ? sensorSummaryRefCount - gone->_sensorSummaryRefs : 0;
+            if (sensorSummaryRefCount == 0) sensorSummaryActive = false;
+          }
+          delete gone;
           itemMap.erase(it);
           if (itemMap.empty()) {
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
@@ -855,6 +882,10 @@ void UiSocketHandler::processWsEvents() {
           }
         }
         unlockClients();
+        if (abortTargetedTransfer) {
+          Log(DBG, "%s client %u disconnected during targeted map transfer, aborting", _LOG_, cid);
+          finishMapChunkSend();
+        }
         if (evt.data) free(evt.data);
         break;
       }
@@ -998,9 +1029,13 @@ void UiSocketHandler::loop()
     return;
 
   // Start the deferred initial map chunk send once the connect burst has had
-  // time to drain.  _mapSendPendingUntil is reset in the WS_EVT_CONNECT path.
-  if (_mapSendPendingUntil != 0 && millis() - _mapSendPendingUntil < 0x80000000) {
-    if (millis() >= _mapSendPendingUntil) {
+  // time to drain.  _mapSendPendingUntil is armed in the CONNECT path.
+  // If a transfer is still running when the deadline passes, keep the send
+  // pending instead of dropping it: startMapChunkSend() returns silently
+  // while active, and a client that connected during another client's
+  // transfer would otherwise never receive the map.
+  if (_mapSendPendingUntil != 0 && (int32_t)(millis() - _mapSendPendingUntil) >= 0) {
+    if (!mapChunkSendState.active) {
       _mapSendPendingUntil = 0;
       sendData(ResponseDataType::map, NULL, true);
     }
@@ -1350,11 +1385,28 @@ void UiSocketHandler::startMapChunkSend(UiSocketItem* sendTo, bool force) {
   mapChunkSendState.phase = 0;
   mapChunkSendState.exclusionIdx = 0;
   mapChunkSendState.idx = 0;
+  mapChunkSendState.lastRetryMs = 0;
+  mapChunkSendState.lastProgressMs = millis();
 }
 
 // Pro loop() einen Chunk versenden – Snapshot aus mapChunkSendState verwenden
 void UiSocketHandler::processMapChunkSend() {
   if (!mapChunkSendState.active) return;
+  // Stall-Watchdog: ein Transfer, der längere Zeit keinen einzigen Chunk
+  // loswird (Client-Queue voll, Client hängt in WS_DISCONNECTING, ...),
+  // blockiert sonst dauerhaft ALLE anderen Nachrichten (sendData() kehrt bei
+  // aktivem Transfer sofort zurück) und lässt jedes setMap() abprallen.
+  if (mapChunkSendState.lastProgressMs &&
+      millis() - mapChunkSendState.lastProgressMs > mapChunkSendTimeoutMs) {
+    Log(WARN, "%s processMapChunkSend: transfer %u stalled for %u ms (phase=%d client=%u), aborting",
+        _LOG_, mapChunkSendState.transferId, (unsigned)(millis() - mapChunkSendState.lastProgressMs),
+        mapChunkSendState.phase, mapChunkSendState.clientId);
+    finishMapChunkSend();
+    // Retry later; by then cleanupClients()/the TCP ACK timeout have usually
+    // removed the client that caused the stall.
+    _mapSendPendingUntil = millis() + 5000;
+    return;
+  }
   // Retry-Delay: bei fehlgeschlagenem Senden 100ms warten
   if (mapChunkSendState.lastRetryMs && millis() - mapChunkSendState.lastRetryMs < 100) return;
   // Keine Clients → Chunk-Versand abbrechen
@@ -1368,20 +1420,21 @@ void UiSocketHandler::processMapChunkSend() {
   auto& map = mapChunkSendState.snapshot;
   const size_t blockSize = 30;
   bool chunkSent = false;
+  bool stalled = false;
   size_t nextIdx = 0;
 
   switch (mapChunkSendState.phase) {
     case 0: // Perimeter
       if (mapChunkSendState.idx == 0) {
         if (!sendMapChunk(MapPointType::Perimeter, map.perimeter, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
       }
       if (map.perimeter.size() > 0 && mapChunkSendState.idx < map.perimeter.size()) {
         chunkSent = sendMapChunk(MapPointType::Perimeter, map.perimeter, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, mapChunkSendState.idx, blockSize, false, nextIdx);
         if (!chunkSent) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
         mapChunkSendState.idx = nextIdx;
@@ -1393,7 +1446,7 @@ void UiSocketHandler::processMapChunkSend() {
       if (mapChunkSendState.exclusionIdx == 0 && mapChunkSendState.idx == 0) {
         static const std::vector<ArduMower::Domain::Robot::MapPoint> emptyExcl;
         if (!sendMapChunk(MapPointType::Exclusion, emptyExcl, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
       }
@@ -1402,7 +1455,7 @@ void UiSocketHandler::processMapChunkSend() {
         if (excl.size() > 0 && mapChunkSendState.idx < excl.size()) {
           chunkSent = sendMapChunk(MapPointType::Exclusion, excl, mapChunkSendState.timestamp, mapChunkSendState.clientId, (int)mapChunkSendState.exclusionIdx, mapChunkSendState.idx, blockSize, false, nextIdx);
           if (!chunkSent) {
-            mapChunkSendState.lastRetryMs = millis();
+            mapChunkSendState.lastRetryMs = millis(); stalled = true;
             break;
           }
           mapChunkSendState.idx = nextIdx;
@@ -1416,14 +1469,14 @@ void UiSocketHandler::processMapChunkSend() {
       if (mapChunkSendState.idx == 0) {
         static const std::vector<ArduMower::Domain::Robot::MapPoint> emptyDockpoints;
         if (!sendMapChunk(MapPointType::Dockpoints, emptyDockpoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
       }
       if (map.dockpoints.size() > 0 && mapChunkSendState.idx < map.dockpoints.size()) {
         chunkSent = sendMapChunk(MapPointType::Dockpoints, map.dockpoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, mapChunkSendState.idx, blockSize, false, nextIdx);
         if (!chunkSent) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
         mapChunkSendState.idx = nextIdx;
@@ -1435,14 +1488,14 @@ void UiSocketHandler::processMapChunkSend() {
       if (mapChunkSendState.idx == 0) {
         static const std::vector<ArduMower::Domain::Robot::MapPoint> emptySearchWire;
         if (!sendMapChunk(MapPointType::SearchWire, emptySearchWire, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
       }
       if (map.searchWire.size() > 0 && mapChunkSendState.idx < map.searchWire.size()) {
         chunkSent = sendMapChunk(MapPointType::SearchWire, map.searchWire, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, mapChunkSendState.idx, blockSize, false, nextIdx);
         if (!chunkSent) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
         mapChunkSendState.idx = nextIdx;
@@ -1454,14 +1507,14 @@ void UiSocketHandler::processMapChunkSend() {
       if (mapChunkSendState.idx == 0) {
         static const std::vector<ArduMower::Domain::Robot::MapPoint> emptyWaypoints;
         if (!sendMapChunk(MapPointType::Waypoints, emptyWaypoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, 0, 0, true, nextIdx)) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
       }
       if (map.waypoints.size() > 0 && mapChunkSendState.idx < map.waypoints.size()) {
         chunkSent = sendMapChunk(MapPointType::Waypoints, map.waypoints, mapChunkSendState.timestamp, mapChunkSendState.clientId, -1, mapChunkSendState.idx, blockSize, false, nextIdx);
         if (!chunkSent) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
         mapChunkSendState.idx = nextIdx;
@@ -1482,33 +1535,46 @@ void UiSocketHandler::processMapChunkSend() {
         String json;
         serializeJson(doc, json);
         if (!sendMapChunkText(mapChunkSendState.clientId, json)) {
-          mapChunkSendState.lastRetryMs = millis();
+          mapChunkSendState.lastRetryMs = millis(); stalled = true;
           break;
         }
       }
-      mapChunkSendState.active = false;
       oldDataTimestamp[ResponseDataType::map] = map.timestamp;
-      _source.endMowerMapRead();
-      // Flush any non-map messages that were queued while the chunked transfer
-      // was running. This keeps the WebSocket frame stream unfragmented.
-      if (_mapListPending) {
-        _mapListPending = false;
-        sendMapList(NULL);
-      }
-      if (_drivenTrackPending) {
-        _drivenTrackPending = false;
-        sendDrivenTrack(NULL);
-      }
-      if (_flashProgressPending) {
-        _flashProgressPending = false;
-        JsonDocument doc;
-        auto status = doc["status"].to<JsonObject>();
-        status["progress"] = _flashProgressPct;
-        String json;
-        serializeJson(doc, json);
-        sendTextAllWithRetry(json);
-      }
+      finishMapChunkSend();
       break;
+  }
+  if (mapChunkSendState.active && !stalled) {
+    mapChunkSendState.lastProgressMs = millis();
+  }
+}
+
+// End the current chunk transfer (completed or aborted) and flush the
+// non-map messages that were held back while it was running, so the frame
+// stream stays unfragmented. Must NOT be called while holding _clientsMutex:
+// the flushed broadcasts take _sendMutex and then _clientsMutex.
+void UiSocketHandler::finishMapChunkSend() {
+  if (!mapChunkSendState.active) return;
+  mapChunkSendState.active = false;
+  mapChunkSendState.clientId = 0;
+  mapChunkSendState.lastRetryMs = 0;
+  mapChunkSendState.lastProgressMs = 0;
+  _source.endMowerMapRead();
+  if (_mapListPending) {
+    _mapListPending = false;
+    sendMapList(NULL);
+  }
+  if (_drivenTrackPending) {
+    _drivenTrackPending = false;
+    sendDrivenTrack(NULL);
+  }
+  if (_flashProgressPending) {
+    _flashProgressPending = false;
+    JsonDocument doc;
+    auto status = doc["status"].to<JsonObject>();
+    status["progress"] = _flashProgressPct;
+    String json;
+    serializeJson(doc, json);
+    sendTextAllWithRetry(json);
   }
 }
 
@@ -1590,16 +1656,15 @@ bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<Ard
     return false;
   }
   if (clientId > 0) {
-    auto it = itemMap.find(clientId);
-    if (it == itemMap.end()) {
-      // client disconnected while transfer was in-flight – fall back to broadcast
-      Log(DBG, "%s sendMapChunk: client %u gone, broadcasting", _LOG_, clientId);
-      if (!sendMapChunkText(0, stateStr)) {
-        Log(ERR, "%s sendMapChunk broadcast failed", _LOG_);
-        _ws->cleanupClients();
-        return false;
-      }
-    } else if (!sendMapChunkText(clientId, stateStr)) {
+    if (findClient(clientId) == nullptr) {
+      // Target client is gone. Do NOT fall back to broadcasting: the other
+      // clients would receive the tail of a transfer they never saw the
+      // reset frames for. The DISCONNECT event aborts the transfer; until
+      // then just report failure.
+      Log(DBG, "%s sendMapChunk: client %u gone", _LOG_, clientId);
+      return false;
+    }
+    if (!sendMapChunkText(clientId, stateStr)) {
       Log(ERR, "%s sendMapChunk to client %u failed", _LOG_, clientId);
       _ws->cleanupClients();
       return false;
@@ -1859,6 +1924,9 @@ void UiSocketHandler::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
 void UiSocketHandler::abortMapChunkSend() {
   if (mapChunkSendState.active) {
     mapChunkSendState.active = false;
+    mapChunkSendState.clientId = 0;
+    mapChunkSendState.lastRetryMs = 0;
+    mapChunkSendState.lastProgressMs = 0;
     // Release the read lock that was acquired in startMapChunkSend().
     // Otherwise subsequent map operations can deadlock.
     _source.endMowerMapRead();
