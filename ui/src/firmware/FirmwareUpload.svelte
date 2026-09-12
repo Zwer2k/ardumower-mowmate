@@ -278,8 +278,11 @@
 
   let uploaderStatus: Readable<FirmwareUploadStatus> = uploader.status;
   let uploaderProgress: Readable<number> = uploader.progress;
+  let githubDownloadProgress: Readable<number> = uploader.githubDownloadProgress;
+  let githubFlashProgress: Readable<number> = uploader.githubFlashProgress;
+  let githubBuffered: Readable<boolean> = uploader.githubBuffered;
 
-  $: if (uploadType === FirmwareUploadType.modem && $uploaderStatus === FirmwareUploadStatus.expectReboot) {
+  $: if (source === "file" && uploadType === FirmwareUploadType.modem && $uploaderStatus === FirmwareUploadStatus.expectReboot) {
     connectWebSocket();
   } else if (uploadType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success) {
     connectWebSocket();
@@ -374,6 +377,41 @@
           />
         </div>
       {/if}
+      {#if source === "github" && $uploaderStatus >= FirmwareUploadStatus.uploading && $uploaderStatus < FirmwareUploadStatus.success}
+        {#if $githubBuffered}
+          <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
+            <ProgressBar
+              value={$githubDownloadProgress}
+              max={100}
+              status={$uploaderStatus === FirmwareUploadStatus.error ? 'error' : $githubDownloadProgress >= 100 ? 'finished' : undefined}
+              helperText={`Firmware herunterladen (${Math.round($githubDownloadProgress)}%)`}
+            />
+          </div>
+          {#if $githubDownloadProgress >= 100 || $githubFlashProgress > 0 || $uploaderStatus === FirmwareUploadStatus.expectReboot}
+            <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
+              <ProgressBar
+                value={$githubFlashProgress}
+                max={100}
+                status={$uploaderStatus === FirmwareUploadStatus.error ? 'error' : $githubFlashProgress >= 100 ? 'finished' : undefined}
+                helperText={$uploaderStatus === FirmwareUploadStatus.expectReboot
+                  ? "Firmware geflasht. Warte auf Neustart..."
+                  : `Firmware flashen (${Math.round($githubFlashProgress)}%)`}
+              />
+            </div>
+          {/if}
+        {:else}
+          <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
+            <ProgressBar
+              value={$uploaderProgress}
+              max={100}
+              status={$uploaderStatus === FirmwareUploadStatus.error ? 'error' : undefined}
+              helperText={$uploaderStatus === FirmwareUploadStatus.expectReboot
+                ? "Firmware geflasht. Warte auf Neustart..."
+                : `Firmware herunterladen und flashen (${Math.round($uploaderProgress)}%)`}
+            />
+          </div>
+        {/if}
+      {/if}
       {#if flashProgress != null || (uploadType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success)}
         <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
           <ProgressBar
@@ -446,7 +484,7 @@
     {/if}
 
     {#if $uploaderStatus === FirmwareUploadStatus.uploading}
-      <p>Uploading the {uploadType} firmware update...</p>
+      <p>{source === "github" ? "Downloading and installing the modem firmware..." : `Uploading the ${uploadType} firmware update...`}</p>
     {/if}
     {#if $uploaderStatus === FirmwareUploadStatus.success && uploadType === FirmwareUploadType.mower && flashStatus !== FirmwareFlashStatus.success}
       <p>The {uploadType} firmware has been uploaded successfully.</p>
@@ -454,11 +492,8 @@
     {/if}
     
     {#if $uploaderStatus === FirmwareUploadStatus.expectReboot && uploadType === FirmwareUploadType.modem}
-      <p>The {uploadType} firmware has been uploaded successfully.</p>
-      <p>Waiting for the {uploadType} to restart... {flashError ? `(${flashError})` : ''}</p>
-      {#if flashProgress != null && flashProgress > 0}
-        <p>Flashing firmware in progress...</p>
-      {/if}
+      <p>The modem firmware was downloaded, verified, and installed successfully.</p>
+      <p>Waiting for the modem to restart...</p>
     {/if}
 
     {#if $uploaderStatus === FirmwareUploadStatus.error}

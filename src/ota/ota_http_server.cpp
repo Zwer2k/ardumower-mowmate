@@ -24,6 +24,8 @@ HttpServer::HttpServer(Settings::Settings &settings, AsyncWebServer &server, Mow
     : ArduMower::Modem::Http::Common(settings), _server(server), _mowerUpdater(mowerUpdater),
   _active(false), _failed(false), _restart(false), _restartTime(0), _flashSession(NULL),
   _githubUpdateActive(false), _githubUpdateSucceeded(false), _githubUpdateErrorLogged(false),
+  _githubUpdateBuffered(false), _githubDownloadProgress(0), _githubDownloadTotal(0),
+  _githubFlashProgress(0), _githubFlashTotal(0),
   _githubUpdateError{} {}
 
 void HttpServer::begin()
@@ -102,6 +104,15 @@ void HttpServer::handleGithubUpdateRequest(AsyncWebServerRequest *request)
   _githubUpdateActive = true;
   _githubUpdateSucceeded = false;
   _githubUpdateErrorLogged = false;
+  _githubDownloadProgress = 0;
+  _githubDownloadTotal = 0;
+  _githubFlashProgress = 0;
+  _githubFlashTotal = 0;
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+  _githubUpdateBuffered = true;
+#else
+  _githubUpdateBuffered = false;
+#endif
   _githubUpdateError[0] = '\0';
   otaFlashProgress = 0;
   otaFlashTotal = 0;
@@ -132,8 +143,11 @@ void HttpServer::handleGithubUpdateStatus(AsyncWebServerRequest *request)
   JsonObject root = response->getRoot();
   root["active"] = _githubUpdateActive;
   root["success"] = _githubUpdateSucceeded;
-  root["progress"] = otaFlashProgress;
-  root["total"] = otaFlashTotal;
+  root["buffered"] = _githubUpdateBuffered;
+  root["downloadProgress"] = _githubDownloadProgress;
+  root["downloadTotal"] = _githubDownloadTotal;
+  root["flashProgress"] = _githubFlashProgress;
+  root["flashTotal"] = _githubFlashTotal;
   if (_githubUpdateError[0] != '\0') root["error"] = _githubUpdateError;
   response->setLength();
   request->send(response);
@@ -149,6 +163,7 @@ void HttpServer::githubUpdateTask(void *parameter)
 
 void HttpServer::runGithubUpdate(const String &version)
 {
+  static const size_t MAX_GITHUB_OTA_SIZE = 0x300000;
 #ifdef CONFIG_IDF_TARGET_ESP32S3
   const char *target = "esp32-s3";
 #else
@@ -172,7 +187,8 @@ void HttpServer::runGithubUpdate(const String &version)
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
   bool updateStarted = false;
-  uint8_t *buffer = NULL;
+  uint8_t *downloadBuffer = NULL;
+  uint8_t *dramBuffer = NULL;
   const char *error = NULL;
   char errorDetail[128] = {};
   int httpCode = 0;
@@ -227,6 +243,107 @@ void HttpServer::runGithubUpdate(const String &version)
   {
     error = "invalid-content-length";
   }
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+  if (!error && (size_t)total > MAX_GITHUB_OTA_SIZE)
+  {
+    error = "firmware-too-large";
+    Log(ERR, "Ota::HttpServer::github-update::firmware-too-large(size=%u max=%u)",
+        (unsigned)total, (unsigned)MAX_GITHUB_OTA_SIZE);
+  }
+  if (!error)
+  {
+    Log(INFO, "Ota::HttpServer::github-update::psram-alloc(size=%u free=%u max=%u)",
+        (unsigned)total, (unsigned)ESP.getFreePsram(), (unsigned)ESP.getMaxAllocPsram());
+    downloadBuffer = (uint8_t *)ps_malloc((size_t)total);
+    if (!downloadBuffer) error = "psram-allocation-failed";
+  }
+#else
+  if (!error && !Update.begin((size_t)total))
+  {
+    error = "update-begin-failed";
+  }
+  else if (!error)
+  {
+    updateStarted = true;
+  }
+  if (!error)
+  {
+    dramBuffer = (uint8_t *)malloc(4096);
+    if (!dramBuffer) error = "buffer-allocation-failed";
+  }
+#endif
+
+  size_t downloaded = 0;
+  unsigned long lastDataAt = millis();
+  WiFiClient *stream = error ? NULL : http.getStreamPtr();
+  _githubDownloadTotal = total;
+  _githubFlashTotal = total;
+  otaFlashProgress = 0;
+  otaFlashTotal = total;
+
+  while (!error && downloaded < (size_t)total)
+  {
+    const int available = stream->available();
+    if (available <= 0)
+    {
+      if (!http.connected() || millis() - lastDataAt > 15000)
+      {
+        error = "download-interrupted";
+        Log(ERR, "Ota::HttpServer::github-update::stream-interrupted(downloaded=%u total=%u connected=%d idle=%ums)",
+          (unsigned)downloaded, (unsigned)total, http.connected(), (unsigned)(millis() - lastDataAt));
+        break;
+      }
+      delay(1);
+      continue;
+    }
+
+    const size_t requested = std::min(
+      std::min((size_t)available, (size_t)4096),
+      (size_t)total - downloaded);
+    uint8_t *targetBuffer = downloadBuffer ? downloadBuffer + downloaded : dramBuffer;
+    const size_t received = stream->readBytes(targetBuffer, requested);
+    if (received == 0)
+    {
+      error = "download-read-failed";
+      Log(ERR, "Ota::HttpServer::github-update::read-failed(downloaded=%u total=%u available=%d)",
+          (unsigned)downloaded, (unsigned)total, available);
+      break;
+    }
+    if (downloaded == 0 && targetBuffer[0] != 0xe9)
+    {
+      error = "invalid-firmware-header";
+      Log(ERR, "Ota::HttpServer::github-update::invalid-header(first=0x%02x)", targetBuffer[0]);
+      break;
+    }
+#ifndef CONFIG_IDF_TARGET_ESP32S3
+    if (Update.write(targetBuffer, received) != received)
+    {
+      error = "update-write-failed";
+      Log(ERR, "Ota::HttpServer::github-update::write-failed(written=%u chunk=%u error=%s)",
+          (unsigned)downloaded, (unsigned)received, Update.errorString());
+      break;
+    }
+#endif
+
+    downloaded += received;
+    _githubDownloadProgress = downloaded;
+#ifndef CONFIG_IDF_TARGET_ESP32S3
+    _githubFlashProgress = downloaded;
+    otaFlashProgress = downloaded;
+#endif
+    lastDataAt = millis();
+    yield();
+  }
+
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+  http.end();
+  if (!error)
+  {
+    Log(INFO, "Ota::HttpServer::github-update::download-success(size=%u free=%u max=%u)",
+        (unsigned)downloaded, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    dramBuffer = (uint8_t *)malloc(4096);
+    if (!dramBuffer) error = "buffer-allocation-failed";
+  }
   if (!error && !Update.begin((size_t)total))
   {
     error = "update-begin-failed";
@@ -236,62 +353,27 @@ void HttpServer::runGithubUpdate(const String &version)
     updateStarted = true;
   }
 
-  if (!error)
+  size_t flashed = 0;
+  while (!error && flashed < (size_t)total)
   {
-    buffer = (uint8_t *)malloc(4096);
-    if (!buffer) error = "buffer-allocation-failed";
-  }
-
-  size_t written = 0;
-  unsigned long lastDataAt = millis();
-  WiFiClient *stream = error ? NULL : http.getStreamPtr();
-  otaFlashTotal = total;
-  otaFlashProgress = 0;
-
-  while (!error && written < (size_t)total)
-  {
-    const int available = stream->available();
-    if (available <= 0)
-    {
-      if (!http.connected() || millis() - lastDataAt > 15000)
-      {
-        error = "download-interrupted";
-        Log(ERR, "Ota::HttpServer::github-update::stream-interrupted(written=%u total=%u connected=%d idle=%ums)",
-            (unsigned)written, (unsigned)total, http.connected(), (unsigned)(millis() - lastDataAt));
-        break;
-      }
-      delay(1);
-      continue;
-    }
-
-    const size_t requested = std::min((size_t)available, (size_t)4096);
-    const size_t received = stream->readBytes(buffer, requested);
-    if (received == 0)
-    {
-      error = "download-read-failed";
-      Log(ERR, "Ota::HttpServer::github-update::read-failed(written=%u total=%u available=%d)",
-          (unsigned)written, (unsigned)total, available);
-      break;
-    }
-    if (written == 0 && buffer[0] != 0xe9)
-    {
-      error = "invalid-firmware-header";
-      Log(ERR, "Ota::HttpServer::github-update::invalid-header(first=0x%02x)", buffer[0]);
-      break;
-    }
-    if (Update.write(buffer, received) != received)
+    const size_t chunk = std::min((size_t)4096, (size_t)total - flashed);
+    memcpy(dramBuffer, downloadBuffer + flashed, chunk);
+    if (Update.write(dramBuffer, chunk) != chunk)
     {
       error = "update-write-failed";
       Log(ERR, "Ota::HttpServer::github-update::write-failed(written=%u chunk=%u error=%s)",
-          (unsigned)written, (unsigned)received, Update.errorString());
+          (unsigned)flashed, (unsigned)chunk, Update.errorString());
       break;
     }
-
-    written += received;
-    otaFlashProgress = written;
-    lastDataAt = millis();
+    flashed += chunk;
+    _githubFlashProgress = flashed;
+    otaFlashProgress = flashed;
+    esp_task_wdt_reset();
     yield();
   }
+#else
+  const size_t flashed = downloaded;
+#endif
 
   if (!error && !Update.end(true))
   {
@@ -299,8 +381,11 @@ void HttpServer::runGithubUpdate(const String &version)
     Log(ERR, "Ota::HttpServer::github-update::end-failed(error=%s)", Update.errorString());
   }
   if (error && updateStarted) Update.abort();
-  if (buffer) free(buffer);
+  if (dramBuffer) free(dramBuffer);
+  if (downloadBuffer) free(downloadBuffer);
+#ifndef CONFIG_IDF_TARGET_ESP32S3
   http.end();
+#endif
 
   if (error)
   {
@@ -312,12 +397,13 @@ void HttpServer::runGithubUpdate(const String &version)
     otaFlashProgress = otaFlashTotal;
     otaFlashForceSend = true;
     _githubUpdateSucceeded = true;
-    Log(INFO, "Ota::HttpServer::github-update::success(%u)", (unsigned)written);
+    Log(INFO, "Ota::HttpServer::github-update::success(downloaded=%u flashed=%u)",
+      (unsigned)downloaded, (unsigned)flashed);
   }
 
   _githubUpdateActive = false;
   _active = false;
-  if (!error) requestRestart();
+  if (!error) requestRestart(2000);
 }
 
 void HttpServer::loop()
@@ -457,9 +543,9 @@ void HttpServer::continueUpdate(AsyncWebServerRequest *request, size_t index, ui
   session->handle(index, data, len, final);
 }
 
-void HttpServer::requestRestart()
+void HttpServer::requestRestart(uint32_t delayMs)
 {
-  _restartTime = millis() + 100;
+  _restartTime = millis() + delayMs;
   _restart = true;
 }
 

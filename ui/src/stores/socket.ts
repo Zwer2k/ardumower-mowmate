@@ -130,11 +130,16 @@ export function clearMotorPlotStore() {
 }
 
 class SocketService {
+  private static readonly CONNECT_TIMEOUT_MS = 15000;
+  private static readonly LIVENESS_CHECK_INTERVAL_MS = 15000;
+  private static readonly LIVENESS_TIMEOUT_MS = 90000;
+  private static readonly RECONNECT_BASE_MS = 3000;
+  private static readonly RECONNECT_MAX_MS = 30000;
+
   private restartTimer: NodeJS.Timeout | null = null;
   private reconnect = true;
   private reconnectAttempts = 0;
   private connectionTimeout: NodeJS.Timeout | null = null;
-  private heartbeatInterval: NodeJS.Timeout | null = null;
   private livenessInterval: NodeJS.Timeout | null = null;
   private lastMessageTime: number = 0;
   private isPageVisible = true;
@@ -191,7 +196,7 @@ class SocketService {
           if (socket && socket.readyState === WebSocket.CONNECTING) {
             socket.close();
           }
-        }, 5000);
+        }, SocketService.CONNECT_TIMEOUT_MS);
 
         socket.addEventListener("open", () => {
           // Ignoriere Events von veralteten Sockets
@@ -212,7 +217,6 @@ class SocketService {
             this.connectionTimeout = null;
           }
 
-          this.startHeartbeat(socket);
           this.startLivenessCheck(socket);
 
           socketStore.update((s) => ({ ...s, connected: true }));
@@ -236,10 +240,6 @@ class SocketService {
           if (this.connectionTimeout) {
             clearTimeout(this.connectionTimeout);
             this.connectionTimeout = null;
-          }
-          if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval);
-            this.heartbeatInterval = null;
           }
           if (this.livenessInterval) {
             clearInterval(this.livenessInterval);
@@ -270,8 +270,8 @@ class SocketService {
           ) {
             this.reconnectAttempts = Math.min(this.reconnectAttempts + 1, 6);
             const delay = Math.min(
-              1000 * Math.pow(2, this.reconnectAttempts - 1),
-              30000,
+              SocketService.RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempts - 1),
+              SocketService.RECONNECT_MAX_MS,
             );
             this.restartTimer = setTimeout(() => {
               this.connect();
@@ -637,15 +637,14 @@ class SocketService {
         return { ...state, socket };
       } catch (error) {
         this.clearAllTimers();
-        this.reconnectAttempts++;
+        this.reconnectAttempts = Math.min(this.reconnectAttempts + 1, 6);
         if (
           this.reconnect &&
-          this.reconnectAttempts < this.maxReconnectAttempts &&
           this.isPageVisible
         ) {
           const delay = Math.min(
-            1000 * Math.pow(2, this.reconnectAttempts - 1),
-            30000,
+            SocketService.RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempts - 1),
+            SocketService.RECONNECT_MAX_MS,
           );
           this.restartTimer = setTimeout(() => {
             this.connect();
@@ -1011,10 +1010,6 @@ class SocketService {
       clearTimeout(this.connectionTimeout);
       this.connectionTimeout = null;
     }
-    if (this.heartbeatInterval != null) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
     if (this.livenessInterval != null) {
       clearInterval(this.livenessInterval);
       this.livenessInterval = null;
@@ -1035,29 +1030,10 @@ class SocketService {
         }
         return;
       }
-      if (Date.now() - this.lastMessageTime > 45000) {
-        // Keine Nachricht in 45 Sekunden - Verbindung wahrscheinlich tot (z.B. ESP-Neustart)
+      if (Date.now() - this.lastMessageTime > SocketService.LIVENESS_TIMEOUT_MS) {
         try { socket.close(1000, "Liveness timeout"); } catch (_) {}
       }
-    }, 15000);
-  }
-
-  private startHeartbeat(socket: WebSocket) {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-    }
-
-    this.heartbeatInterval = setInterval(() => {
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        try {
-          socket.send(JSON.stringify({ type: "ping" }));
-        } catch (error) {
-          if (socket) {
-            socket.close();
-          }
-        }
-      }
-    }, 30000);
+    }, SocketService.LIVENESS_CHECK_INTERVAL_MS);
   }
 
   private handleVisibilityChange() {

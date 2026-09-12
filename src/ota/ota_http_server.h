@@ -119,6 +119,11 @@ namespace ArduMower
         volatile bool _githubUpdateActive;
         volatile bool _githubUpdateSucceeded;
         volatile bool _githubUpdateErrorLogged;
+        volatile bool _githubUpdateBuffered;
+        volatile size_t _githubDownloadProgress;
+        volatile size_t _githubDownloadTotal;
+        volatile size_t _githubFlashProgress;
+        volatile size_t _githubFlashTotal;
         char _githubUpdateError[128];
 
         void handleUploadRequest(AsyncWebServerRequest *request);
@@ -146,7 +151,7 @@ namespace ArduMower
         virtual void loop() override;
         virtual bool active() override { return _active; };
 
-        void requestRestart();
+        void requestRestart(uint32_t delayMs = 100);
         void queueFlash(Http::ModemUploadSession *session);
         std::function<void(size_t, size_t)> onFlashProgress;
       };

@@ -31,6 +31,15 @@ export class FirmwareUploader {
   private _progress = writable<number>(0)
   public get progress(): Readable<number> { return this._progress }
 
+  private _githubDownloadProgress = writable<number>(0)
+  public get githubDownloadProgress(): Readable<number> { return this._githubDownloadProgress }
+
+  private _githubFlashProgress = writable<number>(0)
+  public get githubFlashProgress(): Readable<number> { return this._githubFlashProgress }
+
+  private _githubBuffered = writable<boolean>(false)
+  public get githubBuffered(): Readable<boolean> { return this._githubBuffered }
+
   private _error: null | string = null
   public get error(): null | string { return this._error }
 
@@ -70,10 +79,14 @@ export class FirmwareUploader {
   public async installGithubRelease(version: string) {
     this._error = null;
     this._progress.set(0);
+    this._githubDownloadProgress.set(0);
+    this._githubFlashProgress.set(0);
+    this._githubBuffered.set(false);
     this._status.set(FirmwareUploadStatus.uploading);
 
     try {
       const before = await getModemInfo();
+      this._githubBuffered.set(before.firmware_target === "esp32-s3");
       const response = await fetch(`/api/modem/ota/github?version=${encodeURIComponent(version)}`, {
         method: 'POST',
       });
@@ -82,8 +95,23 @@ export class FirmwareUploader {
         throw new Error(result.error || result.result || `HTTP ${response.status}`);
       }
 
-      this._status.set(FirmwareUploadStatus.expectReboot);
-      await waitForGithubUpdate(before, 5 * 60 * 1000);
+      await waitForGithubUpdate(
+        before,
+        5 * 60 * 1000,
+        (status) => {
+          const downloadProgress = percentage(status.downloadProgress, status.downloadTotal);
+          const flashProgress = status.success
+            ? 100
+            : Math.min(99, percentage(status.flashProgress, status.flashTotal));
+          this._githubBuffered.set(status.buffered);
+          this._githubDownloadProgress.set(downloadProgress);
+          this._githubFlashProgress.set(flashProgress);
+          this._progress.set(status.buffered ? downloadProgress : flashProgress);
+        },
+        () => this._status.set(FirmwareUploadStatus.expectReboot),
+      );
+      this._githubDownloadProgress.set(100);
+      this._githubFlashProgress.set(100);
       this._status.set(FirmwareUploadStatus.success);
     } catch (error) {
       this._error = error instanceof Error ? error.message : String(error);
@@ -199,32 +227,55 @@ const delay = async (ms: number) => new Promise(resolve => setTimeout(resolve, m
 interface GithubUpdateStatus {
   active: boolean;
   success: boolean;
+  buffered: boolean;
+  downloadProgress: number;
+  downloadTotal: number;
+  flashProgress: number;
+  flashTotal: number;
   error?: string;
 }
+
+const percentage = (progress: number, total: number): number =>
+  total > 0 ? Math.min(100, progress / total * 100) : 0;
 
 const waitForGithubUpdate = async (
   before: ApiModemInfoResponse,
   timeout: number,
+  onProgress: (status: GithubUpdateStatus) => void,
+  onExpectReboot: () => void,
 ): Promise<void> => {
   const limit = millis() + timeout;
+  let updateSucceeded = false;
+
   while (millis() <= limit) {
-    try {
-      const response = await fetch('/api/modem/ota/github/status');
-      if (response.ok) {
-        const status = await response.json() as GithubUpdateStatus;
-        if (status.error) throw new Error(status.error);
+    if (!updateSucceeded) {
+      try {
+        const response = await fetch('/api/modem/ota/github/status');
+        if (response.ok) {
+          const status = await response.json() as GithubUpdateStatus;
+          if (status.error) throw new Error(status.error);
+          onProgress(status);
+          if (status.success) {
+            updateSucceeded = true;
+            onExpectReboot();
+          }
+        }
+      } catch (error) {
+        if (error instanceof Error && !error.message.includes('fetch')) throw error;
       }
-    } catch (error) {
-      if (error instanceof Error && !error.message.includes('fetch')) throw error;
     }
 
-    try {
-      const now = await getModemInfo(2000);
-      if (now.uptime < before.uptime) return;
-    } catch (_) {}
+    if (updateSucceeded) {
+      try {
+        const now = await getModemInfo(2000);
+        if (now.uptime < before.uptime) return;
+      } catch (_) {}
+    }
     await delay(500);
   }
-  throw new Error('timeout waiting for firmware update');
+  throw new Error(updateSucceeded
+    ? 'timeout waiting for modem restart'
+    : 'timeout waiting for firmware update');
 }
 
 export interface ApiModemInfoResponse {
