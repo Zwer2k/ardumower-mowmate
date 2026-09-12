@@ -60,6 +60,7 @@ namespace ArduMower
         saveSchedule,
         requestSchedule,
         requestClock,
+        requestPing,
         requestDataTypeLength
       };
 
@@ -84,6 +85,7 @@ namespace ArduMower
         clock,
         obstacles,
         mapAck,
+        responsePong,
         responseDataTypeLength
       };
 

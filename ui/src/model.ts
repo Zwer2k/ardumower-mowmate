@@ -317,6 +317,7 @@ export enum ResponseDataType {
   clock,
   obstacles,
   mapAck,
+  pong,
 }
 
 export interface ScheduleEntry {
@@ -442,6 +443,7 @@ export enum RequestDataType {
   saveSchedule,
   requestSchedule,
   requestClock,
+  ping,
 }
 
 export interface MowSettingsData {

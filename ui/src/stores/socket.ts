@@ -129,31 +129,57 @@ export function clearMotorPlotStore() {
   motorPlotStore.set([]);
 }
 
+export interface FlashProgress {
+  /** 0..100 */
+  progress: number;
+  source: "modem" | "mower";
+  timestamp: number;
+}
+
+/** Flash-Fortschritt beider Firmware-Typen. Wird aus dem gemeinsamen Socket
+ *  gespeist, damit der Firmware-Dialog keine zweite WebSocket-Verbindung
+ *  aufbauen muss – der Modem hat nur wenige Client-Slots und gerade während
+ *  des Flashens ist der Heap knapp. */
+export const flashProgressStore = writable<FlashProgress | null>(null);
+
+export function resetFlashProgress() {
+  flashProgressStore.set(null);
+}
+
+function setFlashProgress(progress: number, source: "modem" | "mower") {
+  flashProgressStore.set({
+    progress: Math.max(0, Math.min(100, progress)),
+    source,
+    timestamp: Date.now(),
+  });
+}
+
 class SocketService {
   private static readonly CONNECT_TIMEOUT_MS = 15000;
-  private static readonly LIVENESS_CHECK_INTERVAL_MS = 15000;
-  private static readonly LIVENESS_TIMEOUT_MS = 90000;
+  private static readonly PING_INTERVAL_MS = 30000;
+  private static readonly PONG_TIMEOUT_MS = 15000;
   private static readonly RECONNECT_BASE_MS = 3000;
   private static readonly RECONNECT_MAX_MS = 30000;
+  private static readonly STABLE_CONNECTION_MS = 60000;
+  private static readonly MAX_PENDING_MESSAGES = 50;
 
   private restartTimer: NodeJS.Timeout | null = null;
   private reconnect = true;
   private reconnectAttempts = 0;
   private connectionTimeout: NodeJS.Timeout | null = null;
-  private livenessInterval: NodeJS.Timeout | null = null;
-  private lastMessageTime: number = 0;
+  private stableConnectionTimer: NodeJS.Timeout | null = null;
+  private pingInterval: NodeJS.Timeout | null = null;
+  private pongTimeout: NodeJS.Timeout | null = null;
   private isPageVisible = true;
   private pendingMessages: RequestSocketMessage[] = [];
   private nextMapSyncId = 1;
   private pendingUpload: { mapData: import("../model").MapSetData; syncId: number; mapId: string } | null = null;
   private pendingUploadRetry: ReturnType<typeof setTimeout> | null = null;
+  private readonly boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
   constructor() {
     if (browser) {
-      document.addEventListener(
-        "visibilitychange",
-        this.handleVisibilityChange.bind(this),
-      );
+      document.addEventListener("visibilitychange", this.boundVisibilityChange);
     }
   }
 
@@ -162,30 +188,37 @@ class SocketService {
       return;
     }
 
-    socketStore.update((state) => {
-      if (
-        state.socket != null &&
-        (state.socket.readyState === WebSocket.CONNECTING ||
-         state.socket.readyState === WebSocket.CLOSING)
-      ) {
-        return state;
-      }
+    // NOTE: never run this inside socketStore.update(). Svelte stores are not
+    // re-entrant: a nested update() writes first and the outer callback's
+    // return value then overwrites it again — the freshly created socket would
+    // be dropped from the store, its open handler would consider itself stale
+    // and close, and its close handler would skip the reconnect. The result was
+    // a UI that stayed disconnected after switching browser tabs.
+    const state = get(socketStore);
 
-      if (state.socket != null && state.socket.readyState === WebSocket.OPEN) {
-        return state;
-      }
+    if (
+      state.socket != null &&
+      (state.socket.readyState === WebSocket.CONNECTING ||
+        state.socket.readyState === WebSocket.CLOSING ||
+        state.socket.readyState === WebSocket.OPEN)
+    ) {
+      return;
+    }
 
-      if (!this.reconnect || !this.isPageVisible) {
-        return state;
-      }
+    if (!this.reconnect || !this.isPageVisible) {
+      return;
+    }
 
-      this.clearAllTimers();
-      this.pendingMessages = [];
+    this.clearAllTimers();
+    this.pendingMessages = [];
 
-      if (state.socket != null) {
+    if (state.socket != null) {
+      try {
         state.socket.close();
-      }
+      } catch (_) {}
+    }
 
+    {
       let host = location.host;
       const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
 
@@ -200,24 +233,27 @@ class SocketService {
 
         socket.addEventListener("open", () => {
           // Ignoriere Events von veralteten Sockets
-          let isCurrent = false;
-          socketStore.update((s) => {
-            isCurrent = s.socket === socket;
-            return s;
-          });
-          if (!isCurrent) {
+          if (get(socketStore).socket !== socket) {
             try { socket.close(); } catch (_) {}
             return;
           }
-
-          this.reconnectAttempts = 0;
 
           if (this.connectionTimeout) {
             clearTimeout(this.connectionTimeout);
             this.connectionTimeout = null;
           }
 
-          this.startLivenessCheck(socket);
+          if (this.stableConnectionTimer) {
+            clearTimeout(this.stableConnectionTimer);
+          }
+          this.stableConnectionTimer = setTimeout(() => {
+            if (socket.readyState === WebSocket.OPEN) {
+              this.reconnectAttempts = 0;
+            }
+            this.stableConnectionTimer = null;
+          }, SocketService.STABLE_CONNECTION_MS);
+
+          this.startHeartbeat(socket);
 
           socketStore.update((s) => ({ ...s, connected: true }));
 
@@ -241,10 +277,7 @@ class SocketService {
             clearTimeout(this.connectionTimeout);
             this.connectionTimeout = null;
           }
-          if (this.livenessInterval) {
-            clearInterval(this.livenessInterval);
-            this.livenessInterval = null;
-          }
+          this.clearHeartbeatTimers();
           // Socket im close-Handler auf null setzen; hier nur explizit
           // schließen, falls der Browser kein close-Event feuert.
           try { socket.close(); } catch (_) {}
@@ -252,12 +285,7 @@ class SocketService {
 
         socket.addEventListener("close", () => {
           // Ignoriere Events von veralteten Sockets
-          let isCurrent = false;
-          socketStore.update((s) => {
-            isCurrent = s.socket === socket;
-            return s;
-          });
-          if (!isCurrent) {
+          if (get(socketStore).socket !== socket) {
             return;
           }
 
@@ -280,10 +308,25 @@ class SocketService {
         });
 
         socket.addEventListener("message", async (message: any) => {
-          this.lastMessageTime = Date.now();
           try {
             const jsonData = JSON.parse(message.data);
             const msgType = jsonData.type as ResponseDataType;
+            if (msgType === ResponseDataType.pong) {
+              if (this.pongTimeout) {
+                clearTimeout(this.pongTimeout);
+                this.pongTimeout = null;
+              }
+              return;
+            }
+
+            // Modem-Flash-Fortschritt: {"status":{"progress":n}} – ohne type.
+            if (
+              jsonData.status &&
+              typeof jsonData.status.progress === "number"
+            ) {
+              setFlashProgress(jsonData.status.progress, "modem");
+              return;
+            }
 
             // Map-Workflow-Store wird nur bei Map-relevanten Nachrichten
             // gebraucht; bei allen anderen Nachrichten (z. B. Upload-Progress
@@ -351,9 +394,12 @@ class SocketService {
                   const incomingLines = (jsonData.data as ConsoleResponseData)
                     .lines;
                   // Mower-Firmware-Upload sendet Fortschritt als StatusMessage
-                  // (ohne lines). Solche Nachrichten ignorieren, damit der
-                  // Upload-Dialog in FirmwareUpload.svelte sie verarbeitet.
+                  // (ohne lines) über denselben Kanal.
                   if (!Array.isArray(incomingLines)) {
+                    const progress = (jsonData.data as any)?.progress;
+                    if (typeof progress === "number") {
+                      setFlashProgress(progress, "mower");
+                    }
                     break;
                   }
                   newState.consoleLines = [
@@ -634,7 +680,7 @@ class SocketService {
           }
         });
 
-        return { ...state, socket };
+        socketStore.update((s) => ({ ...s, socket }));
       } catch (error) {
         this.clearAllTimers();
         this.reconnectAttempts = Math.min(this.reconnectAttempts + 1, 6);
@@ -650,9 +696,8 @@ class SocketService {
             this.connect();
           }, delay);
         }
-        return state;
       }
-    });
+    }
   }
 
   sendMessage(message: RequestSocketMessage) {
@@ -664,6 +709,12 @@ class SocketService {
       ) {
         state.socket.send(JSON.stringify(message));
       } else if (browser) {
+        // Begrenzen: während einer längeren Trennung (z. B. Firmware-Flash)
+        // würde die Queue sonst unbegrenzt wachsen. Die ältesten Nachrichten
+        // sind auch die, die nach dem Reconnect am wenigsten aussagen.
+        if (this.pendingMessages.length >= SocketService.MAX_PENDING_MESSAGES) {
+          this.pendingMessages.shift();
+        }
         this.pendingMessages.push(message);
       }
       return state;
@@ -1010,30 +1061,41 @@ class SocketService {
       clearTimeout(this.connectionTimeout);
       this.connectionTimeout = null;
     }
-    if (this.livenessInterval != null) {
-      clearInterval(this.livenessInterval);
-      this.livenessInterval = null;
+    if (this.stableConnectionTimer != null) {
+      clearTimeout(this.stableConnectionTimer);
+      this.stableConnectionTimer = null;
+    }
+    this.clearHeartbeatTimers();
+  }
+
+  private clearHeartbeatTimers() {
+    if (this.pingInterval != null) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+    if (this.pongTimeout != null) {
+      clearTimeout(this.pongTimeout);
+      this.pongTimeout = null;
     }
   }
 
-  private startLivenessCheck(socket: WebSocket) {
-    this.lastMessageTime = Date.now();
-    if (this.livenessInterval) {
-      clearInterval(this.livenessInterval);
-      this.livenessInterval = null;
-    }
-    this.livenessInterval = setInterval(() => {
-      if (socket.readyState !== WebSocket.OPEN) {
-        if (this.livenessInterval) {
-          clearInterval(this.livenessInterval);
-          this.livenessInterval = null;
-        }
-        return;
+  private startHeartbeat(socket: WebSocket) {
+    this.clearHeartbeatTimers();
+    this.pingInterval = setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN || this.pongTimeout != null) return;
+
+      try {
+        socket.send(JSON.stringify({ type: RequestDataType.ping, data: {} }));
+        this.pongTimeout = setTimeout(() => {
+          this.pongTimeout = null;
+          if (socket.readyState === WebSocket.OPEN) {
+            try { socket.close(1000, "Pong timeout"); } catch (_) {}
+          }
+        }, SocketService.PONG_TIMEOUT_MS);
+      } catch (_) {
+        try { socket.close(); } catch (_) {}
       }
-      if (Date.now() - this.lastMessageTime > SocketService.LIVENESS_TIMEOUT_MS) {
-        try { socket.close(1000, "Liveness timeout"); } catch (_) {}
-      }
-    }, SocketService.LIVENESS_CHECK_INTERVAL_MS);
+    }, SocketService.PING_INTERVAL_MS);
   }
 
   private handleVisibilityChange() {
@@ -1042,13 +1104,16 @@ class SocketService {
     this.isPageVisible = !document.hidden;
 
     if (this.isPageVisible) {
-      socketStore.update((state) => {
-        if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
-          this.reconnectAttempts = 0;
-          this.connect();
-        }
-        return state;
-      });
+      const socket = get(socketStore).socket;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        this.reconnectAttempts = 0;
+        this.connect();
+      } else {
+        // Der Socket hat das Ausblenden überlebt, aber clearAllTimers() hat den
+        // Heartbeat gestoppt. Ohne Neustart bleibt die Verbindung für den Rest
+        // der Sitzung ungeprüft und halb offene Verbindungen fallen nicht auf.
+        this.startHeartbeat(socket);
+      }
     } else {
       this.clearAllTimers();
     }
@@ -1057,10 +1122,9 @@ class SocketService {
   destroy() {
     if (!browser) return;
 
-    document.removeEventListener(
-      "visibilitychange",
-      this.handleVisibilityChange.bind(this),
-    );
+    // bind() erzeugt bei jedem Aufruf eine neue Funktion; mit einem frisch
+    // gebundenen Handler hätte removeEventListener nichts entfernt.
+    document.removeEventListener("visibilitychange", this.boundVisibilityChange);
     this.disconnect();
   }
 }

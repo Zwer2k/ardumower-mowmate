@@ -13,6 +13,11 @@
 #define _LOG_ "UiSocket::"
 
 uint32_t clientPingInterval = 10000;
+
+// Upper bound for reassembling fragmented WebSocket text messages. Anything
+// larger than this could not be processed on the ESP anyway (String::concat
+// doubles the buffer while growing), so cap it instead of running out of heap.
+static const size_t maxFrameBufferBytes = 64 * 1024;
 uint32_t defaultVersionRequestInterval = 10000;
 uint32_t defaultStateUpdateInterval = 5000;
 
@@ -73,6 +78,22 @@ static void sanitizeUtf8InPlace(String& str) {
     }
   }
   str = out;
+}
+
+// Cheap check for the frontend heartbeat frame `{"type":<requestPing>,...}`.
+// Runs in the async_tcp task, so it must not allocate or parse JSON.
+static bool isPingRequest(const char *data, size_t len) {
+  char needle[24];
+  int n = snprintf(needle, sizeof(needle), "\"type\":%d", (int)ArduMower::Modem::Http::RequestDataType::requestPing);
+  if (n <= 0 || (size_t)n >= sizeof(needle) || len < (size_t)n) return false;
+  for (size_t i = 0; i + (size_t)n <= len; i++) {
+    if (memcmp(data + i, needle, (size_t)n) == 0) {
+      // Reject longer numbers (e.g. "type":230 when looking for "type":23)
+      const char next = (i + (size_t)n < len) ? data[i + n] : '\0';
+      if (next < '0' || next > '9') return true;
+    }
+  }
+  return false;
 }
 
 // Conservative heap guard: leave enough headroom so that the underlying TCP
@@ -542,6 +563,13 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     break;
   }
 
+  case RequestDataType::requestPing: {
+    char response[24];
+    snprintf(response, sizeof(response), "{\"type\":%d}", (int)ResponseDataType::responsePong);
+    sendTextRaw(response);
+    break;
+  }
+
   default:
     break;
   }
@@ -681,7 +709,22 @@ void UiSocketHandler::enqueueWsEvent(WsEvent &&evt) {
       if (_wsEvtQueue.front().data) free(_wsEvtQueue.front().data);
       _wsEvtQueue.pop_front();
     }
-    if (_wsEvtQueue.size() < 64) {
+    // CONNECT/DISCONNECT must never be dropped: losing a DISCONNECT leaks the
+    // UiSocketItem and its _frameBuffer entry forever, losing a CONNECT leaves
+    // a client that the modem can never answer. Evict data frames instead —
+    // a truncated request is recoverable, a lost lifecycle event is not.
+    const bool critical = (evt.type == WsEvtType::CONNECT || evt.type == WsEvtType::DISCONNECT);
+    if (critical) {
+      for (auto it = _wsEvtQueue.begin(); it != _wsEvtQueue.end() && _wsEvtQueue.size() >= 64; ) {
+        if (it->type == WsEvtType::CONNECT || it->type == WsEvtType::DISCONNECT) {
+          ++it;
+          continue;
+        }
+        if (it->data) free(it->data);
+        it = _wsEvtQueue.erase(it);
+      }
+    }
+    if (_wsEvtQueue.size() < 64 || critical) {
       _wsEvtQueue.push_back(std::move(evt));
     } else {
       if (evt.data) free(evt.data);
@@ -725,39 +768,39 @@ bool UiSocketHandler::sendTextToId(uint32_t clientId, const char* data, size_t l
 // Drain the event queue and process all pending ws events in loopTask.
 // This is called once per loop() iteration.
 void UiSocketHandler::processWsEvents() {
-  // Process pending hellos first (sent from CONNECT events)
-  if (xSemaphoreTake(_helloMutex, 0) == pdTRUE) {
-    while (!_pendingHellos.empty()) {
-      auto hello = std::move(_pendingHellos.front());
-      _pendingHellos.pop_front();
-      xSemaphoreGive(_helloMutex);
+  // Process pending hellos first (sent from CONNECT events).
+  // The mutex is released while the (potentially slow) send runs, so track
+  // ownership explicitly: giving a mutex that is currently held by ANOTHER
+  // task would release that task's lock and corrupt the deque.
+  bool helloHeld = (xSemaphoreTake(_helloMutex, 0) == pdTRUE);
+  while (helloHeld && !_pendingHellos.empty()) {
+    // Send hello using the library's locked API.
+    // If a chunked map transfer is active, defer the hello to avoid
+    // interleaving a text frame with fragmented frames (WebSocket spec
+    // violation → "Invalid frame header" / "Could not decode a text frame").
+    if (mapChunkSendState.active) break;
 
-      // Send hello using the library's locked API.
-      // If a chunked map transfer is active, defer the hello to avoid
-      // interleaving a text frame with fragmented frames (WebSocket spec
-      // violation → "Invalid frame header" / "Could not decode a text frame").
-      if (mapChunkSendState.active) {
-        // Re-queue at the front for later
-        xSemaphoreTake(_helloMutex, portMAX_DELAY);
-        _pendingHellos.push_front(std::move(hello));
-        xSemaphoreGive(_helloMutex);
-        break;
-      }
-      _ws->text(hello.clientId, hello.json.c_str(), hello.json.length());
-      markClientActivity();
-
-      if (xSemaphoreTake(_helloMutex, 0) != pdTRUE) break;
-    }
+    auto hello = std::move(_pendingHellos.front());
+    _pendingHellos.pop_front();
     xSemaphoreGive(_helloMutex);
+    helloHeld = false;
+
+    _ws->text(hello.clientId, hello.json.c_str(), hello.json.length());
+    markClientActivity();
+
+    helloHeld = (xSemaphoreTake(_helloMutex, 0) == pdTRUE);
   }
+  if (helloHeld) xSemaphoreGive(_helloMutex);
 
   // Process deferred ws events
   if (xSemaphoreTake(_wsEvtMutex, 0) != pdTRUE) return;
+  bool evtHeld = true;
 
-  while (!_wsEvtQueue.empty()) {
+  while (evtHeld && !_wsEvtQueue.empty()) {
     WsEvent evt = std::move(_wsEvtQueue.front());
     _wsEvtQueue.pop_front();
     xSemaphoreGive(_wsEvtMutex);
+    evtHeld = false;
 
     switch (evt.type) {
       case WsEvtType::CONNECT: {
@@ -822,7 +865,19 @@ void UiSocketHandler::processWsEvents() {
           lockClients();
           auto it = _frameBuffer.find(cid);
           if (it != _frameBuffer.end()) {
-            it->second.concat((const char*)evt.data, evt.len);
+            // Bound the reassembly buffer: a client that never sends the final
+            // fragment (or a malicious one) would otherwise grow it until the
+            // heap is exhausted. concat() returning false means the allocation
+            // failed — drop the partial message instead of keeping a truncated
+            // one around.
+            if (it->second.length() + evt.len > maxFrameBufferBytes) {
+              Log(WARN, "%s frame buffer overflow for client %u (%u bytes), dropping message",
+                  _LOG_, cid, (unsigned)(it->second.length() + evt.len));
+              _frameBuffer.erase(it);
+            } else if (!it->second.concat((const char*)evt.data, evt.len)) {
+              Log(WARN, "%s frame buffer alloc failed for client %u, dropping message", _LOG_, cid);
+              _frameBuffer.erase(it);
+            }
           }
           unlockClients();
         }
@@ -874,11 +929,11 @@ void UiSocketHandler::processWsEvents() {
       }
     }
 
-    if (xSemaphoreTake(_wsEvtMutex, 0) != pdTRUE) break;
+    evtHeld = (xSemaphoreTake(_wsEvtMutex, 0) == pdTRUE);
   }
 
-  // Ensure mutex is released
-  xSemaphoreGive(_wsEvtMutex);
+  // Only release the mutex if this task still owns it.
+  if (evtHeld) xSemaphoreGive(_wsEvtMutex);
 }
 
 void UiSocketHandler::begin()
@@ -2310,24 +2365,37 @@ bool UiSocketHandler::sendTextAllWithRetry(const String &text)
   bool anySent = false;
   bool anyConnected = false;
 
-  // Broadcast on the library's client list, not itemMap. itemMap is populated
-  // asynchronously by processWsEvents(); the firmware-upload dialog may open
-  // a new WebSocket connection immediately before flashing, and progress must
-  // reach it even before its CONNECT event has created a UiSocketItem.
-  // Chunked map transfers still use sendMapChunkText() directly and therefore
-  // remain excluded from this generic broadcast path.
-  int clientCount = 0;
-  for (auto &client : _ws->getClients()) {
-    if (++clientCount > 16) break;
-    if (client.status() != WS_CONNECTED) continue;
-    anyConnected = true;
-    if (isClientReceivingChunk(client.id())) continue;
-    if (!client.canSend()) continue;
-    try {
-      if (client.text(data, len)) {
-        anySent = true;
-      }
-    } catch (...) {
+  // NEVER iterate _ws->getClients() directly: that returns the library's raw
+  // client list without holding _ws_clients_lock, while the async_tcp task
+  // inserts (_newClient) and erases (_handleDisconnect) entries concurrently.
+  // The resulting iterator invalidation / use-after-free showed up as random
+  // reboots and corrupted WebSocket frames. Always go through the library's
+  // locked API instead.
+  if (!mapChunkSendState.active) {
+    // Fast path: textAll() iterates the client list under _ws_clients_lock and
+    // shares a single buffer between all clients. It also reaches clients whose
+    // CONNECT event has not been processed by processWsEvents() yet.
+    anyConnected = _ws->count() > 0;
+    if (anyConnected) {
+      anySent = (_ws->textAll(data, len) != AsyncWebSocket::DISCARDED);
+    }
+  } else {
+    // A chunked map transfer is running: the receiving client(s) must be
+    // skipped so that generic text frames are not interleaved with the chunk
+    // stream. Snapshot the ids under _clientsMutex (lock order _sendMutex →
+    // _clientsMutex, same as the CONNECT path) and send via the locked per-id
+    // API.
+    std::vector<uint32_t> ids;
+    lockClients();
+    ids.reserve(itemMap.size());
+    for (const auto &entry : itemMap) ids.push_back(entry.first);
+    unlockClients();
+
+    for (uint32_t id : ids) {
+      anyConnected = true;
+      if (isClientReceivingChunk(id)) continue;
+      if (!_ws->availableForWrite(id)) continue;
+      if (_ws->text(id, data, len)) anySent = true;
     }
   }
 
@@ -2441,6 +2509,20 @@ void UiSocketHandler::wsEvent(AsyncWebSocket *server, AsyncWebSocketClient *clie
     AwsFrameInfo *info = (AwsFrameInfo*)arg;
 
     if(info->final && info->index == 0 && info->len == len){
+      // Answer heartbeat pings right here in the async_tcp task instead of
+      // deferring them to processWsEvents(). UiSocketHandler::loop() — and
+      // with it the event queue — is suspended while the mower firmware is
+      // being flashed and during long map operations. Without an immediate
+      // pong the browser's heartbeat times out and tears down the connection
+      // exactly while the user must not be disturbed.
+      if (info->opcode == WS_TEXT && data && len > 0 && len < 64 &&
+          isPingRequest((const char*)data, len)) {
+        char response[24];
+        snprintf(response, sizeof(response), "{\"type\":%d}", (int)ResponseDataType::responsePong);
+        _ws->text(client->id(), response, strlen(response));
+        return;
+      }
+
       // Single complete frame — copy data and queue as DATA_FINAL
       uint8_t *copy = nullptr;
       if(info->opcode == WS_TEXT && data) {
