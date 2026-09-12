@@ -17,18 +17,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Build UI
+      - name: Install UI dependencies
         working-directory: ui
-        run: |
-          npm ci
-          npm run build
+        run: npm ci
 
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-      - name: Package UI into asset_bundle.h
-        working-directory: util/package_ui
-        run: go run .
 
       - uses: actions/setup-python@v5
         with:
@@ -42,8 +37,32 @@ jobs:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
 
+      - name: Build ESP32 UI
+        working-directory: ui
+        env:
+          VITE_ENABLE_MAP: 'false'
+          VITE_ENABLE_LIVE_MAP: 'false'
+          VITE_ENABLE_GPS_DASHBOARD: 'false'
+        run: npm run build
+
+      - name: Package ESP32 UI
+        working-directory: util/package_ui
+        run: go run .
+
       - name: Build ESP32 firmware
         run: pio run -e esp32
+
+      - name: Build ESP32-S3 UI
+        working-directory: ui
+        env:
+          VITE_ENABLE_MAP: 'true'
+          VITE_ENABLE_LIVE_MAP: 'true'
+          VITE_ENABLE_GPS_DASHBOARD: 'true'
+        run: npm run build
+
+      - name: Package ESP32-S3 UI
+        working-directory: util/package_ui
+        run: go run .
 
       - name: Build ESP32-S3 firmware
         run: pio run -e esp32-S3-N16-R8
