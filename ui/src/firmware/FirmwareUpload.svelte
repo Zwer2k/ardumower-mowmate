@@ -441,7 +441,7 @@
         labelText="Select..."
       />
     {/if}
-    {#if $uploaderStatus >= FirmwareUploadStatus.fileSelected}
+    {#if source === "file" && $uploaderStatus >= FirmwareUploadStatus.fileSelected}
       <p>Size: {fileSize} bytes</p>
     {/if}
 

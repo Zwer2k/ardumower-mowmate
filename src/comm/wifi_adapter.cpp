@@ -7,6 +7,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <esp_sntp.h>
+#include <errno.h>
 
 using namespace ArduMower::Modem::Wifi;
 
@@ -24,20 +25,26 @@ static uint64_t ntpToUnixMicros(uint8_t buf[48])
 
 static bool fetchNtp(const String &host, IPAddress &outIp, uint64_t &outMicros)
 {
+  Log(INFO, "WiFi::Adapter::STA::RTC NTP request(host=%s)", host.c_str());
   WiFiUDP udp;
-  if (!udp.begin(12345)) return false;
+  if (!udp.begin(12345)) {
+    Log(WARN, "WiFi::Adapter::STA::RTC NTP udp-bind-failed(port=12345)");
+    return false;
+  }
 
   IPAddress ip;
   if (!WiFi.hostByName(host.c_str(), ip)) {
-    Log(WARN, "WiFi::Adapter::STA::NTP fetch cannot resolve %s", host.c_str());
+    Log(WARN, "WiFi::Adapter::STA::RTC NTP dns-failed(host=%s)", host.c_str());
     udp.stop();
     return false;
   }
+  Log(INFO, "WiFi::Adapter::STA::RTC NTP resolved(host=%s ip=%s)",
+      host.c_str(), ip.toString().c_str());
 
   uint8_t packet[48] = {0};
   packet[0] = 0xE3; // LI=3, VN=4, Mode=3 (client)
   if (udp.beginPacket(ip, 123) != 1 || udp.write(packet, 48) != 48 || udp.endPacket() != 1) {
-    Log(WARN, "WiFi::Adapter::STA::NTP fetch cannot send to %s", ip.toString().c_str());
+    Log(WARN, "WiFi::Adapter::STA::RTC NTP send-failed(ip=%s)", ip.toString().c_str());
     udp.stop();
     return false;
   }
@@ -48,15 +55,23 @@ static bool fetchNtp(const String &host, IPAddress &outIp, uint64_t &outMicros)
     if (len >= 48) {
       uint8_t buf[48];
       udp.read(buf, 48);
+      const uint8_t leap = buf[0] >> 6;
+      const uint8_t version = (buf[0] >> 3) & 0x07;
+      const uint8_t mode = buf[0] & 0x07;
+      const uint8_t stratum = buf[1];
       outIp = ip;
       outMicros = ntpToUnixMicros(buf);
+      Log(INFO, "WiFi::Adapter::STA::RTC NTP reply(ip=%s len=%d li=%u version=%u mode=%u stratum=%u epoch=%llu)",
+          ip.toString().c_str(), len, leap, version, mode, stratum,
+          (unsigned long long)(outMicros / 1000000ULL));
       udp.stop();
       return true;
     }
     delay(10);
   }
 
-  Log(WARN, "WiFi::Adapter::STA::NTP fetch no reply from %s", ip.toString().c_str());
+  Log(WARN, "WiFi::Adapter::STA::RTC NTP timeout(host=%s ip=%s timeout=3000ms)",
+      host.c_str(), ip.toString().c_str());
   udp.stop();
   return false;
 }
@@ -190,6 +205,8 @@ void Adapter::trySyncTime()
 
   String ntp1 = _settings.time.ntp_server1.length() > 0 ? _settings.time.ntp_server1 : "pool.ntp.org";
   String ntp2 = _settings.time.ntp_server2.length() > 0 ? _settings.time.ntp_server2 : "time.nist.gov";
+  Log(INFO, "WiFi::Adapter::STA::RTC sync-start(epoch=%lld tz=%s primary=%s fallback=%s)",
+      (long long)time(NULL), tz.c_str(), ntp1.c_str(), ntp2.c_str());
 
   // Keep persistent copies: esp_sntp_setservername only stores the pointer,
   // not the string content. If a temporary String is destroyed, the pointer
@@ -210,7 +227,7 @@ void Adapter::trySyncTime()
   if (_ntpServer1.length() > 0) ok1 = fetchNtp(_ntpServer1, ip1, micros1);
   if (!ok1 && _ntpServer2.length() > 0) ok2 = fetchNtp(_ntpServer2, ip2, micros2);
   if (!ok1 && !ok2) {
-    Log(WARN, "WiFi::Adapter::STA::NTP no reachable server");
+    Log(WARN, "WiFi::Adapter::STA::RTC sync-failed(no-reachable-server)");
     _ntpAttempted = true;
     _ntpLastAttempt = millis();
     return;
@@ -219,13 +236,24 @@ void Adapter::trySyncTime()
   IPAddress ip = ok1 ? ip1 : ip2;
   uint64_t micros = ok1 ? micros1 : micros2;
   struct timeval tv = { (time_t)(micros / 1000000ULL), (suseconds_t)(micros % 1000000ULL) };
-  settimeofday(&tv, nullptr);
+  if (settimeofday(&tv, nullptr) != 0) {
+    Log(ERR, "WiFi::Adapter::STA::RTC settimeofday-failed(errno=%d)", errno);
+    _ntpAttempted = true;
+    _ntpLastAttempt = millis();
+    return;
+  }
 
   _ntpSynced = true;
   _ntpAttempted = true;
   _ntpLastAttempt = millis();
-  Log(INFO, "WiFi::Adapter::STA::NTP sync successful from %s epoch=%u",
-      ip.toString().c_str(), (unsigned)time(nullptr));
+  const time_t now = time(NULL);
+  struct tm localTime;
+  char localTimeText[32] = {};
+  localtime_r(&now, &localTime);
+  strftime(localTimeText, sizeof(localTimeText), "%Y-%m-%dT%H:%M:%S%z", &localTime);
+  Log(INFO, "WiFi::Adapter::STA::RTC sync-success(server=%s ip=%s epoch=%lld local=%s)",
+      ok1 ? _ntpServer1.c_str() : _ntpServer2.c_str(), ip.toString().c_str(),
+      (long long)now, localTimeText);
   _schedule.computeNextRun();
 }
 void Adapter::loopAp()

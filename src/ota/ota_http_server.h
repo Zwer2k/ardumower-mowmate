@@ -118,6 +118,7 @@ namespace ArduMower
         Http::ModemUploadSession *_flashSession;
         volatile bool _githubUpdateActive;
         volatile bool _githubUpdateSucceeded;
+        volatile bool _githubUpdateErrorLogged;
         char _githubUpdateError[128];
 
         void handleUploadRequest(AsyncWebServerRequest *request);

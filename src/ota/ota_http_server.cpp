@@ -6,6 +6,9 @@
 #include <esp_task_wdt.h>
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <time.h>
 #include "trust.h"
 
 using namespace ArduMower::Modem::Ota;
@@ -20,7 +23,8 @@ const char *resultToString(Http::Result r);
 HttpServer::HttpServer(Settings::Settings &settings, AsyncWebServer &server, MowerUpdater &mowerUpdater)
     : ArduMower::Modem::Http::Common(settings), _server(server), _mowerUpdater(mowerUpdater),
   _active(false), _failed(false), _restart(false), _restartTime(0), _flashSession(NULL),
-  _githubUpdateActive(false), _githubUpdateSucceeded(false), _githubUpdateError{} {}
+  _githubUpdateActive(false), _githubUpdateSucceeded(false), _githubUpdateErrorLogged(false),
+  _githubUpdateError{} {}
 
 void HttpServer::begin()
 {
@@ -78,13 +82,17 @@ void HttpServer::handleGithubUpdateRequest(AsyncWebServerRequest *request)
   }
 
   const String version = request->getParam("version")->value();
+  Log(INFO, "Ota::HttpServer::github-update::request(version=%s)", version.c_str());
   if (!isValidReleaseVersion(version))
   {
+    Log(WARN, "Ota::HttpServer::github-update::invalid-version(%s)", version.c_str());
     reject(request, 400, "github-update", "invalid-version");
     return;
   }
   if (_githubUpdateActive || _flashSession)
   {
+    Log(WARN, "Ota::HttpServer::github-update::already-active(github=%d upload=%d)",
+        _githubUpdateActive, _flashSession != NULL);
     reject(request, 409, "github-update", "update-active");
     return;
   }
@@ -93,6 +101,7 @@ void HttpServer::handleGithubUpdateRequest(AsyncWebServerRequest *request)
   _active = true;
   _githubUpdateActive = true;
   _githubUpdateSucceeded = false;
+  _githubUpdateErrorLogged = false;
   _githubUpdateError[0] = '\0';
   otaFlashProgress = 0;
   otaFlashTotal = 0;
@@ -112,6 +121,12 @@ void HttpServer::handleGithubUpdateRequest(AsyncWebServerRequest *request)
 void HttpServer::handleGithubUpdateStatus(AsyncWebServerRequest *request)
 {
   if (!auth(request)) return;
+
+  if (!_githubUpdateActive && _githubUpdateError[0] != '\0' && !_githubUpdateErrorLogged)
+  {
+    _githubUpdateErrorLogged = true;
+    Log(ERR, "Ota::HttpServer::github-update::status(error=%s)", _githubUpdateError);
+  }
 
   AsyncJsonResponse *response = new AsyncJsonResponse();
   JsonObject root = response->getRoot();
@@ -142,7 +157,16 @@ void HttpServer::runGithubUpdate(const String &version)
   const String url = "https://github.com/Zwer2k/ardumower-mowmate/releases/download/" +
     version + "/" + target + "-firmware.bin";
 
+  const time_t currentTime = time(NULL);
+  Log(INFO, "Ota::HttpServer::github-update::start(version=%s target=%s epoch=%lld wifi=%d rssi=%d free=%u max=%u)",
+      version.c_str(), target, (long long)currentTime, (int)WiFi.status(), WiFi.RSSI(),
+      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+  Log(DBG, "Ota::HttpServer::github-update::url(%s)", url.c_str());
+
   HTTPClient http;
+  WiFiClientSecure secureClient;
+  secureClient.setCACert(tls_ca_trust);
+  secureClient.setHandshakeTimeout(15);
   http.setConnectTimeout(15000);
   http.setTimeout(15000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -150,17 +174,55 @@ void HttpServer::runGithubUpdate(const String &version)
   bool updateStarted = false;
   uint8_t *buffer = NULL;
   const char *error = NULL;
+  char errorDetail[128] = {};
+  int httpCode = 0;
 
-  if (!http.begin(url, tls_ca_trust))
+  IPAddress githubIp;
+  if (WiFi.hostByName("github.com", githubIp) != 1)
+  {
+    error = "download-dns-failed:github.com";
+    Log(ERR, "Ota::HttpServer::github-update::dns-failed(host=github.com)");
+  }
+  else
+  {
+    Log(INFO, "Ota::HttpServer::github-update::dns(host=github.com ip=%s)", githubIp.toString().c_str());
+  }
+
+  if (!error && !http.begin(secureClient, url))
   {
     error = "download-init-failed";
   }
-  else if (http.GET() != HTTP_CODE_OK)
+  else if (!error)
   {
-    error = "download-failed";
+    Log(INFO, "Ota::HttpServer::github-update::http-get");
+    httpCode = http.GET();
+    if (httpCode != HTTP_CODE_OK)
+    {
+      if (httpCode < 0)
+      {
+        const String httpError = HTTPClient::errorToString(httpCode);
+        char tlsError[96] = {};
+        const int tlsErrorCode = secureClient.lastError(tlsError, sizeof(tlsError));
+        snprintf(errorDetail, sizeof(errorDetail), "download-transport-%d:%.24s tls=%d:%.64s",
+          httpCode, httpError.c_str(), tlsErrorCode, tlsError[0] ? tlsError : "none");
+        Log(ERR, "Ota::HttpServer::github-update::transport-error(code=%d message=%s tls=%d tls-message=%s epoch=%lld)",
+          httpCode, httpError.c_str(), tlsErrorCode, tlsError[0] ? tlsError : "none", (long long)time(NULL));
+      }
+      else
+      {
+        snprintf(errorDetail, sizeof(errorDetail), "download-http-%d", httpCode);
+        Log(ERR, "Ota::HttpServer::github-update::http-error(status=%d location=%s)",
+            httpCode, http.getLocation().c_str());
+      }
+      error = errorDetail;
+    }
   }
 
   const int total = error ? 0 : http.getSize();
+  if (!error)
+  {
+    Log(INFO, "Ota::HttpServer::github-update::response(status=%d size=%d)", httpCode, total);
+  }
   if (!error && total <= 0)
   {
     error = "invalid-content-length";
@@ -194,6 +256,8 @@ void HttpServer::runGithubUpdate(const String &version)
       if (!http.connected() || millis() - lastDataAt > 15000)
       {
         error = "download-interrupted";
+        Log(ERR, "Ota::HttpServer::github-update::stream-interrupted(written=%u total=%u connected=%d idle=%ums)",
+            (unsigned)written, (unsigned)total, http.connected(), (unsigned)(millis() - lastDataAt));
         break;
       }
       delay(1);
@@ -205,16 +269,21 @@ void HttpServer::runGithubUpdate(const String &version)
     if (received == 0)
     {
       error = "download-read-failed";
+      Log(ERR, "Ota::HttpServer::github-update::read-failed(written=%u total=%u available=%d)",
+          (unsigned)written, (unsigned)total, available);
       break;
     }
     if (written == 0 && buffer[0] != 0xe9)
     {
       error = "invalid-firmware-header";
+      Log(ERR, "Ota::HttpServer::github-update::invalid-header(first=0x%02x)", buffer[0]);
       break;
     }
     if (Update.write(buffer, received) != received)
     {
       error = "update-write-failed";
+      Log(ERR, "Ota::HttpServer::github-update::write-failed(written=%u chunk=%u error=%s)",
+          (unsigned)written, (unsigned)received, Update.errorString());
       break;
     }
 
@@ -224,7 +293,11 @@ void HttpServer::runGithubUpdate(const String &version)
     yield();
   }
 
-  if (!error && !Update.end(true)) error = "update-end-failed";
+  if (!error && !Update.end(true))
+  {
+    error = "update-end-failed";
+    Log(ERR, "Ota::HttpServer::github-update::end-failed(error=%s)", Update.errorString());
+  }
   if (error && updateStarted) Update.abort();
   if (buffer) free(buffer);
   http.end();
