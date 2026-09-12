@@ -1,3 +1,4 @@
+#ifdef ENABLE_ARDUINO_OTA
 #include "ota_arduinoota.h"
 #include <ArduinoOTA.h>
 #include "log.h"
@@ -27,3 +28,4 @@ void ArduinoOta::loop()
 {
   ArduinoOTA.handle();
 }
+#endif // ENABLE_ARDUINO_OTA

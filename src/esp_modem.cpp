@@ -23,7 +23,9 @@
 #include "mower_adapter.h"
 #include "mqtt_adapter.h"
 #include "ota.h"
+#ifdef ENABLE_ARDUINO_OTA
 #include "ota_arduinoota.h"
+#endif
 #include "ota_http_server.h"
 #include "ota_mower_updater.h"
 #include "prometheus_adapter.h"
@@ -64,7 +66,9 @@ Terminal terminal(Serial1);
 WebServer webServer;
 
 // firmware update via Arduino IDE with buggy WiFiUDP
+#ifdef ENABLE_ARDUINO_OTA
 Ota::ArduinoOta ota(settings);
+#endif
 #ifdef MOWER_TERMINAL
 Ota::MowerUpdater mowerUpdater(terminal, Serial1);
 #else
@@ -125,7 +129,9 @@ void setup() {
   wifiAdapter.begin();
   router.begin();
   modemCli.begin();
+#ifdef ENABLE_ARDUINO_OTA
   ota.begin();
+#endif
   otaHttpServer.begin();
   otaHttpServer.onFlashProgress = [&](size_t cur, size_t tot){ socketHandler.broadcastFlashProgress(cur, tot); };
   bleAdapter.begin();
@@ -150,7 +156,9 @@ void setup() {
   looptime.add("ota_http", std::bind(&Ota::HttpServer::loop, &otaHttpServer));
   looptime.add("ota_mower", std::bind(&Ota::MowerUpdater::loop, &mowerUpdater));
   mowerUpdater.addIdleCallback(std::bind(&Router::loop, &router));
+#ifdef ENABLE_ARDUINO_OTA
   looptime.add("ota_arduino", std::bind(&Ota::ArduinoOta::loop, &ota));
+#endif
   looptime.add("flash_progress", [&](){
     static uint32_t last = 0;
     if (Ota::otaFlashTotal == 0) return;
