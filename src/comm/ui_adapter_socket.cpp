@@ -1697,11 +1697,19 @@ void UiSocketHandler::logToUiLoop()
   uint32_t now = millis();
   if (now - _lastLogSend < 100) return;
 
+  if (countConnectedClients() == 0) return;
   if (!_ws->availableForWriteAll())
     return;
 
   _lastLogSend = now;
-  sendData(ResponseDataType::modemLog, NULL, logToUi, false);
+  // force=true: rate limit and "is there anything new" are already handled
+  // above. The generic timestamp check cannot be used, because a burst goes
+  // out in several updates that all carry the timestamp of the newest line -
+  // the remaining lines would never be sent.
+  // Advance the send cursor only once the data actually left the modem,
+  // otherwise a failed send would silently skip those lines.
+  if (sendData(ResponseDataType::modemLog, NULL, logToUi, true))
+    logToUi.commitSent();
 }
 
 void UiSocketHandler::broadcastFlashProgress(size_t current, size_t total)
@@ -1998,10 +2006,10 @@ void UiSocketHandler::sendBufferedTerminalTo(UiSocketItem* item, uint16_t maxChu
 #endif
 
 template<typename T>
-void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, T data, bool force)
+bool UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, T &&data, bool force)
 {
   if (!force && (data.timestamp == 0 || data.timestamp == oldDataTimestamp[dataType])) {
-    return;
+    return false;
   }
 
   // Rate limit sends per data type (skip if sent too recently)
@@ -2017,7 +2025,7 @@ void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
       default:                               minInterval = 0;     break;
     }
     if (minInterval > 0 && (now - lastSentTimestamp[dataType]) < minInterval)
-      return;
+      return false;
     lastSentTimestamp[dataType] = now;
   }
 
@@ -2038,6 +2046,9 @@ void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
 
   JsonDocument doc;
   doc["type"] = dataType;
+  // Forwarding reference, not by value: marshal() may record on the source
+  // object how much it produced (see LogToUi), and a copy would discard that.
+  // Temporaries from the 3-argument overload still bind.
   auto _j = doc["data"].to<JsonObject>(); data.marshal(_j);
   if (dataType == ResponseDataType::mowerState) {
     _j["uploaded_map_id"] = _source.lastUploadedMapId();
@@ -2063,13 +2074,14 @@ void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
   sanitizeUtf8InPlace(stateStr);
 
   if (sendTo != NULL) {
-    sendTo->sendText(stateStr);
-  } else {
-    if (countConnectedClients() == 0) return;
-    if (!broadcastHeapOk(stateStr.length()) || !sendTextAllWithRetry(stateStr)) {
-      _ws->cleanupClients();
-    }
+    return sendTo->sendText(stateStr);
   }
+  if (countConnectedClients() == 0) return false;
+  if (!broadcastHeapOk(stateStr.length()) || !sendTextAllWithRetry(stateStr)) {
+    _ws->cleanupClients();
+    return false;
+  }
+  return true;
 }
 
 void UiSocketHandler::sendMapList(UiSocketItem *sendTo)

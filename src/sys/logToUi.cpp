@@ -75,33 +75,42 @@ size_t LogToUi::log(const LogLevel logLevel, const char *format, ...)
 }
 
 bool LogToUi::hasData() {
-    // Prüfe, ob es überhaupt Logs gibt
-    return !modemLog->isEmpty();
+    // Etwas zu senden gibt es nur, wenn Zeilen im Puffer liegen, die noch
+    // nicht gestreamt wurden.
+    return !modemLog->isEmpty() && nextSendNr < modemLineNrIn;
 } 
 
 void LogToUi::marshal(JsonObject o)
 {
     uint16_t count = modemLog->currentSize();
+    marshalledUpToNr = nextSendNr;
     if (count == 0) return;
-    
+
     JsonArray logJson = o["log"].to<JsonArray>();
 
     LogLine line;
-    int sent = 0;
-    // Sende die letzten 6 Zeilen (neueste zuerst)
-    uint16_t startIdx = count > 6 ? count - 6 : 0;
-    for (uint16_t i = startIdx; i < count && sent < 6; i++) {
-        if (modemLog->peekAt(i, line)) {
-            JsonObject jsonLine = logJson.add<JsonObject>();
-            jsonLine["nr"] = line.nr;
-            jsonLine["level"] = line.level;
-            jsonLine["text"] = line.text;
-            jsonLine["freeHeap"] = line.freeHeap;
-            sent++;
-        }
+    uint16_t sent = 0;
+    // Alle noch nicht gesendeten Zeilen in Reihenfolge, begrenzt auf
+    // LOG_LINES_PER_SEND pro Update. Zeilen, die der Ringpuffer vor dem Senden
+    // überschrieben hat, fehlen hier - die Lücke in 'nr' macht das in der UI
+    // sichtbar. Früher wurden immer nur die letzten 6 Zeilen übertragen,
+    // wodurch jeder größere Ausbruch stillschweigend verloren ging.
+    for (uint16_t i = 0; i < count && sent < LOG_LINES_PER_SEND; i++) {
+        if (!modemLog->peekAt(i, line)) continue;
+        if (line.nr < nextSendNr) continue;
+        JsonObject jsonLine = logJson.add<JsonObject>();
+        jsonLine["nr"] = line.nr;
+        jsonLine["level"] = line.level;
+        jsonLine["text"] = line.text;
+        jsonLine["freeHeap"] = line.freeHeap;
+        marshalledUpToNr = line.nr + 1;
+        sent++;
     }
-    
-    //Serial.printf("(%d/%d)\r\n", sent, count); 
+}
+
+void LogToUi::commitSent()
+{
+    if (marshalledUpToNr > nextSendNr) nextSendNr = marshalledUpToNr;
 }
 
 uint16_t LogToUi::marshalBatch(const JsonObject &o, uint16_t startIdx, uint16_t maxLines)

@@ -367,7 +367,8 @@ namespace ArduMower
         void ubxPollLoop();
 #endif
         template<typename T>
-        void sendData(ResponseDataType dataType, UiSocketItem *sendTo, T data, bool force = false);
+        // Returns true if the payload was handed to the WebSocket layer.
+        bool sendData(ResponseDataType dataType, UiSocketItem *sendTo, T &&data, bool force = false);
         bool sendTextAllWithRetry(const String& text);
         bool clientCanSend(uint32_t clientId);
         size_t countConnectedClients();

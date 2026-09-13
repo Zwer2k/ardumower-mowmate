@@ -11,15 +11,24 @@
     export let logData: LogLine[];
     export let dbgLevel: number;
 
-    let items: LogLine[] = [];
+    // The modem numbers every log line consecutively (LogLine.nr). A gap in
+    // that sequence therefore proves lines were dropped: either overwritten in
+    // the modem's ring buffer before they could be sent, or lost on the way.
+    // gapBefore holds how many lines are missing directly above this line.
+    type LogRow = LogLine & { gapBefore: number };
+
+    let items: LogRow[] = [];
     let seenLogNumbers = new Set<number>();
+    // Highest line number appended so far, for gap detection.
+    let lastNr: number | null = null;
+    // Lines this view dropped itself once the logLines cap was reached.
+    let trimmedCount = 0;
 
     let autoscroll = true;
 
 	let scrollToIndex: ((index: any, opts: any) => Promise<void>) | undefined = undefined;
     let logLevelIndex: number | undefined;
     let logLines = 10000;
-    let lineCounter = 0;
 
     // ─── Search ──────────────────────────────────────────────────────────────
     let searchQuery = "";
@@ -64,11 +73,27 @@
         if (logData && logData.length > 0) {
             const newLines = logData.filter(line => !seenLogNumbers.has(line.nr));
             if (newLines.length > 0) {
-                newLines.forEach(line => seenLogNumbers.add(line.nr));
-                items = [...items, ...newLines];
+                // Determine the gap once while appending, not while rendering.
+                // The virtual list only renders visible rows and rebuilds them
+                // on every scroll, so a counter evaluated in the template
+                // depends on the scroll history instead of on the data.
+                const newRows: LogRow[] = newLines.map(line => {
+                    const gapBefore =
+                        lastNr != null && line.nr > lastNr + 1 ? line.nr - lastNr - 1 : 0;
+                    if (lastNr == null || line.nr > lastNr) lastNr = line.nr;
+                    seenLogNumbers.add(line.nr);
+                    return { ...line, gapBefore };
+                });
+                items = [...items, ...newRows];
                 let remove = items.length - logLines;
                 if (remove > 0) {
+                    // Forget the numbers of the removed lines as well, else the
+                    // set grows without bound over a long session.
+                    for (const dropped of items.slice(0, remove)) {
+                        seenLogNumbers.delete(dropped.nr);
+                    }
                     items.splice(0, remove);
+                    trimmedCount += remove;
                 }
                 if (autoscroll && scrollToIndex != undefined) {
                     scrollToIndex(items.length - 1, { behavior: 'smooth' });
@@ -88,20 +113,6 @@
 
     function onBottom() {
         console.log("bottom");
-    }
-
-    function checkLineNr(lineNr: number) {
-        if (lineCounter != lineNr) {
-            lineCounter = lineNr+1;
-            return true;
-        }
-        lineCounter++;
-        return false;
-    }
-
-    function getLineCounter(lineNr: number) {
-        console.log(lineNr, lineCounter)
-        return lineNr;
     }
 
     $: { dbgLevel = dbgLevels[logLevelIndex].id; }
@@ -160,13 +171,22 @@
             Download log
         </button>
     </div>
+    {#if trimmedCount > 0}
+        <div class="log-trimmed">{trimmedCount} ältere Zeilen ausgeblendet (Anzeigegrenze {logLines})</div>
+    {/if}
     <div class="log-list">
         <VirtualList {items}
             height="100%"
             bind:scrollToIndex
             let:item
             let:index>
-            <div class="log-line {checkLineNr(item.nr) ? 'ignore' : ''} {index === highlightIndex ? 'highlight' : ''}">
+            {#if (item as LogRow).gapBefore > 0}
+                <div class="log-gap" title="Lücke in den Zeilennummern: diese Zeilen sind im Modem verworfen worden, bevor sie den Browser erreicht haben">
+                    {(item as LogRow).gapBefore}
+                    {(item as LogRow).gapBefore === 1 ? 'Zeile verworfen' : 'Zeilen verworfen'}
+                </div>
+            {/if}
+            <div class="log-line {index === highlightIndex ? 'highlight' : ''}">
                 <div class="nr">{item.nr}:</div>
                 <div class="level level-{logLevels[(item as LogLine).level]}">{logLevels[(item as LogLine).level]}:</div>
                 <div class="free-heap">{(item as LogLine).freeHeap}:</div>
@@ -224,8 +244,27 @@
         padding: 3px;
     }
 
-    .log-line.ignore  {
-        text-decoration: overline red wavy;
+    .log-gap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 4px 0;
+        padding: 1px 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #a2191f;
+        background-color: #fff1f1;
+        border-top: 1px dashed #da1e28;
+        border-bottom: 1px dashed #da1e28;
+    }
+
+    .log-trimmed {
+        flex-shrink: 0;
+        padding: 2px 10px;
+        font-size: 0.75rem;
+        color: #555;
+        background-color: #f4f4f4;
+        border-bottom: 1px solid lightgray;
     }
 
     .log-line .nr, .log-line .level, .log-line .free-heap {
