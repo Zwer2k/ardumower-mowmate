@@ -30,6 +30,18 @@ using namespace ArduMower::Modem::Http;
 // as UTF-8" WebSocket disconnects.
 static void sanitizeUtf8InPlace(String& str) {
   const size_t oldLen = str.length();
+  // Fast path: serializeJson() output is plain ASCII in practically all cases.
+  // Only allocate and rebuild the string if a control byte or a non-ASCII byte
+  // is actually present (avoids one heap alloc + copy per WebSocket send).
+  {
+    const char *p = str.c_str();
+    bool clean = true;
+    for (size_t i = 0; i < oldLen; i++) {
+      unsigned char c = (unsigned char)p[i];
+      if (c >= 0x80 || (c < 0x20 && c != '\r' && c != '\n' && c != '\t')) { clean = false; break; }
+    }
+    if (clean) return;
+  }
   String out;
   out.reserve(oldLen);
   for (size_t i = 0; i < oldLen; i++) {
