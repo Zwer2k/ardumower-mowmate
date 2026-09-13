@@ -27,6 +27,7 @@ import {
   RequestDataType,
   type ClockData,
   type DrivenTrackData,
+  type FirmwareStatusData,
 } from "../model";
 import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer, resetMapTransferTracking } from "../map/map-chunk-buffer";
 import { MapPointType } from "../map/map-chunk-buffer";
@@ -143,6 +144,52 @@ export const flashProgressStore = writable<FlashProgress | null>(null);
 
 export function resetFlashProgress() {
   flashProgressStore.set(null);
+}
+
+export interface FirmwareStatus {
+  /** null = seit dem Verbindungsaufbau noch nichts vom Modem gehört. */
+  reachable: boolean | null;
+  checking: boolean;
+  updateAvailable: boolean;
+  /** false = das Modem hat seit dem Boot noch nicht bei GitHub nachgesehen. */
+  checked: boolean;
+  current: string | null;
+  latest: string | null;
+  error: string | null;
+}
+
+const emptyFirmwareStatus: FirmwareStatus = {
+  reachable: null,
+  checking: false,
+  updateAvailable: false,
+  checked: false,
+  current: null,
+  latest: null,
+  error: null,
+};
+
+/** Firmware-Stand aus Sicht des Modems: Das Modem selbst fragt GitHub im
+ *  Hintergrund ab und lädt später auch die Firmware – nicht der Browser. Nur
+ *  seine Sicht entscheidet, ob es ein Update gibt und ob die GitHub-Quelle im
+ *  Firmware-Dialog angeboten wird. */
+export const firmwareStatusStore = writable<FirmwareStatus>(emptyFirmwareStatus);
+
+/** Während einer laufenden Prüfung den letzten bekannten Stand behalten, sonst
+ *  flackert die GitHub-Quelle im Firmware-Dialog kurz weg. */
+export function applyFirmwareStatus(data: FirmwareStatusData) {
+  firmwareStatusStore.update((prev) => ({
+    reachable: data.checking ? prev.reachable : data.reachable,
+    checking: data.checking,
+    updateAvailable: data.updateAvailable,
+    checked: data.checked,
+    current: data.current ?? prev.current,
+    latest: data.latest ?? prev.latest,
+    error: data.error ?? null,
+  }));
+}
+
+export function resetFirmwareStatus() {
+  firmwareStatusStore.set(emptyFirmwareStatus);
 }
 
 function setFlashProgress(progress: number, source: "modem" | "mower") {
@@ -265,6 +312,10 @@ class SocketService {
           // zurückgesetzten Transfer-IDs.
           resetMapTransferTracking();
 
+          // Ohne force: das Modem antwortet aus dem Ergebnis seines letzten
+          // Hintergrund-Checks, es geht dafür nicht ins Netz.
+          this.sendRequestFirmwareStatus();
+
           socketStore.update((s) => ({ ...s, connected: true }));
 
           for (const message of this.pendingMessages) {
@@ -301,6 +352,8 @@ class SocketService {
 
           this.clearAllTimers();
           socketStore.update((s) => ({ ...s, socket: null, connected: false }));
+          // Nach einem Reconnect kann das Netz ein anderes sein – erneut fragen.
+          resetFirmwareStatus();
 
           if (
             this.reconnect &&
@@ -644,6 +697,9 @@ class SocketService {
                   break;
                 case ResponseDataType.clock:
                   newState.clock = jsonData.data as ClockData;
+                  break;
+                case ResponseDataType.firmwareStatus:
+                  applyFirmwareStatus(jsonData.data as FirmwareStatusData);
                   break;
                 default:
               }
@@ -1067,6 +1123,14 @@ class SocketService {
     const req: RequestSocketMessage = {
       type: RequestDataType.requestSchedule,
       data: {},
+    };
+    this.sendMessage(req);
+  }
+
+  sendRequestFirmwareStatus(force = false) {
+    const req: RequestSocketMessage = {
+      type: RequestDataType.requestFirmwareStatus,
+      data: { force },
     };
     this.sendMessage(req);
   }

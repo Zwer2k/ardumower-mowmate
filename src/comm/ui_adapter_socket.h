@@ -18,6 +18,7 @@
 #include "terminal.h"
 #endif
 #include "ota_mower_updater.h"
+#include "ota.h"
 #include <vector>
 
 namespace ArduMower
@@ -61,6 +62,7 @@ namespace ArduMower
         requestSchedule,
         requestClock,
         requestPing,
+        requestFirmwareStatus,
         requestDataTypeLength
       };
 
@@ -86,6 +88,7 @@ namespace ArduMower
         obstacles,
         mapAck,
         responsePong,
+        firmwareStatus,
         responseDataTypeLength
       };
 
@@ -200,6 +203,11 @@ namespace ArduMower
         bool saveSchedule();
         void processScheduleTrigger();
         void broadcastFlashProgress(size_t current, size_t total);
+        // Firmware-Stand von GitHub – ermittelt wird er im Hintergrund vom
+        // OTA-Server, hier laufen nur Anfrage und Antwort zusammen.
+        void requestFirmwareStatus(bool force);
+        void broadcastFirmwareStatus(const ArduMower::Modem::Ota::FirmwareStatus &status);
+        std::function<void(bool force)> onFirmwareStatusRequest;
         void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len);
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
         bool sendUbx(const String &hexCmd);

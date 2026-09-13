@@ -66,13 +66,6 @@ export const selectFirmwareReleases = (
   .filter((release): release is FirmwareRelease => release !== null)
   .sort((left, right) => compareVersions(right.version, left.version));
 
-export const hasFirmwareUpdate = (
-  currentVersion: string,
-  releases: FirmwareRelease[],
-): boolean => parseVersion(currentVersion) !== null
-  && releases.length > 0
-  && compareVersions(releases[0].version, currentVersion) > 0;
-
 export const fetchFirmwareReleases = async (
   target: FirmwareTarget,
   fetcher: typeof fetch = fetch,

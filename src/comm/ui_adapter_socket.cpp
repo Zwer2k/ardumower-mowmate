@@ -579,6 +579,11 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     break;
   }
 
+  case RequestDataType::requestFirmwareStatus: {
+    _socketHandler->requestFirmwareStatus(jsonData["force"] | false);
+    break;
+  }
+
   case RequestDataType::requestPing: {
     char response[24];
     snprintf(response, sizeof(response), "{\"type\":%d}", (int)ResponseDataType::responsePong);
@@ -2198,6 +2203,35 @@ void UiSocketHandler::sendSchedule(UiSocketItem *sendTo)
     if (!broadcastHeapOk(json.length()) || !sendTextAllWithRetry(json)) {
       _ws->cleanupClients();
     }
+  }
+}
+
+void UiSocketHandler::requestFirmwareStatus(bool force)
+{
+  if (onFirmwareStatusRequest) onFirmwareStatusRequest(force);
+}
+
+void UiSocketHandler::broadcastFirmwareStatus(const ArduMower::Modem::Ota::FirmwareStatus &status)
+{
+  if (countConnectedClients() == 0) return;
+
+  JsonDocument doc;
+  doc["type"] = ResponseDataType::firmwareStatus;
+  doc["timestamp"] = millis();
+  auto dataObj = doc["data"].to<JsonObject>();
+  dataObj["reachable"] = status.reachable;
+  dataObj["checking"] = status.checking;
+  dataObj["updateAvailable"] = status.updateAvailable;
+  dataObj["checked"] = status.checked;
+  if (status.current) dataObj["current"] = status.current;
+  if (status.latest) dataObj["latest"] = status.latest;
+  if (status.error) dataObj["error"] = status.error;
+
+  String json;
+  serializeJson(doc, json);
+
+  if (!broadcastHeapOk(json.length()) || !sendTextAllWithRetry(json)) {
+    _ws->cleanupClients();
   }
 }
 

@@ -1,10 +1,6 @@
 import { get, writable } from "svelte/store";
 import { getModemInfo, type ApiModemInfoResponse } from "./service";
-import {
-  fetchFirmwareReleases,
-  hasFirmwareUpdate,
-  type FirmwareRelease,
-} from "./github-releases";
+import { fetchFirmwareReleases, type FirmwareRelease } from "./github-releases";
 
 export interface FirmwareUpdateState {
   loading: boolean;
@@ -12,7 +8,6 @@ export interface FirmwareUpdateState {
   error: string | null;
   modemInfo: ApiModemInfoResponse | null;
   releases: FirmwareRelease[];
-  updateAvailable: boolean;
 }
 
 const initialState: FirmwareUpdateState = {
@@ -21,10 +16,13 @@ const initialState: FirmwareUpdateState = {
   error: null,
   modemInfo: null,
   releases: [],
-  updateAvailable: false,
 };
 
 export const firmwareUpdateStore = writable<FirmwareUpdateState>(initialState);
+
+/** Offen-Zustand des Firmware-Dialogs. Er wird aus dem Overflow-Menü und aus
+ *  dem Update-Symbol im Header geöffnet, gerendert wird er nur einmal. */
+export const firmwareDialogOpen = writable(false);
 
 let pendingCheck: Promise<void> | null = null;
 
@@ -44,7 +42,6 @@ export const checkFirmwareUpdates = async (force = false): Promise<void> => {
         error: null,
         modemInfo,
         releases,
-        updateAvailable: hasFirmwareUpdate(modemInfo.git_tag, releases),
       });
     } catch (error) {
       firmwareUpdateStore.update((state) => ({

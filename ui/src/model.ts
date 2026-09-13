@@ -296,6 +296,24 @@ export interface MowSettings {
   doMowExclusionBorder: boolean;
 }
 
+/** Was das Modem selbst über die verfügbare Firmware weiss. Es fragt GitHub im
+ *  Hintergrund ab – der Browser hängt oft in einem anderen Netz als der ESP. */
+export interface FirmwareStatusData {
+  /** GitHub ist vom Modem aus erreichbar. */
+  reachable: boolean;
+  /** Das Modem prüft gerade – das Ergebnis kommt als zweite Nachricht nach. */
+  checking: boolean;
+  updateAvailable: boolean;
+  /** Seit dem Boot mindestens einmal geprüft. Vorher sagt reachable nichts aus. */
+  checked: boolean;
+  /** Laufende Version, fehlt bei Builds ohne Git-Tag. */
+  current?: string;
+  /** Neuste Release-Version, fehlt solange nichts geprüft wurde. */
+  latest?: string;
+  /** Grund der Nichterreichbarkeit, z.B. dns-failed, clock-not-synced. */
+  error?: string;
+}
+
 export enum ResponseDataType {
   hello = 0,
   mowerState,
@@ -318,6 +336,7 @@ export enum ResponseDataType {
   obstacles,
   mapAck,
   pong,
+  firmwareStatus,
 }
 
 export interface ScheduleEntry {
@@ -444,6 +463,7 @@ export enum RequestDataType {
   requestSchedule,
   requestClock,
   ping,
+  requestFirmwareStatus,
 }
 
 export interface MowSettingsData {

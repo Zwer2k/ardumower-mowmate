@@ -13,23 +13,46 @@
   import type { Readable } from "svelte/store";
   import { onDestroy } from "svelte";
   import { FirmwareFlashStatus, FirmwareUploader, FirmwareUploadStatus, FirmwareUploadType } from "./service";
-  import type { FirmwareRelease } from "./github-releases";
   import { checkFirmwareUpdates, firmwareUpdateStore } from "./update-store";
-  import { flashProgressStore, resetFlashProgress } from "../stores/socket";
+  import {
+    firmwareStatusStore,
+    flashProgressStore,
+    resetFlashProgress,
+    socketService,
+  } from "../stores/socket";
 
   export let open: boolean = false;
 
   let uploadType: FirmwareUploadType = FirmwareUploadType.modem;
-  let source: "github" | "file" = "github";
+  // Startwert ist die lokale Datei: Die GitHub-Quelle kommt erst dazu, wenn das
+  // Modem bestätigt hat, dass es github.com selbst erreicht.
+  let source: "github" | "file" = "file";
+  let sourcePinned = false;
+  let checkRequested = false;
   let ref: null | HTMLInputElement;
   let selectedReleaseVersion = "";
   let downloadError: string | null = null;
   let downloading = false;
 
-  const sourceOptions = [
-    { id: "github", text: "GitHub Release" },
-    { id: "file", text: "Local file" },
-  ];
+  const unreachableReason = (error: string | null): string => {
+    switch (error) {
+      case "wifi-disconnected":
+        return "The modem is not connected to a WiFi network. Install from a local file instead.";
+      case "clock-not-synced":
+        return "The modem clock is not set yet, so it cannot validate the GitHub certificate. Install from a local file instead.";
+      case "low-memory":
+        return "The modem skipped its scheduled check because memory was tight. Use Check again to try right now.";
+      case "update-active":
+        return "The modem is busy with another firmware update. Install from a local file instead.";
+      case null:
+        return "The modem has not checked GitHub yet. Install from a local file instead.";
+      default:
+        return `The modem could not reach GitHub (${error}). Install from a local file instead.`;
+    }
+  };
+
+  const githubSourceOption = { id: "github", text: "GitHub Release" };
+  const fileSourceOption = { id: "file", text: "Local file" };
 
   const uploadTypeOptions = [
     { id: FirmwareUploadType.modem, text: "Modem Firmware" },
@@ -47,9 +70,42 @@
   $: if (!selectedReleaseVersion && $firmwareUpdateStore.releases.length > 0) {
     selectedReleaseVersion = $firmwareUpdateStore.releases[0].version;
   }
-  $: if (open && !$firmwareUpdateStore.loaded && !$firmwareUpdateStore.loading) {
+
+  // Nicht der Browser lädt die Firmware, sondern das Modem – also entscheidet
+  // dessen Erreichbarkeit, ob die GitHub-Quelle überhaupt angeboten wird.
+  $: githubAvailable = $firmwareStatusStore.reachable === true;
+  // Solange das Modem noch kein Ergebnis und keinen Grund gemeldet hat, ist
+  // "nicht erreichbar" schlicht falsch – der Hintergrund-Check läuft erst kurz
+  // nach dem Start an.
+  $: githubChecking =
+    $firmwareStatusStore.checking ||
+    ($firmwareStatusStore.reachable === null && !$firmwareStatusStore.error);
+  $: sourceOptions = githubAvailable
+    ? [githubSourceOption, fileSourceOption]
+    : [fileSourceOption];
+  $: githubUnreachableReason = unreachableReason($firmwareStatusStore.error);
+  // Quelle nie unter einem laufenden Upload wegziehen – daran hängt die Anzeige.
+  $: sourceSwitchable = $uploaderStatus < FirmwareUploadStatus.uploading;
+  $: if (sourceSwitchable && !githubAvailable && source === "github") source = "file";
+  $: if (sourceSwitchable && githubAvailable && !sourcePinned && uploadType === FirmwareUploadType.modem) {
+    source = "github";
+  }
+
+  // Wer den Dialog öffnet, will jetzt updaten und nicht auf den nächsten
+  // Hintergrund-Lauf warten – also einmalig sofort nachsehen lassen.
+  $: if (open && !$firmwareStatusStore.checked && !$firmwareStatusStore.checking && !checkRequested) {
+    checkRequested = true;
+    socketService.sendRequestFirmwareStatus(true);
+  }
+  $: if (!open) checkRequested = false;
+
+  $: if (open && githubAvailable && !$firmwareUpdateStore.loaded && !$firmwareUpdateStore.loading) {
     void checkFirmwareUpdates();
   }
+
+  // Das Modem kennt aus seinem Hintergrund-Check nur die neuste Version. Kommt
+  // der Browser selbst nicht an die GitHub-API, bleibt wenigstens die.
+  $: espLatestVersion = $firmwareStatusStore.latest;
 
   function uploadChange(e: CustomEvent<ReadonlyArray<File>>) {
     if (!(ref && ref.files && ref.files.length > 0)) {
@@ -75,17 +131,17 @@
 
   function handleSourceChange(e: CustomEvent<{ selectedId: "github" | "file" }>) {
     source = e.detail.selectedId;
+    sourcePinned = true;
     resetUploadState();
   }
 
-  async function installRelease() {
-    const release = $firmwareUpdateStore.releases.find((item) => item.version === selectedReleaseVersion);
-    if (!release || downloading) return;
+  async function installVersion(version: string | null) {
+    if (!version || downloading) return;
 
     resetUploadState();
     downloading = true;
     try {
-      await uploader.installGithubRelease(release.version);
+      await uploader.installGithubRelease(version);
     } catch (error) {
       downloadError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -266,15 +322,28 @@
         />
       </div>
       {#if uploadType === FirmwareUploadType.modem}
-        <div style="width: 100%; margin-bottom: 1rem; position: relative; z-index: 999;">
-          <Dropdown
-            titleText="Update source"
-            items={sourceOptions}
-            selectedId={source}
-            on:select={handleSourceChange}
-            direction="bottom"
+        {#if githubChecking}
+          <p style="margin-bottom: 1rem;">Checking whether the modem can reach GitHub...</p>
+        {:else if githubAvailable}
+          <div style="width: 100%; margin-bottom: 1rem; position: relative; z-index: 999;">
+            <Dropdown
+              titleText="Update source"
+              items={sourceOptions}
+              selectedId={source}
+              on:select={handleSourceChange}
+              direction="bottom"
+            />
+          </div>
+        {:else}
+          <InlineNotification
+            kind="info"
+            title="GitHub not reachable from the modem"
+            subtitle={githubUnreachableReason}
+            hideCloseButton
+            lowContrast
           />
-        </div>
+          <Button kind="ghost" on:click={() => socketService.sendRequestFirmwareStatus(true)}>Check again</Button>
+        {/if}
       {/if}
     {/if}
     <div style="width: 100%;">
@@ -343,24 +412,7 @@
     {#if $uploaderStatus < FirmwareUploadStatus.uploading && source === "github"}
       {#if $firmwareUpdateStore.loading}
         <p>Loading releases from GitHub...</p>
-      {:else if $firmwareUpdateStore.error}
-        <InlineNotification
-          kind="error"
-          title="GitHub releases unavailable"
-          subtitle={$firmwareUpdateStore.error}
-          hideCloseButton
-          lowContrast
-        />
-        <Button kind="ghost" on:click={() => checkFirmwareUpdates(true)}>Retry</Button>
-      {:else if releaseOptions.length === 0}
-        <InlineNotification
-          kind="warning"
-          title="No compatible firmware found"
-          subtitle="No release contains firmware for this ESP target."
-          hideCloseButton
-          lowContrast
-        />
-      {:else}
+      {:else if releaseOptions.length > 0}
         <div class="release-picker">
           <Dropdown
             titleText="Version"
@@ -372,8 +424,41 @@
             Installed: {$firmwareUpdateStore.modemInfo?.git_tag || $firmwareUpdateStore.modemInfo?.git_hash}
             · Target: {$firmwareUpdateStore.modemInfo?.firmware_target}
           </p>
-          <Button on:click={installRelease} disabled={downloading}>Install {selectedReleaseVersion}</Button>
+          <Button on:click={() => installVersion(selectedReleaseVersion)} disabled={downloading}>
+            Install {selectedReleaseVersion}
+          </Button>
         </div>
+      {:else if espLatestVersion}
+        <InlineNotification
+          kind="info"
+          title="Release list unavailable in this browser"
+          subtitle="This browser cannot reach the GitHub API, so no version can be picked. The modem can still install the latest release it found."
+          hideCloseButton
+          lowContrast
+        />
+        <div class="release-picker">
+          <p>Installed: {$firmwareStatusStore.current ?? "unknown"} · Latest: {espLatestVersion}</p>
+          <Button on:click={() => installVersion(espLatestVersion)} disabled={downloading}>
+            Install {espLatestVersion}
+          </Button>
+        </div>
+      {:else if $firmwareUpdateStore.error}
+        <InlineNotification
+          kind="error"
+          title="GitHub releases unavailable"
+          subtitle={$firmwareUpdateStore.error}
+          hideCloseButton
+          lowContrast
+        />
+        <Button kind="ghost" on:click={() => checkFirmwareUpdates(true)}>Retry</Button>
+      {:else}
+        <InlineNotification
+          kind="warning"
+          title="No compatible firmware found"
+          subtitle="No release contains firmware for this ESP target."
+          hideCloseButton
+          lowContrast
+        />
       {/if}
       {#if downloadError}
         <InlineNotification kind="error" title="Download failed" subtitle={downloadError} hideCloseButton lowContrast />

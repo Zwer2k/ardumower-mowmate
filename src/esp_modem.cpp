@@ -134,6 +134,10 @@ void setup() {
 #endif
   otaHttpServer.begin();
   otaHttpServer.onFlashProgress = [&](size_t cur, size_t tot){ socketHandler.broadcastFlashProgress(cur, tot); };
+  otaHttpServer.onFirmwareStatus = [&](const Ota::FirmwareStatus &status){
+    socketHandler.broadcastFirmwareStatus(status);
+  };
+  socketHandler.onFirmwareStatusRequest = [&](bool force){ otaHttpServer.requestFirmwareStatus(force); };
   bleAdapter.begin();
   httpAdapter.begin();
   mowerAdapter.begin();

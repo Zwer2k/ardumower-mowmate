@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   compareVersions,
   firmwareAssetName,
-  hasFirmwareUpdate,
   selectFirmwareReleases,
   type GitHubRelease,
 } from "./github-releases";
@@ -38,17 +37,5 @@ describe("GitHub firmware releases", () => {
 
     expect(releases.map((item) => item.version)).toEqual(["v1.10.0", "v1.9.0"]);
     expect(releases.every((item) => item.asset.name === firmwareAssetName("esp32-s3"))).toBe(true);
-  });
-
-  it("reports an update only when the latest release is newer", () => {
-    const releases = selectFirmwareReleases([
-      release("v1.3.0", ["esp32-s3-firmware.bin"]),
-      release("v1.2.0", ["esp32-s3-firmware.bin"]),
-    ], "esp32-s3");
-
-    expect(hasFirmwareUpdate("v1.2.0", releases)).toBe(true);
-    expect(hasFirmwareUpdate("v1.3.0", releases)).toBe(false);
-    expect(hasFirmwareUpdate("v1.4.0", releases)).toBe(false);
-    expect(hasFirmwareUpdate("local-build", releases)).toBe(false);
   });
 });

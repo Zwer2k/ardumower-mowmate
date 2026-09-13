@@ -9,10 +9,9 @@
     import IconUpload from "carbon-icons-svelte/lib/CloudUpload.svelte";
     import IconRestart from "carbon-icons-svelte/lib/Restart.svelte";
     import IconChevronRight from "carbon-icons-svelte/lib/ChevronRight.svelte";
-    import { onMount } from 'svelte';
     import FirmwareUpload from '../firmware/FirmwareUpload.svelte';
-    import { checkFirmwareUpdates, firmwareUpdateStore } from '../firmware/update-store';
-    import { socketStore } from '../stores/socket';
+    import { firmwareDialogOpen } from '../firmware/update-store';
+    import { firmwareStatusStore } from '../stores/socket';
     import { toastStore } from '../stores/toast';
 
     interface Props {
@@ -22,8 +21,6 @@
 
     let open = $state(false);
     let restartOpen = $state(false);
-    let firmwareOpen = $state(false);
-    let wasConnected = $state(false);
     let menuRef: HTMLDivElement | null = null;
 
     const restartOptions = [
@@ -67,7 +64,7 @@
 
     function clickFirmwareUpdate() {
         close();
-        firmwareOpen = true;
+        firmwareDialogOpen.set(true);
     }
 
     async function restartDevice(option: (typeof restartOptions)[number]) {
@@ -81,18 +78,6 @@
             toastStore.set({ msg: `${option.label} failed: ${message}`, type: 'error' });
         }
     }
-
-    onMount(() => {
-        void checkFirmwareUpdates();
-    });
-
-    $effect(() => {
-        const connected = $socketStore.connected;
-        if (connected && !wasConnected && $firmwareUpdateStore.error) {
-            void checkFirmwareUpdates(true);
-        }
-        wasConnected = connected;
-    });
 
     $effect(() => {
         if (!browser) return;
@@ -128,7 +113,7 @@
         <button class="hom-item" onclick={clickFirmwareUpdate}>
             <IconUpload />
             <span>Update firmware</span>
-            {#if $firmwareUpdateStore.updateAvailable}
+            {#if $firmwareStatusStore.updateAvailable}
                 <span class="update-dot" title="Firmware update available" aria-label="Firmware update available"></span>
             {/if}
         </button>
@@ -163,7 +148,7 @@
     {/if}
 </div>
 
-<FirmwareUpload bind:open={firmwareOpen} />
+<FirmwareUpload bind:open={$firmwareDialogOpen} />
 
 <style lang="scss">
     .hom-wrapper {

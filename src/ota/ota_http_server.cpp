@@ -10,6 +10,7 @@
 #include <WiFiClientSecure.h>
 #include <time.h>
 #include "trust.h"
+#include "git_version.h"
 
 using namespace ArduMower::Modem::Ota;
 using namespace std::placeholders;
@@ -20,13 +21,40 @@ volatile bool ArduMower::Modem::Ota::otaFlashForceSend = false;
 
 const char *resultToString(Http::Result r);
 
+static const char *GITHUB_HOST = "github.com";
+static const char *GITHUB_API_HOST = "api.github.com";
+static const char *GITHUB_LATEST_RELEASE_URL =
+  "https://api.github.com/repos/Zwer2k/ardumower-mowmate/releases/latest";
+
+// Der Hintergrund-Check läuft selten: eine Firmware erscheint nicht stündlich,
+// und jeder Lauf kostet einen TLS-Handshake (~45KB Heap).
+static const uint32_t GITHUB_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000UL;
+// Nach einem Fehlversuch früher erneut probieren – direkt nach dem Boot steht
+// oft weder DNS noch die Uhrzeit, ohne die kein Zertifikat validiert.
+static const uint32_t GITHUB_CHECK_RETRY_MS = 15 * 60 * 1000UL;
+// Abstand zwischen "Modem ist betriebsbereit" und dem ersten Lauf. Die Frist
+// startet erst, wenn WiFi, Uhr und Heap stimmen – nie ab dem Bootzeitpunkt.
+static const uint32_t GITHUB_CHECK_READY_DELAY_MS = 60 * 1000UL;
+// Vor 2021-01-01 ist die Uhr offensichtlich nicht gestellt – dann scheitert
+// jede Zertifikatsprüfung, der Versuch lohnt nicht.
+static const time_t GITHUB_MIN_VALID_EPOCH = 1609459200;
+// Bewusst sehr niedrig: Der Riegel soll nur verhindern, dass der automatische
+// Check ein ohnehin taumelndes Gerät umstösst – wifi_health startet bei
+// maxAlloc < 2048 neu. Für den Download läuft derselbe TLS-Stack ganz ohne
+// Schranke, der Check darf also nicht strenger sein als das, was er ankündigt.
+static const uint32_t GITHUB_CHECK_MIN_MAX_ALLOC = 20 * 1024UL;
+
 HttpServer::HttpServer(Settings::Settings &settings, AsyncWebServer &server, MowerUpdater &mowerUpdater)
     : ArduMower::Modem::Http::Common(settings), _server(server), _mowerUpdater(mowerUpdater),
   _active(false), _failed(false), _restart(false), _restartTime(0), _flashSession(NULL),
   _githubUpdateActive(false), _githubUpdateSucceeded(false), _githubUpdateErrorLogged(false),
   _githubUpdateBuffered(false), _githubDownloadProgress(0), _githubDownloadTotal(0),
   _githubFlashProgress(0), _githubFlashTotal(0),
-  _githubUpdateError{} {}
+  _githubUpdateError{},
+  _githubReachable(false), _githubCheckActive(false), _githubCheckDone(false),
+  _githubCheckArmed(false),
+  _githubCheckPublishPending(false), _githubUpdateAvailable(false), _githubNextCheckAt(0),
+  _githubCheckError{}, _githubLatestVersion{} {}
 
 void HttpServer::begin()
 {
@@ -91,11 +119,11 @@ void HttpServer::handleGithubUpdateRequest(AsyncWebServerRequest *request)
     reject(request, 400, "github-update", "invalid-version");
     return;
   }
-  if (_githubUpdateActive || _flashSession)
+  if (_githubUpdateActive || _flashSession || _githubCheckActive)
   {
-    Log(WARN, "Ota::HttpServer::github-update::already-active(github=%d upload=%d)",
-        _githubUpdateActive, _flashSession != NULL);
-    reject(request, 409, "github-update", "update-active");
+    Log(WARN, "Ota::HttpServer::github-update::already-active(github=%d upload=%d check=%d)",
+        _githubUpdateActive, _flashSession != NULL, _githubCheckActive);
+    reject(request, 409, "github-update", _githubCheckActive ? "check-active" : "update-active");
     return;
   }
 
@@ -161,14 +189,315 @@ void HttpServer::githubUpdateTask(void *parameter)
   vTaskDelete(NULL);
 }
 
+static const char *firmwareTarget()
+{
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+  return "esp32-s3";
+#else
+  return "esp32";
+#endif
+}
+
+// Nur stabile Versionen der Form vX.Y.Z. Alles andere (Vorabversionen,
+// Datums-Tags) wird nicht zum Vergleich herangezogen.
+static bool parseVersion(const char *version, int parts[3])
+{
+  if (!version) return false;
+  if (*version == 'v' || *version == 'V') version++;
+
+  for (int i = 0; i < 3; i++)
+  {
+    if (*version < '0' || *version > '9') return false;
+    parts[i] = 0;
+    while (*version >= '0' && *version <= '9')
+    {
+      parts[i] = parts[i] * 10 + (*version - '0');
+      version++;
+    }
+    if (i < 2 && *version++ != '.') return false;
+  }
+  return *version == '\0';
+}
+
+static bool isNewerVersion(const char *candidate, const char *current)
+{
+  int left[3], right[3];
+  if (!parseVersion(candidate, left) || !parseVersion(current, right)) return false;
+
+  for (int i = 0; i < 3; i++)
+  {
+    if (left[i] != right[i]) return left[i] > right[i];
+  }
+  return false;
+}
+
+void HttpServer::publishFirmwareStatus(bool checking)
+{
+  if (!onFirmwareStatus) return;
+
+  const FirmwareStatus status = {
+    _githubReachable,
+    checking,
+    _githubUpdateAvailable,
+    _githubCheckDone,
+    git_tag[0] ? git_tag : NULL,
+    _githubLatestVersion[0] ? _githubLatestVersion : NULL,
+    _githubCheckError[0] ? _githubCheckError : NULL,
+  };
+  onFirmwareStatus(status);
+}
+
+void HttpServer::scheduleGithubCheck(uint32_t delayMs)
+{
+  _githubNextCheckAt = millis() + delayMs;
+}
+
+// Was einen Check gerade unmöglich macht, oder NULL wenn alles bereit ist.
+// userRequested = jemand hat im Dialog auf "Check again" geklickt.
+const char *HttpServer::githubCheckBlocker(bool userRequested) const
+{
+  if (WiFi.status() != WL_CONNECTED) return "wifi-disconnected";
+  if (time(NULL) < GITHUB_MIN_VALID_EPOCH) return "clock-not-synced";
+  // Während eines laufenden Updates keinen zweiten TLS-Client aufmachen.
+  if (_githubUpdateActive || _flashSession) return "update-active";
+  // Wer ausdrücklich prüfen lässt, bekommt keinen Heap-Riegel vorgesetzt: Der
+  // Firmware-Download macht denselben Handshake völlig ungeprüft.
+  if (!userRequested && ESP.getMaxAllocHeap() < GITHUB_CHECK_MIN_MAX_ALLOC) return "low-memory";
+  return NULL;
+}
+
+// Startet den Check-Task, wenn gerade nichts dagegen spricht. Gibt false
+// zurück, wenn nicht geprüft werden konnte – _githubCheckError sagt warum.
+bool HttpServer::startGithubCheck(bool userRequested)
+{
+  if (_githubCheckActive) return true;
+
+  const char *blocker = githubCheckBlocker(userRequested);
+  if (blocker)
+  {
+    _githubReachable = false;
+    snprintf(_githubCheckError, sizeof(_githubCheckError), "%s", blocker);
+    Log(INFO, "Ota::HttpServer::github-check::skipped(%s free=%u max=%u)",
+      blocker, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+    return false;
+  }
+
+  _githubCheckActive = true;
+  // TLS-Handshake und gefiltertes JSON-Parsen laufen im selben Task – 8KB Stack
+  // sind dafür zu knapp bemessen.
+  if (xTaskCreate(githubCheckTask, "github-check", 12288, this, 1, NULL) != pdPASS)
+  {
+    _githubCheckActive = false;
+    _githubReachable = false;
+    snprintf(_githubCheckError, sizeof(_githubCheckError), "check-task-create-failed");
+    Log(ERR, "Ota::HttpServer::github-check::task-create-failed");
+    return false;
+  }
+
+  // Auch ein manuell ausgelöster Lauf verschiebt den nächsten Hintergrund-Check.
+  scheduleGithubCheck(GITHUB_CHECK_INTERVAL_MS);
+  return true;
+}
+
+void HttpServer::requestFirmwareStatus(bool force)
+{
+  if (_githubCheckActive)
+  {
+    publishFirmwareStatus(true);
+    return;
+  }
+
+  if (force && startGithubCheck(true))
+  {
+    publishFirmwareStatus(true);
+    return;
+  }
+
+  publishFirmwareStatus(false);
+}
+
+// Läuft im loopTask: startet fällige Hintergrund-Checks und verschickt deren
+// Ergebnis. Der Check-Task selbst fasst den WebSocket bewusst nicht an.
+void HttpServer::loopGithubCheck()
+{
+  if (_githubCheckPublishPending)
+  {
+    _githubCheckPublishPending = false;
+    publishFirmwareStatus(false);
+  }
+
+  if (_githubCheckActive) return;
+
+  // Erster Durchlauf nach dem Boot: nur die Frist setzen, nie prüfen. Der
+  // Konstruktor kann das nicht, dort ist millis() noch nichts wert.
+  if (!_githubCheckArmed)
+  {
+    _githubCheckArmed = true;
+    scheduleGithubCheck(GITHUB_CHECK_READY_DELAY_MS);
+    return;
+  }
+
+  // Solange etwas blockiert, läuft die Wartezeit gar nicht erst los. Damit
+  // hängt der erste Check am Betriebszustand des Modems und nicht am
+  // Bootzeitpunkt – der Start selbst bleibt davon vollständig unberührt.
+  const char *blocker = githubCheckBlocker(false);
+  if (blocker)
+  {
+    scheduleGithubCheck(GITHUB_CHECK_READY_DELAY_MS);
+    _githubReachable = false;
+    // Nur bei Wechsel senden – diese Schleife läuft mit der Loop-Frequenz.
+    if (strcmp(_githubCheckError, blocker) != 0)
+    {
+      snprintf(_githubCheckError, sizeof(_githubCheckError), "%s", blocker);
+      publishFirmwareStatus(false);
+    }
+    return;
+  }
+
+  if ((int32_t)(millis() - _githubNextCheckAt) < 0) return;
+
+  if (!startGithubCheck(false))
+  {
+    scheduleGithubCheck(GITHUB_CHECK_RETRY_MS);
+    publishFirmwareStatus(false);
+  }
+}
+
+void HttpServer::githubCheckTask(void *parameter)
+{
+  static_cast<HttpServer *>(parameter)->runGithubCheck();
+  vTaskDelete(NULL);
+}
+
+void HttpServer::runGithubCheck()
+{
+  const char *error = NULL;
+  char errorDetail[64] = {};
+  char latest[sizeof(_githubLatestVersion)] = {};
+  bool assetFound = false;
+
+  IPAddress apiIp;
+  if (WiFi.hostByName(GITHUB_API_HOST, apiIp) != 1)
+  {
+    error = "dns-failed";
+    Log(WARN, "Ota::HttpServer::github-check::dns-failed(host=%s)", GITHUB_API_HOST);
+  }
+
+  HTTPClient http;
+  WiFiClientSecure secureClient;
+  bool httpBegun = false;
+
+  if (!error)
+  {
+    secureClient.setCACert(tls_ca_trust);
+    secureClient.setHandshakeTimeout(15);
+    http.setConnectTimeout(15000);
+    http.setTimeout(15000);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+    if (!http.begin(secureClient, GITHUB_LATEST_RELEASE_URL))
+    {
+      error = "api-init-failed";
+    }
+    else
+    {
+      httpBegun = true;
+      http.addHeader("Accept", "application/vnd.github+json");
+      // Die GitHub-API weist Anfragen ohne User-Agent ab.
+      http.addHeader("User-Agent", "ardumower-mowmate");
+
+      const int httpCode = http.GET();
+      if (httpCode != HTTP_CODE_OK)
+      {
+        if (httpCode < 0)
+        {
+          const String httpError = HTTPClient::errorToString(httpCode);
+          char tlsError[48] = {};
+          const int tlsErrorCode = secureClient.lastError(tlsError, sizeof(tlsError));
+          snprintf(errorDetail, sizeof(errorDetail), "api-transport-%d:%.16s tls=%d",
+            httpCode, httpError.c_str(), tlsErrorCode);
+          Log(WARN, "Ota::HttpServer::github-check::transport-error(code=%d message=%s tls=%d tls-message=%s)",
+            httpCode, httpError.c_str(), tlsErrorCode, tlsError[0] ? tlsError : "none");
+        }
+        else
+        {
+          snprintf(errorDetail, sizeof(errorDetail), "api-http-%d", httpCode);
+          Log(WARN, "Ota::HttpServer::github-check::http-error(status=%d)", httpCode);
+        }
+        error = errorDetail;
+      }
+    }
+  }
+
+  if (!error)
+  {
+    // Die Release-Antwort ist mehrere KB gross. Der Filter lässt ArduinoJson
+    // nur die zwei Felder behalten, die uns interessieren – der Rest wird beim
+    // Streamen verworfen und belegt keinen Heap.
+    JsonDocument filter;
+    filter["tag_name"] = true;
+    filter["assets"][0]["name"] = true;
+
+    JsonDocument doc;
+    const DeserializationError jsonError =
+      deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+    if (jsonError)
+    {
+      snprintf(errorDetail, sizeof(errorDetail), "api-parse-failed:%.24s", jsonError.c_str());
+      error = errorDetail;
+      Log(WARN, "Ota::HttpServer::github-check::parse-failed(%s)", jsonError.c_str());
+    }
+    else
+    {
+      const char *tag = doc["tag_name"] | "";
+      snprintf(latest, sizeof(latest), "%s", tag);
+
+      char assetName[32];
+      snprintf(assetName, sizeof(assetName), "%s-firmware.bin", firmwareTarget());
+      for (JsonObject asset : doc["assets"].as<JsonArray>())
+      {
+        if (strcmp(asset["name"] | "", assetName) == 0)
+        {
+          assetFound = true;
+          break;
+        }
+      }
+
+      if (latest[0] == '\0') error = "api-no-tag";
+      else if (!assetFound) error = "no-firmware-asset";
+    }
+  }
+
+  if (httpBegun) http.end();
+
+  if (error)
+  {
+    snprintf(_githubCheckError, sizeof(_githubCheckError), "%s", error);
+  }
+  else
+  {
+    _githubCheckError[0] = '\0';
+    snprintf(_githubLatestVersion, sizeof(_githubLatestVersion), "%s", latest);
+  }
+
+  // Ein fehlendes Asset heisst: GitHub war erreichbar, dieses Release taugt nur
+  // nicht für dieses Board. Das ist kein Erreichbarkeitsproblem.
+  _githubReachable = error == NULL || strcmp(error, "no-firmware-asset") == 0;
+  _githubCheckDone = true;
+  _githubUpdateAvailable = error == NULL && isNewerVersion(_githubLatestVersion, git_tag);
+  _githubCheckActive = false;
+  _githubCheckPublishPending = true;
+
+  Log(INFO, "Ota::HttpServer::github-check::result(reachable=%d latest=%s current=%s update=%d error=%s free=%u)",
+    _githubReachable, _githubLatestVersion[0] ? _githubLatestVersion : "none",
+    git_tag[0] ? git_tag : "none", _githubUpdateAvailable,
+    _githubCheckError[0] ? _githubCheckError : "none", (unsigned)ESP.getFreeHeap());
+}
+
 void HttpServer::runGithubUpdate(const String &version)
 {
   static const size_t MAX_GITHUB_OTA_SIZE = 0x300000;
-#ifdef CONFIG_IDF_TARGET_ESP32S3
-  const char *target = "esp32-s3";
-#else
-  const char *target = "esp32";
-#endif
+  const char *target = firmwareTarget();
   const String url = "https://github.com/Zwer2k/ardumower-mowmate/releases/download/" +
     version + "/" + target + "-firmware.bin";
 
@@ -194,14 +523,14 @@ void HttpServer::runGithubUpdate(const String &version)
   int httpCode = 0;
 
   IPAddress githubIp;
-  if (WiFi.hostByName("github.com", githubIp) != 1)
+  if (WiFi.hostByName(GITHUB_HOST, githubIp) != 1)
   {
     error = "download-dns-failed:github.com";
-    Log(ERR, "Ota::HttpServer::github-update::dns-failed(host=github.com)");
+    Log(ERR, "Ota::HttpServer::github-update::dns-failed(host=%s)", GITHUB_HOST);
   }
   else
   {
-    Log(INFO, "Ota::HttpServer::github-update::dns(host=github.com ip=%s)", githubIp.toString().c_str());
+    Log(INFO, "Ota::HttpServer::github-update::dns(host=%s ip=%s)", GITHUB_HOST, githubIp.toString().c_str());
   }
 
   if (!error && !http.begin(secureClient, url))
@@ -409,6 +738,7 @@ void HttpServer::runGithubUpdate(const String &version)
 void HttpServer::loop()
 {
   loopFlash();
+  loopGithubCheck();
   loopRestart();
 }
 
