@@ -554,6 +554,9 @@ namespace ArduMower
         virtual bool powerOff() = 0;
 
         virtual bool uploadMapToMower() = 0;
+        // Upload the persisted version of a map without making it the current
+        // map (used by the scheduler). Must not touch RAM drafts.
+        virtual bool uploadSavedMapToMower(const String &id) { (void)id; return false; }
         virtual bool uploadMapToMowerActive() { return false; }
         virtual bool uploadMapToMowerSuccess() { return false; }
         virtual UploadProgress uploadProgress() { return UploadProgress(); }

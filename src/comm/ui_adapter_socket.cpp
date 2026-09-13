@@ -2255,36 +2255,20 @@ void UiSocketHandler::processScheduleTriggerStateMachine()
 
   switch (_scheduleTriggerPhase) {
     case 0:
-      // Load the scheduled map into RAM.
-      if (!_source.loadMap(_scheduleTriggerMapId)) {
-        Log(WARN, "%s processScheduleTriggerStateMachine: loadMap failed for %s", _LOG_, _scheduleTriggerMapId.c_str());
+      // Upload the persisted version of the scheduled map directly.
+      // Previously the map was made current via loadMap(), which preferred
+      // the RAM draft — a schedule mowed with unsaved edits — and switched
+      // the map away under an open editor. uploadSavedMapToMower() reads the
+      // SPIFFS copy and leaves the current map alone.
+      if (!_cmd.uploadSavedMapToMower(_scheduleTriggerMapId)) {
+        Log(WARN, "%s processScheduleTriggerStateMachine: upload of saved map %s could not be started", _LOG_, _scheduleTriggerMapId.c_str());
         _scheduleTriggerPending = false;
         _scheduleManager.computeNextRun();
         _scheduleDirty = true;
         return;
       }
-      _scheduleTriggerPhase = 1;
-      Log(DBG, "%s processScheduleTriggerStateMachine: map loaded, waiting for current map", _LOG_);
-      break;
-
-    case 1:
-      // Wait until currentMapId matches and map chunk send has settled.
-      if (_source.currentMapId() == _scheduleTriggerMapId && !mapChunkSendState.active) {
-        _scheduleTriggerPhase = 2;
-      }
-      break;
-
-    case 2:
-      // Upload map to mower.
-      if (_cmd.uploadMapToMower()) {
-        _scheduleTriggerPhase = 3;
-        sendProgress("upload", 0, "Uploading scheduled map");
-      } else {
-        Log(WARN, "%s processScheduleTriggerStateMachine: upload start failed", _LOG_);
-        _scheduleTriggerPending = false;
-        _scheduleManager.computeNextRun();
-        _scheduleDirty = true;
-      }
+      _scheduleTriggerPhase = 3;
+      sendProgress("upload", 0, "Uploading scheduled map");
       break;
 
     case 3:
