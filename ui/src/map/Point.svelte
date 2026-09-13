@@ -3,6 +3,7 @@
   import { browser } from "$app/environment";
   import { pointer } from "d3-selection";
   import type { Point } from "./model";
+  import { recordMapSnapshot } from "./interactions/map-history";
 
   const dispatch = createEventDispatcher();
 
@@ -37,11 +38,13 @@
       "ontouchstart" in window ||
       navigator.maxTouchPoints > 0);
 
-  // Keep the hit-area exactly at the visible point/ring size so neighbouring
-  // points can still be selected without the active point's hit area
-  // overlapping them. If the caller supplies an explicit hitR we keep that value
-  // (legacy behaviour).
-  $: effectiveHitR = hitR != null && hitR > r ? hitR : r;
+  // With a mouse the hit area matches the visible point exactly, so
+  // neighbouring points stay selectable. A finger is far less precise than the
+  // 8 cm circle the map draws, so on coarse pointers the invisible hit area is
+  // enlarged. An explicit hitR from the caller always wins.
+  const touchHitFactor = 2.5;
+  $: effectiveHitR =
+    hitR != null && hitR > r ? hitR : isTouchDevice ? r * touchHitFactor : r;
 
   $: stroke =
     isDragging
@@ -81,6 +84,8 @@
     event.preventDefault();
 
     editItemId = mapItemId;
+    // One undo step per drag, not per pointermove.
+    recordMapSnapshot();
     isDragging = true;
     currentPointerId = event.pointerId;
     dragContext.setPanEnabled(false);
@@ -147,7 +152,7 @@
     pointer-events="none"
     role="none"
   >
-    <title>test</title>
+    <title>{value.x.toFixed(2)}, {(-value.y).toFixed(2)}</title>
   </circle>
 
   <!-- Invisible, enlarged hit area on touch devices. It captures the pointer
@@ -181,6 +186,6 @@
     on:mouseleave={() => (hovered = false)}
     style="cursor: pointer;"
   >
-    <title>test</title>
+    <title>{value.x.toFixed(2)}, {(-value.y).toFixed(2)}</title>
   </circle>
 {/if}

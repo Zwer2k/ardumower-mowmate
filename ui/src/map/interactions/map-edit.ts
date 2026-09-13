@@ -1,9 +1,9 @@
-import type { Point, Edge, MapArea } from "../model";
+import type { Point, MapArea } from "../model";
 import type { Position } from "../../model";
-import { MapStore, cloneMap } from "../service";
-import { pointsToEdges } from "../core/geometry";
+import { MapStore } from "../service";
 import { get } from "svelte/store";
 import { setMapDirty } from "../services/map-sync";
+import { recordMapSnapshot } from "./map-history";
 
 export function getPoints(
   map: import("../model").Map,
@@ -207,43 +207,6 @@ export function findCrossedCandidate(
   return crossed;
 }
 
-export function pointsToEditItem(idPrefix: string, textPrefix: string) {
-  return (p: Point, index: number) => ({
-    id: idPrefix + index,
-    text: textPrefix + index,
-  });
-}
-
-export function edgesToEditItem(idPrefix: string, textPrefix: string) {
-  return (e: Edge, index: number) => ({
-    id: idPrefix + index,
-    text: textPrefix + index,
-  });
-}
-
-export interface EditItem {
-  id: string;
-  text: string;
-}
-
-export function buildEditItems(map: import("../model").Map, category?: MapArea): EditItem[] {
-  if (!map) return [];
-  const items = [
-    ...map.perimeter.points.map(pointsToEditItem("map-0-perimeter-point-", "Perimeter point #")),
-    ...pointsToEdges(map.perimeter.points).map(edgesToEditItem("map-0-perimeter-edge-", "Perimeter edge #")),
-    ...map.dockpoints.points.map(pointsToEditItem("map-0-dockpoints-point-", "Dockstrecke point #")),
-    ...pointsToEdges(map.dockpoints.points, false).map(edgesToEditItem("map-0-dockpoints-edge-", "Dockstrecke edge #")),
-    ...map.waypoints.points.map(pointsToEditItem("map-0-waypoints-point-", "Wegpunkt point #")),
-    ...pointsToEdges(map.waypoints.points, false).map(edgesToEditItem("map-0-waypoints-edge-", "Wegpunkt edge #")),
-    ...map.exclusions.flatMap((e, i) => [
-      ...e.points.map(pointsToEditItem(`map-0-exclusion-${i}-point-`, `Exclusion #${i} point #`)),
-      ...pointsToEdges(e.points).map(edgesToEditItem(`map-0-exclusion-${i}-edge-`, `Exclusion #${i} edge #`)),
-    ]),
-  ];
-  if (!category) return items;
-  return items.filter((it) => itemBelongsToCategory(it.id, category));
-}
-
 export function itemBelongsToCategory(editItemId: string, category: MapArea): boolean {
   if (category === "perimeter") return editItemId.includes("-perimeter-");
   if (category === "dockpoints") return editItemId.includes("-dockpoints-");
@@ -261,6 +224,7 @@ export function categoryFromEditItemId(editItemId: string): MapArea | null {
 }
 
 export function deletePointByEditItemId(editItemId: string) {
+  recordMapSnapshot();
   if (editItemId.indexOf("-perimeter-") !== -1) {
     const index = parseInt(editItemId.replace(/.*-point-([0-9]+)/, "$1"));
     MapStore.update((store) => {
@@ -306,6 +270,7 @@ export function deletePointByEditItemId(editItemId: string) {
 export function splitEdgeByEditItemId(editItemId: string): string | null {
   const edgeMatch = editItemId.match(/^(.*)-edge-([0-9]+)$/);
   if (!edgeMatch) return null;
+  recordMapSnapshot();
 
   const prefix = edgeMatch[1];
   const edgeIndex = parseInt(edgeMatch[2]);
@@ -377,6 +342,7 @@ export function addPointAtMowerPosition(
   activeArea: MapArea = "perimeter"
 ): number | null {
   if (!mowerPos) return null;
+  recordMapSnapshot();
   const gpsPt: Point = {
     x: mowerPos.x,
     y: -mowerPos.y,
@@ -577,6 +543,8 @@ export function startDrawMode(
   const pts = getPoints(get(MapStore).map, area, exclusionIndex);
   const n = pts.length;
   if (edgeIndex >= n) return null;
+  // The whole draw gesture (insert midpoint, move it, place it) is one step.
+  recordMapSnapshot();
 
   const endIdx = (edgeIndex + 1) % n;
   if (endIdx === 0 && area !== "perimeter" && area !== "exclusion") return null;

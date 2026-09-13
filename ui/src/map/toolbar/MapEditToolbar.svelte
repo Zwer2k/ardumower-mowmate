@@ -1,39 +1,35 @@
 <script lang="ts">
-  import { Button, ComboBox, Dropdown, Row } from "carbon-components-svelte";
+  import { Button, Dropdown, Row } from "carbon-components-svelte";
   import IconPen from "carbon-icons-svelte/lib/Pen.svelte";
   import IconSplit from "carbon-icons-svelte/lib/Split.svelte";
   import IconAdd from "carbon-icons-svelte/lib/Add.svelte";
   import IconTrashCan from "carbon-icons-svelte/lib/TrashCan.svelte";
   import IconAddAlt from "carbon-icons-svelte/lib/AddAlt.svelte";
   import IconSubtractAlt from "carbon-icons-svelte/lib/SubtractAlt.svelte";
-  import type { EditItem } from "../interactions/map-edit";
+  import IconUndo from "carbon-icons-svelte/lib/Undo.svelte";
+  import IconRedo from "carbon-icons-svelte/lib/Redo.svelte";
   import type { MapArea } from "../model";
 
   export let edit: boolean;
   export let editCategory: MapArea = "perimeter";
   export let categoryItems: { id: string; text: string }[] = [];
-  export let editItems: EditItem[];
-  export let selectedId: string | null;
   export let editPoint: boolean;
   export let editEdge: boolean;
   export let canAdd: boolean;
   export let canCreateExclusion: boolean;
   export let canDeleteExclusion: boolean;
   export let drawActive: boolean;
+  export let canUndo: boolean = false;
+  export let canRedo: boolean = false;
+  export let onUndo: () => void;
+  export let onRedo: () => void;
   export let onSelectCategory: (e: CustomEvent) => void;
-  export let onSelect: (e: CustomEvent) => void;
-  export let onClear: () => void;
   export let onDrawClick: () => void;
   export let onSplitClick: () => void;
   export let onAddClick: () => void;
   export let onDeleteClick: () => void;
   export let onCreateExclusionClick: () => void;
   export let onDeleteExclusionClick: () => void;
-  export let shouldFilterItem: (item: EditItem, value: string) => boolean;
-
-  function handleSelect(e: CustomEvent) {
-    onSelect(e);
-  }
 
   function handleCategorySelect(e: CustomEvent) {
     onSelectCategory(e);
@@ -50,20 +46,24 @@
       on:select={handleCategorySelect}
     />
   </div>
-  <!-- Hidden legacy point/edge selector, retained for future use -->
-  <div class="edit-combo" hidden>
-    <ComboBox
-      disabled={!edit || drawActive}
-      placeholder="Select item to edit"
-      items={editItems}
-      selectedId={selectedId}
-      on:select={handleSelect}
-      on:clear={onClear}
-      {shouldFilterItem}
-    />
-  </div>
   <div class="edit-actions">
     <div class="action-btns">
+      <Button
+        kind="ghost"
+        size="small"
+        disabled={!canUndo}
+        icon={IconUndo}
+        iconDescription="Undo (Ctrl+Z)"
+        on:click={onUndo}
+      />
+      <Button
+        kind="ghost"
+        size="small"
+        disabled={!canRedo}
+        icon={IconRedo}
+        iconDescription="Redo (Ctrl+Y)"
+        on:click={onRedo}
+      />
       <Button
         kind={drawActive ? "primary" : "tertiary"}
         size="small"
@@ -116,7 +116,7 @@
         disabled={drawActive || !edit || !editPoint}
         on:click={onDeleteClick}
         icon={IconTrashCan}
-        iconDescription="Delete"
+        iconDescription="Delete (Del)"
       />
     </div>
   </div>
@@ -132,14 +132,6 @@
     min-width: 0;
   }
   .edit-category :global(.bx--dropdown) {
-    width: 100%;
-    min-width: 0;
-  }
-  .edit-combo {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-  .edit-combo :global(.bx--combo-box) {
     width: 100%;
     min-width: 0;
   }
