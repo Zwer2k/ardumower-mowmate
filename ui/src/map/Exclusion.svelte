@@ -19,7 +19,7 @@
   function updatePoint(index: number, x: number, y: number) {
     value = {
       ...value,
-      points: value.points.map((p, i) => i === index ? { x, y } : p),
+      points: value.points.map((p, i) => i === index ? { ...p, x, y } : p),
     };
     onMove(value.points);
   }

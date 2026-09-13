@@ -7,7 +7,7 @@ export interface CompassDragState {
   lastRotationMapId: string | null;
   setRotation: (r: number) => void;
   reset: () => void;
-  onDown: (event: MouseEvent) => void;
+  onDown: (event: PointerEvent) => void;
 }
 
 export function createCompassState(): CompassDragState {
@@ -22,11 +22,15 @@ export function createCompassState(): CompassDragState {
     reset: () => {
       currentMapRotationStore.set(0);
     },
-    onDown: (event: MouseEvent) => {
+    // Pointer events (not mouse events) so the compass also works on touch
+    // devices; with mouse-only listeners the map could not be rotated on a
+    // tablet at all.
+    onDown: (event: PointerEvent) => {
       const nextState = { ...state, rotationManuallySet: true };
       Object.assign(state, nextState);
       event.preventDefault();
       const btn = event.currentTarget as HTMLElement;
+      const pointerId = event.pointerId;
       const rect = btn.getBoundingClientRect();
       const centerX = rect.left + rect.width / 2;
       const centerY = rect.top + rect.height / 2;
@@ -35,28 +39,34 @@ export function createCompassState(): CompassDragState {
       let didDrag = false;
       let currentRotation = get(currentMapRotationStore);
 
-      function onMove(e: MouseEvent) {
-        didDrag = true;
+      function onMove(e: PointerEvent) {
+        if (e.pointerId !== pointerId) return;
         const angle = Math.atan2(e.clientY - centerY, e.clientX - centerX) * 180 / Math.PI;
         let delta = angle - lastAngle;
         if (delta > 180) delta -= 360;
         if (delta < -180) delta += 360;
+        // Ignore pointer jitter so a tap still counts as a click (+90°).
+        if (!didDrag && Math.abs(delta) < 2) return;
+        didDrag = true;
         currentRotation = ((currentRotation + delta) % 360 + 360) % 360;
         state.setRotation(currentRotation);
         lastAngle = angle;
       }
 
-      function onUp() {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
+      function onUp(e: PointerEvent) {
+        if (e.pointerId !== pointerId) return;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
         if (!didDrag) {
           currentRotation = ((currentRotation + 90) % 360 + 360) % 360;
           state.setRotation(currentRotation);
         }
       }
 
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
     },
   };
   return state;

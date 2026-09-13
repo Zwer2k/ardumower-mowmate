@@ -92,11 +92,11 @@
     />
 
     <NumberInput
-      label="Distance to border"
+      label="Distance to border (m)"
       bind:value={distanceToBorder}
       min={0}
       max={5}
-      step={1}
+      step={0.05}
     />
 
     <NumberInput

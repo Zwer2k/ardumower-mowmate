@@ -33,28 +33,31 @@
     import { socketStore } from "../../stores/socket";
 
     const weekDays = [
-        { day: 0, label: "So" },
-        { day: 1, label: "Mo" },
-        { day: 2, label: "Di" },
-        { day: 3, label: "Mi" },
-        { day: 4, label: "Do" },
-        { day: 5, label: "Fr" },
-        { day: 6, label: "Sa" },
+        { day: 0, label: "Sun" },
+        { day: 1, label: "Mon" },
+        { day: 2, label: "Tue" },
+        { day: 3, label: "Wed" },
+        { day: 4, label: "Thu" },
+        { day: 5, label: "Fri" },
+        { day: 6, label: "Sat" },
     ];
 
     const monthDays = Array.from({ length: 31 }, (_, i) => i + 1);
 
     const modeItems = [
-        { id: "0", text: "Täglich" },
-        { id: "1", text: "Wöchentlich" },
-        { id: "2", text: "Monatlich" },
+        { id: "0", text: "Daily" },
+        { id: "1", text: "Weekly" },
+        { id: "2", text: "Monthly" },
     ];
 
     let selectedEntryId: number | null = null;
     $: entries = $scheduleStore.entries;
     $: selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? null;
     $: currentMap = useCurrentMap($socketStore.maps, $socketStore.currentMapId);
-    $: canAdd = currentMap != null;
+    // Der Scheduler lädt die gespeicherte Version der Karte hoch; eine
+    // transiente (nie gespeicherte) Karte kann er nicht ausführen.
+    $: currentMapIsTransient = !!currentMap && currentMap.id.startsWith("__t_");
+    $: canAdd = currentMap != null && !currentMapIsTransient;
     $: hasScheduleDirty = $scheduleStore.dirty;
 
     let currentMapId: string | null = null;
@@ -120,9 +123,9 @@
     }
 
     function formatMode(entry: (typeof entries)[0]): string {
-        if (entry.mode === 0) return "Täglich";
-        if (entry.mode === 1) return "Wöchentlich";
-        if (entry.mode === 2) return "Monatlich";
+        if (entry.mode === 0) return "Daily";
+        if (entry.mode === 1) return "Weekly";
+        if (entry.mode === 2) return "Monthly";
         return "?";
     }
 </script>
@@ -135,31 +138,34 @@
                 size="small"
                 disabled={!hasScheduleDirty}
                 icon={IconSave}
-                iconDescription="Schedule speichern"
+                iconDescription="Save schedule"
                 on:click={() => scheduleStore.save()}
             >
-                <span class="btn-label">Speichern</span>
+                <span class="btn-label">Save</span>
             </Button>
             <Button
                 kind="secondary"
                 size="small"
                 disabled={!canAdd}
                 icon={IconAdd}
-                iconDescription="Termin hinzufügen"
+                iconDescription="Add entry"
                 on:click={addEntry}
             >
-                <span class="btn-label">Hinzufügen</span>
+                <span class="btn-label">Add</span>
             </Button>
             {#if currentMap}
                 <span class="map-hint"
-                    >Karte: <strong>{currentMap.name}</strong></span
+                    >Map: <strong>{currentMap.name}</strong></span
                 >
+                {#if currentMapIsTransient}
+                    <span class="map-hint warn">Save the map first</span>
+                {/if}
             {:else}
-                <span class="map-hint warn">Keine Karte geladen</span>
+                <span class="map-hint warn">No map loaded</span>
             {/if}
             <div
                 class="schedule-toggle"
-                title="Scheduler aktiviert/deaktiviert"
+                title="Enable/disable the scheduler"
             >
                 <Toggle
                     hideLabel
@@ -182,14 +188,14 @@
                 <StructuredList>
                     <StructuredListHead>
                         <StructuredListRow head>
-                            <StructuredListCell head>Aktiv</StructuredListCell>
+                            <StructuredListCell head>Active</StructuredListCell>
                             <StructuredListCell head>Name</StructuredListCell>
-                            <StructuredListCell head>Uhrzeit</StructuredListCell
+                            <StructuredListCell head>Time</StructuredListCell
                             >
                             <StructuredListCell head
-                                >Wiederholung</StructuredListCell
+                                >Repeat</StructuredListCell
                             >
-                            <StructuredListCell head>Karte</StructuredListCell>
+                            <StructuredListCell head>Map</StructuredListCell>
                             <StructuredListCell head></StructuredListCell>
                         </StructuredListRow>
                     </StructuredListHead>
@@ -213,7 +219,7 @@
                                              every render. -->
                                         <Checkbox
                                             hideLabel
-                                            labelText="Aktiv"
+                                            labelText="Active"
                                             checked={entry.enabled}
                                             on:check={(e) => {
                                                 if (
@@ -247,7 +253,7 @@
                                         kind="danger"
                                         size="small"
                                         icon={IconTrashCan}
-                                        iconDescription="Löschen"
+                                        iconDescription="Delete"
                                         on:click={() => removeEntry(entry.id)}
                                     />
                                 </StructuredListCell>
@@ -255,8 +261,8 @@
                         {:else}
                             <StructuredListRow>
                                 <StructuredListCell style="grid-column: span 5"
-                                    >Keine Termine. Füge einen mit der aktuellen
-                                    Karte hinzu.</StructuredListCell
+                                    >No entries yet. Add one for the current
+                                    map.</StructuredListCell
                                 >
                             </StructuredListRow>
                         {/each}
@@ -274,18 +280,18 @@
                             updateEntry(entry.id, { name: entry.name })}
                     />
                     <TimePicker
-                        labelText="Uhrzeit"
+                        labelText="Time"
                         value={formatTime(entry.hour, entry.minute)}
                         on:change={(e) => onTimeChange(entry, e)}
                     />
                     <Dropdown
-                        titleText="Wiederholung"
+                        titleText="Repeat"
                         items={modeItems}
                         selectedId={String(entry.mode)}
                         on:select={(e) => onSelectMode(entry, e)}
                     />
                     {#if entry.mode === 1}
-                        <FormGroup legendText="Wochentage">
+                        <FormGroup legendText="Weekdays">
                             <div class="weekday-grid">
                                 {#each weekDays as wd}
                                     <Button
@@ -312,7 +318,7 @@
                         </FormGroup>
                     {/if}
                     {#if entry.mode === 2}
-                        <FormGroup legendText="Monatstage">
+                        <FormGroup legendText="Days of month">
                             <div class="month-grid">
                                 {#each monthDays as day}
                                     <Button
@@ -340,7 +346,7 @@
                     {/if}
                     <div class="map-readonly">
                         <IconCalendar size={16} />
-                        Karte für diesen Termin:
+                        Map for this entry:
                         <strong>{entry.mapName}</strong>
                     </div>
                 </div>

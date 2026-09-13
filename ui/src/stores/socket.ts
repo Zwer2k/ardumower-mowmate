@@ -34,7 +34,6 @@ import { mowSettingsStore } from "../map/mow-settings";
 import { currentMapRotationStore, updateDrivenTrack } from "../map/service";
 import { mapWorkflowStore } from "../map/workflow/map-workflow-store";
 import { setMapDirty } from "../map/services/map-sync";
-import { saveCachedMap, isCachedMapCurrent, loadCachedMap } from "../map/map-cache";
 import type { MapWorkflowStore, MapWorkflowState } from "../map/workflow/map-workflow-store";
 
 let workflowModule: any = null;
@@ -175,6 +174,13 @@ class SocketService {
   private nextMapSyncId = 1;
   private pendingUpload: { mapData: import("../model").MapSetData; syncId: number; mapId: string } | null = null;
   private pendingUploadRetry: ReturnType<typeof setTimeout> | null = null;
+  // Last plain setMap() (editor sync). The backend rejects setMap while it is
+  // streaming the map to clients (mapAck.accepted=false); without a retry the
+  // edit was silently lost, because the editor only resends when the map
+  // changed again.
+  private lastSetMap: { mapData: import("../model").MapSetData; syncId: number; mapId: string; attempts: number } | null = null;
+  private setMapRetry: ReturnType<typeof setTimeout> | null = null;
+  private static readonly SET_MAP_MAX_RETRIES = 20;
   private readonly boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
   constructor() {
@@ -496,8 +502,17 @@ class SocketService {
                       } else {
                         this.pendingUpload = null;
                       }
+                    } else if (this.lastSetMap?.syncId === data.syncId) {
+                      if (this.lastSetMap.mapId === data.mapId && data.mapId === newState.currentMapId) {
+                        this.scheduleSetMapRetry();
+                      } else {
+                        this.lastSetMap = null;
+                      }
                     }
                     break;
+                  }
+                  if (this.lastSetMap?.syncId === data.syncId) {
+                    this.lastSetMap = null;
                   }
                   if (data.mapId !== newState.currentMapId) break;
                   const meta = {
@@ -666,7 +681,7 @@ class SocketService {
               mwf.finishLoadMap(workflowFinishLoadMap.id, workflowFinishLoadMap.name, workflowFinishLoadMap.rotation);
             }
             if (workflowLoadFailed) {
-              mwf.setError("Karte konnte nicht geladen werden");
+              mwf.setError("The map could not be loaded");
             }
             if (workflowFinishDelete) {
               mwf.finishDelete();
@@ -816,11 +831,42 @@ class SocketService {
   sendMap(mapData: import("../model").MapSetData) {
     const syncId = this.nextMapSyncId++;
     const mapId = get(socketStore).currentMapId;
+    this.clearSetMapRetry();
+    this.lastSetMap = { mapData, syncId, mapId, attempts: 0 };
+    this.sendLastSetMap();
+  }
+
+  private sendLastSetMap() {
+    const last = this.lastSetMap;
+    if (!last) return;
     const req: RequestSocketMessage = {
       type: RequestDataType.setMap,
-      data: { ...mapData, syncId, mapId },
+      data: { ...last.mapData, syncId: last.syncId, mapId: last.mapId },
     };
     this.sendMessage(req);
+  }
+
+  private scheduleSetMapRetry() {
+    const last = this.lastSetMap;
+    if (!last) return;
+    if (last.attempts >= SocketService.SET_MAP_MAX_RETRIES) {
+      console.warn("[Socket] setMap rejected repeatedly, giving up (sync", last.syncId, ")");
+      this.lastSetMap = null;
+      return;
+    }
+    last.attempts += 1;
+    this.clearSetMapRetry();
+    this.setMapRetry = setTimeout(() => {
+      this.setMapRetry = null;
+      this.sendLastSetMap();
+    }, 300);
+  }
+
+  private clearSetMapRetry() {
+    if (this.setMapRetry) {
+      clearTimeout(this.setMapRetry);
+      this.setMapRetry = null;
+    }
   }
 
   sendMapAndUpload(mapData: import("../model").MapSetData) {
@@ -924,6 +970,9 @@ class SocketService {
       clearTimeout(this.pendingUploadRetry);
       this.pendingUploadRetry = null;
     }
+    // A pending editor sync belongs to the map being left.
+    this.lastSetMap = null;
+    this.clearSetMapRetry();
     // currentMapId sofort auf die Ziel-ID setzen, damit das Frontend während
     // des Ladens weiß, welche Karte geladen wird, und finishLoadMap korrekt
     // ausgelöst wird. startLoadMap versucht denselben Zustand über updateSocket
