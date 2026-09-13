@@ -2008,7 +2008,7 @@ bool MowerAdapter::sendMapChunkAsync(const std::vector<ArduMower::Domain::Robot:
 
   _mapUploadState.lastBaseIdx = baseIdx;
   _mapUploadState.lastExpectedNextIdx = baseIdx + (int)endIdx;
-  Log(INFO, "%ssendMapChunkAsync: %s (expect next W,%d)", _LOG_, cmd.c_str(), _mapUploadState.lastExpectedNextIdx);
+  Log(DBG, "%ssendMapChunkAsync: %s (expect next W,%d)", _LOG_, cmd.c_str(), _mapUploadState.lastExpectedNextIdx);
 
   bool queued = sendCommandWithResponseAsync(cmd, [&](const char* response, bool ok) {
     if (response != nullptr) {
