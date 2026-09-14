@@ -21,8 +21,9 @@ dependencies.lock
 src/git_version.cpp
 src/sys/asset_bundle.h
 
-# Native path planner test artifacts
-test_pathplanner/test_exclusion
+# Native path planner test artifacts. The Makefile builds every test binary
+# into test_pathplanner/build/, so a new test needs no entry here.
+test_pathplanner/build/
 test_pathplanner/test_dump
 test_pathplanner/test_clip_*
 test_pathplanner/out/
