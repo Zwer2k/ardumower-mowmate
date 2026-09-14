@@ -15,6 +15,15 @@
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import { onMount } from 'svelte';
 
+    // The mower reports its durations in seconds (Sunray counts them up once
+    // per second). Show minutes below an hour and hours above, instead of
+    // dividing by 60 and calling the result hours.
+    function mowDuration(seconds: number): { value: string; unit: string } {
+        const s = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+        if (s < 3600) return { value: (s / 60).toFixed(0), unit: "min" };
+        return { value: (s / 3600).toFixed(1), unit: "h" };
+    }
+
     let clockInterval: ReturnType<typeof setInterval> | null = null;
     let frame = $state(0);
     let lastClockAt = $state(0);
@@ -167,9 +176,10 @@
                 </div>
                 <div class="metrics-grid">
                     <Tile class="metric-tile compact">
+                        {@const mowTime = mowDuration(stats?.mow ?? 0)}
                         <div class="metric-icon">⏱️</div>
-                        <div class="metric-value">{((stats?.mow ?? 0) / 60).toFixed(1)}</div>
-                        <div class="metric-unit">h</div>
+                        <div class="metric-value">{mowTime.value}</div>
+                        <div class="metric-unit">{mowTime.unit}</div>
                         <div class="metric-divider"></div>
                         <div class="metric-icon">📏</div>
                         <div class="metric-value">{(stats?.mow_traveled ?? 0).toFixed(0)}</div>
