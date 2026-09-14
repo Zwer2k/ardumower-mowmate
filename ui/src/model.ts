@@ -345,6 +345,10 @@ export interface FirmwareStatusData {
   current?: string;
   /** Neuste Release-Version, fehlt solange nichts geprüft wurde. */
   latest?: string;
+  /** Firmware-Variante dieses Boards, z.B. esp32-s3. */
+  target?: string;
+  /** Installierbare Releases, neuste zuerst. */
+  versions?: string[];
   /** Grund der Nichterreichbarkeit, z.B. dns-failed, clock-not-synced. */
   error?: string;
 }

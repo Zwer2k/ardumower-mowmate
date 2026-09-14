@@ -10,7 +10,7 @@
     import IconRestart from "carbon-icons-svelte/lib/Restart.svelte";
     import IconChevronRight from "carbon-icons-svelte/lib/ChevronRight.svelte";
     import FirmwareUpload from '../firmware/FirmwareUpload.svelte';
-    import { firmwareDialogOpen } from '../firmware/update-store';
+    import { firmwareDialogOpen } from '../firmware/dialog-store';
     import { firmwareStatusStore } from '../stores/socket';
     import { toastStore } from '../stores/toast';
 

@@ -1,7 +1,7 @@
 <script lang="ts">
     import IconInformation from "carbon-icons-svelte/lib/Information.svelte";
     import { firmwareStatusStore } from '../stores/socket';
-    import { firmwareDialogOpen } from '../firmware/update-store';
+    import { firmwareDialogOpen } from '../firmware/dialog-store';
 
     // Das Modem prüft GitHub im Hintergrund. Erst wenn es dort eine neuere
     // Version gefunden hat, taucht das Symbol im Header auf.

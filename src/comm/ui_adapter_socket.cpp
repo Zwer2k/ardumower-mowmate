@@ -2231,7 +2231,12 @@ void UiSocketHandler::requestFirmwareStatus(bool force)
 
 void UiSocketHandler::broadcastFirmwareStatus(const ArduMower::Modem::Ota::FirmwareStatus &status)
 {
-  if (countConnectedClients() == 0) return;
+  // Ohne Client verpufft die Nachricht – das wäre sonst nicht zu sehen.
+  if (countConnectedClients() == 0)
+  {
+    Log(DBG, "%sfirmware-status: no client connected, dropped", _LOG_);
+    return;
+  }
 
   JsonDocument doc;
   doc["type"] = ResponseDataType::firmwareStatus;
@@ -2243,10 +2248,19 @@ void UiSocketHandler::broadcastFirmwareStatus(const ArduMower::Modem::Ota::Firmw
   dataObj["checked"] = status.checked;
   if (status.current) dataObj["current"] = status.current;
   if (status.latest) dataObj["latest"] = status.latest;
+  if (status.target) dataObj["target"] = status.target;
   if (status.error) dataObj["error"] = status.error;
+  if (status.versionCount > 0)
+  {
+    auto versions = dataObj["versions"].to<JsonArray>();
+    for (uint8_t i = 0; i < status.versionCount; i++) versions.add(status.versions[i]);
+  }
 
   String json;
   serializeJson(doc, json);
+
+  Log(DBG, "%sfirmware-status: clients=%zu versions=%u len=%u",
+    _LOG_, countConnectedClients(), (unsigned)status.versionCount, (unsigned)json.length());
 
   if (!broadcastHeapOk(json.length()) || !sendTextAllWithRetry(json)) {
     _ws->cleanupClients();

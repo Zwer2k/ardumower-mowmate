@@ -157,6 +157,9 @@ export interface FirmwareStatus {
   checked: boolean;
   current: string | null;
   latest: string | null;
+  target: string | null;
+  /** Installierbare Releases, neuste zuerst – vom Modem bei GitHub geholt. */
+  versions: string[];
   error: string | null;
 }
 
@@ -167,6 +170,8 @@ const emptyFirmwareStatus: FirmwareStatus = {
   checked: false,
   current: null,
   latest: null,
+  target: null,
+  versions: [],
   error: null,
 };
 
@@ -186,6 +191,8 @@ export function applyFirmwareStatus(data: FirmwareStatusData) {
     checked: data.checked,
     current: data.current ?? prev.current,
     latest: data.latest ?? prev.latest,
+    target: data.target ?? prev.target,
+    versions: data.versions ?? prev.versions,
     error: data.error ?? null,
   }));
 }

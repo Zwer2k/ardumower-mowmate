@@ -133,7 +133,9 @@ namespace ArduMower
         volatile bool _githubUpdateAvailable;
         volatile uint32_t _githubNextCheckAt;
         char _githubCheckError[64];
-        char _githubLatestVersion[24];
+        char _githubLatestVersion[FIRMWARE_VERSION_LEN];
+        char _githubVersions[FIRMWARE_VERSION_SLOTS][FIRMWARE_VERSION_LEN];
+        volatile uint8_t _githubVersionCount;
 
         void handleUploadRequest(AsyncWebServerRequest *request);
         void handleUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
@@ -143,9 +145,10 @@ namespace ArduMower
         static void githubCheckTask(void *parameter);
         void runGithubUpdate(const String &version);
         void runGithubCheck();
+        void rememberRelease(const char *version);
         void loopGithubCheck();
-        bool startGithubCheck(bool userRequested);
-        const char *githubCheckBlocker(bool userRequested) const;
+        bool startGithubCheck();
+        const char *githubCheckBlocker() const;
         void scheduleGithubCheck(uint32_t delayMs);
         void publishFirmwareStatus(bool checking);
 

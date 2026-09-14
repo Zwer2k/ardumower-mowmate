@@ -1,11 +1,19 @@
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
 namespace ArduMower
 {
   namespace Modem
   {
     namespace Ota
     {
+      // Platz für "v123.456.789" plus Terminator – Release-Tags sind kurz.
+      static const size_t FIRMWARE_VERSION_LEN = 16;
+      // So viele installierbare Releases merkt sich das Modem für die Auswahl.
+      static const size_t FIRMWARE_VERSION_SLOTS = 10;
+
       // Was das Modem selbst über die verfügbare Firmware weiß. Ermittelt der
       // OTA-Server im Hintergrund, verschickt wird es über den UI-WebSocket.
       struct FirmwareStatus
@@ -17,6 +25,11 @@ namespace ArduMower
         const char *current;    // laufende Version, NULL bei unbekanntem Build
         const char *latest;     // neuste Release-Version, NULL wenn ungeprüft
         const char *error;      // Grund der Nichterreichbarkeit, sonst NULL
+        const char *target;     // Firmware-Variante dieses Boards
+        // Installierbare Releases, neuste zuerst. Nur stabile vX.Y.Z-Tags, für
+        // die es auch ein Asset für dieses Board gibt.
+        const char (*versions)[FIRMWARE_VERSION_LEN];
+        uint8_t versionCount;
       };
 
       class Ota

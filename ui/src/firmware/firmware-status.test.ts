@@ -33,6 +33,8 @@ describe("firmware status store", () => {
       checked: true,
       current: "v1.3.0",
       latest: "v1.4.0",
+      target: "esp32-s3",
+      versions: ["v1.4.0", "v1.3.0"],
     });
 
     expect(get(firmwareStatusStore)).toEqual({
@@ -42,6 +44,8 @@ describe("firmware status store", () => {
       checked: true,
       current: "v1.3.0",
       latest: "v1.4.0",
+      target: "esp32-s3",
+      versions: ["v1.4.0", "v1.3.0"],
       error: null,
     });
   });
@@ -54,6 +58,7 @@ describe("firmware status store", () => {
       checked: true,
       current: "v1.3.0",
       latest: "v1.4.0",
+      versions: ["v1.4.0", "v1.3.0"],
     });
     applyMessage({
       reachable: false,
@@ -67,6 +72,9 @@ describe("firmware status store", () => {
     expect(status.reachable).toBe(false);
     expect(status.error).toBe("dns-failed");
     expect(status.latest).toBe("v1.4.0");
+    // Die zuletzt bekannte Auswahl bleibt stehen, damit das Dropdown bei einem
+    // vorübergehenden Fehler nicht leer wird.
+    expect(status.versions).toEqual(["v1.4.0", "v1.3.0"]);
     expect(status.updateAvailable).toBe(false);
   });
 
