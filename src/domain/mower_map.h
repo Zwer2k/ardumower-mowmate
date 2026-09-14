@@ -273,6 +273,15 @@ namespace ArduMower {
                     if (obj["patternAngle"].is<JsonVariant>()) patternAngle = obj["patternAngle"];
                     if (obj["mowOfs"].is<JsonVariant>()) mowOfs = obj["mowOfs"];
                     if (obj["patternRings"].is<JsonVariant>()) pattern = obj["patternRings"] ? 2 : 0;
+                    // Randstreifen-Einstellungen. Sie wurden früher gar nicht
+                    // serialisiert, wodurch sie bei jedem Speichern/Laden
+                    // verloren gingen und der Legacy-Fallback unten sie
+                    // überschrieb.
+                    const bool hasDistanceToBorder = obj["distanceToBorder"].is<JsonVariant>();
+                    const bool hasBorderLaps = obj["borderLaps"].is<JsonVariant>();
+                    if (hasDistanceToBorder) distanceToBorder = obj["distanceToBorder"];
+                    if (hasBorderLaps) borderLaps = obj["borderLaps"];
+                    if (obj["mowBorderCcw"].is<JsonVariant>()) mowBorderCcw = obj["mowBorderCcw"];
                     // Legacy Webapp verwendet doMowArea/doPerimeterBorder/doExclusionsBorder
                     // als Berechnungs-Flags. Wir importieren sie als Runtime-Flags,
                     // damit alte Karten weiter funktionieren.
@@ -285,8 +294,15 @@ namespace ArduMower {
                     if (obj["doPerimeterBorder"].is<JsonVariant>()) {
                         bool v = obj["doPerimeterBorder"];
                         doMowBorder = v;
-                        if (v && distanceToBorder <= 0.0f) distanceToBorder = 0.3f;
-                        if (v && borderLaps <= 0) borderLaps = 1;
+                        // Nur für alte Karten, die den Schalter ohne die
+                        // zugehörigen Werte mitbringen. Der Fallback darf sich
+                        // nicht am Wert orientieren, sonst überschreibt er ein
+                        // bewusst gesetztes 0. distanceToBorder zählt
+                        // Spurbreiten, daher ist 1 der kleinste sinnvolle Wert;
+                        // das frühere 0.3 stammt aus der Zeit, als das Feld
+                        // Meter bedeutete, und wurde im Planer zu 0 gekürzt.
+                        if (v && !hasDistanceToBorder) distanceToBorder = 1.0f;
+                        if (v && !hasBorderLaps) borderLaps = 1;
                     }
                     if (obj["doExclusionsBorder"].is<JsonVariant>()) {
                         bool v = obj["doExclusionsBorder"];
@@ -324,6 +340,9 @@ namespace ArduMower {
                     obj["patternAngle"] = patternAngle;
                     obj["mowOfs"] = mowOfs;
                     obj["patternRings"] = (pattern == 2);
+                    obj["distanceToBorder"] = distanceToBorder;
+                    obj["borderLaps"] = borderLaps;
+                    obj["mowBorderCcw"] = mowBorderCcw;
                     // Runtime-Flags (können unterwegs umgeschaltet werden)
                     obj["doMowExclusions"] = doMowExclusions;
                     obj["doMowPerimeter"] = doMowPerimeter;

@@ -24,6 +24,12 @@
     width = Math.round(v * 100) / 100;
   }
 
+  // Counts track widths (the planner offsets the mow area by
+  // distanceToBorder * width), so only whole numbers are meaningful.
+  function roundDistanceToBorder() {
+    distanceToBorder = Math.max(0, Math.round(distanceToBorder || 0));
+  }
+
   function handleOpen() {
     const s = $mowSettingsStore;
     pattern = s.pattern;
@@ -37,6 +43,7 @@
   }
 
   function handleOk() {
+    roundDistanceToBorder();
     socketService.sendMowSettings({
       pattern,
       width,
@@ -98,11 +105,13 @@
     />
 
     <NumberInput
-      label="Distance to border (m)"
+      label="Distance to border"
+      helperText="Number of track widths the mow area is kept away from the perimeter."
       bind:value={distanceToBorder}
       min={0}
       max={5}
-      step={0.05}
+      step={1}
+      on:change={roundDistanceToBorder}
     />
 
     <NumberInput

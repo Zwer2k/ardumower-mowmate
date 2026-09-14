@@ -151,7 +151,7 @@ export function importMowerMap(
       pattern: parsed.patternRings ? 2 : 0,
       width: parsed.mowOfs ?? 0.3,
       angle: parsed.patternAngle ?? 0,
-      distanceToBorder: needsBorderDefaults ? 0.3 : (parsed.distanceToBorder ?? 0),
+      distanceToBorder: needsBorderDefaults ? 1 : (parsed.distanceToBorder ?? 0),
       borderLaps: needsBorderDefaults ? 1 : (parsed.borderLaps ?? 0),
       mowBorderCcw: parsed.mowBorderCcw ?? false,
       doMowArea: parsed.doMowArea ?? true,
