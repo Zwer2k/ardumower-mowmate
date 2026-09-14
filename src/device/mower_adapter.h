@@ -126,6 +126,17 @@ namespace ArduMower
 
       void updateCurrentMapMeta();
       void syncMowSettingsFromMap();
+      static ArduMower::Domain::Robot::MowSettings settingsFromMap(const ArduMower::Domain::Robot::MowerMap &map);
+      // Der Geometrie-Hash (MD5 über das serialisierte JSON) wird erst bei
+      // Bedarf berechnet; updateCurrentMapMeta() markiert ihn nur als veraltet.
+      bool _currentMapHashDirty = false;
+      // Scheduler-Upload einer gespeicherten Karte, ohne die aktuelle Karte
+      // (und einen evtl. offenen Editor) anzufassen.
+      ArduMower::Domain::Robot::MowerMap _mapUploadOverride;
+      String _mapUploadOverrideId;
+      bool _mapUploadOverridePending = false;
+      bool _mapUploadLockedMap = false;
+      String _mapUploadSourceId;
       // Cache für rohe Antwort-Strings (mit Checksumme) – für HTTP-Cache-Serving
       char _cachedRawState[READER_BUF_SIZE];
       char _cachedRawStats[READER_BUF_SIZE];
@@ -255,6 +266,7 @@ namespace ArduMower
       virtual bool rebootGPS();
       virtual bool powerOff();
       virtual bool uploadMapToMower() override;
+      virtual bool uploadSavedMapToMower(const String &id) override;
       virtual bool uploadMapToMowerActive() override { return _mapUploadState.active; }
       virtual bool uploadMapToMowerSuccess() override { return _mapUploadState.phase == MapUploadState::done; }
       virtual ArduMower::Domain::Robot::UploadProgress uploadProgress() override;

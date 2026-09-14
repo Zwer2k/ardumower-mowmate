@@ -13,11 +13,15 @@
 #include <deque>
 #include <ArduinoJson.h>
 #include "domain.h"
+#ifdef ENABLE_MAP
+#include "path_planner.h"
+#endif
 #include "schedule.h"
 #ifdef MOWER_TERMINAL
 #include "terminal.h"
 #endif
 #include "ota_mower_updater.h"
+#include "ota.h"
 #include <vector>
 
 namespace ArduMower
@@ -61,6 +65,7 @@ namespace ArduMower
         requestSchedule,
         requestClock,
         requestPing,
+        requestFirmwareStatus,
         requestDataTypeLength
       };
 
@@ -86,6 +91,8 @@ namespace ArduMower
         obstacles,
         mapAck,
         responsePong,
+        firmwareStatus,
+        routeReport,
         responseDataTypeLength
       };
 
@@ -194,12 +201,19 @@ namespace ArduMower
         void sendData(ResponseDataType dataType, UiSocketItem *sendTo = NULL, bool force = false);
         void sendMapList(UiSocketItem *sendTo = NULL);
         void sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted);
+        // Ergebnis der Routenprüfung der letzten Wegpunktberechnung.
+        void sendRouteReport(UiSocketItem *sendTo = NULL);
         void sendSchedule(UiSocketItem *sendTo = NULL);
         void sendClock(UiSocketItem *sendTo = NULL);
         bool setSchedule(bool enabled, const std::vector<ArduMower::Modem::Schedule::Entry> &entries);
         bool saveSchedule();
         void processScheduleTrigger();
         void broadcastFlashProgress(size_t current, size_t total);
+        // Firmware-Stand von GitHub – ermittelt wird er im Hintergrund vom
+        // OTA-Server, hier laufen nur Anfrage und Antwort zusammen.
+        void requestFirmwareStatus(bool force);
+        void broadcastFirmwareStatus(const ArduMower::Modem::Ota::FirmwareStatus &status);
+        std::function<void(bool force)> onFirmwareStatusRequest;
         void wsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventType type, void * arg, uint8_t *data, size_t len);
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
         bool sendUbx(const String &hexCmd);
@@ -280,6 +294,7 @@ namespace ArduMower
         uint32_t sensorSummaryRefCount = 0;
 
         bool _mapListPending = false;
+        bool _routeReportPending = false;
         bool _drivenTrackPending = false;
         bool _flashProgressPending = false;
         int _flashProgressPct = 0;
@@ -342,6 +357,11 @@ namespace ArduMower
         uint32_t _calculateWaypointsTimestamp = 0;
         ArduMower::Domain::Robot::MowerMap _calculateWaypointsMap;
         ArduMower::Domain::Robot::MowSettings _calculateWaypointsSettings;
+#ifdef ENABLE_MAP
+        // Bericht der letzten Wegpunktberechnung, damit ihn ein später
+        // verbundener Client erneut abrufen kann.
+        ArduMower::Modem::PathPlanner::RouteReport _routeReport;
+#endif
 
   #ifdef MOWER_TERMINAL
   Terminal &_terminal;
@@ -367,7 +387,8 @@ namespace ArduMower
         void ubxPollLoop();
 #endif
         template<typename T>
-        void sendData(ResponseDataType dataType, UiSocketItem *sendTo, T data, bool force = false);
+        // Returns true if the payload was handed to the WebSocket layer.
+        bool sendData(ResponseDataType dataType, UiSocketItem *sendTo, T &&data, bool force = false);
         bool sendTextAllWithRetry(const String& text);
         bool clientCanSend(uint32_t clientId);
         size_t countConnectedClients();

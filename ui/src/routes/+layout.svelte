@@ -39,6 +39,7 @@
     import HelpDialog from "../widget/HelpDialog.svelte";
     import RemoteControlPopover from "../pages/dashboard/status/RemoteControlPopover.svelte";
     import HeaderOverflowMenu from "../widget/HeaderOverflowMenu.svelte";
+    import FirmwareUpdateBadge from "../widget/FirmwareUpdateBadge.svelte";
 
     let { children } = $props();
     let helpOpen = $state(false);
@@ -139,6 +140,7 @@
     </div>
 
     <HeaderUtilities>
+        <FirmwareUpdateBadge />
         <RemoteControlPopover />
         <SaveDiscard />
         <HeaderOverflowMenu onHelp={help} />

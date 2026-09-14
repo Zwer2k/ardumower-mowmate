@@ -112,6 +112,10 @@ namespace ArduMower {
                 bool doMowPerimeter = true;  // true: Perimeter mitfahren
                 bool doMowBorder = false;      // true: Randstreifen maehen (distanceToBorder+borderLaps)
                 bool doMowExclusionBorder = false; // true: Randstreifen um Aussparungen
+                // Schwelle der Routenvereinfachung in m; verändert die Route.
+                float simplifyEpsilon = 0.02f;
+                // Mindestwendekreis in m; nur für den Prüfbericht, verändert die Route nicht.
+                float checkTurnRadius = 0.30f;
 
                 // Flag, ob aktuell ein Lesevorgang läuft (z.B. für Map-Transfer)
                 bool reading = false;
@@ -269,6 +273,15 @@ namespace ArduMower {
                     if (obj["patternAngle"].is<JsonVariant>()) patternAngle = obj["patternAngle"];
                     if (obj["mowOfs"].is<JsonVariant>()) mowOfs = obj["mowOfs"];
                     if (obj["patternRings"].is<JsonVariant>()) pattern = obj["patternRings"] ? 2 : 0;
+                    // Randstreifen-Einstellungen. Sie wurden früher gar nicht
+                    // serialisiert, wodurch sie bei jedem Speichern/Laden
+                    // verloren gingen und der Legacy-Fallback unten sie
+                    // überschrieb.
+                    const bool hasDistanceToBorder = obj["distanceToBorder"].is<JsonVariant>();
+                    const bool hasBorderLaps = obj["borderLaps"].is<JsonVariant>();
+                    if (hasDistanceToBorder) distanceToBorder = obj["distanceToBorder"];
+                    if (hasBorderLaps) borderLaps = obj["borderLaps"];
+                    if (obj["mowBorderCcw"].is<JsonVariant>()) mowBorderCcw = obj["mowBorderCcw"];
                     // Legacy Webapp verwendet doMowArea/doPerimeterBorder/doExclusionsBorder
                     // als Berechnungs-Flags. Wir importieren sie als Runtime-Flags,
                     // damit alte Karten weiter funktionieren.
@@ -281,13 +294,22 @@ namespace ArduMower {
                     if (obj["doPerimeterBorder"].is<JsonVariant>()) {
                         bool v = obj["doPerimeterBorder"];
                         doMowBorder = v;
-                        if (v && distanceToBorder <= 0.0f) distanceToBorder = 0.3f;
-                        if (v && borderLaps <= 0) borderLaps = 1;
+                        // Nur für alte Karten, die den Schalter ohne die
+                        // zugehörigen Werte mitbringen. Der Fallback darf sich
+                        // nicht am Wert orientieren, sonst überschreibt er ein
+                        // bewusst gesetztes 0. distanceToBorder zählt
+                        // Spurbreiten, daher ist 1 der kleinste sinnvolle Wert;
+                        // das frühere 0.3 stammt aus der Zeit, als das Feld
+                        // Meter bedeutete, und wurde im Planer zu 0 gekürzt.
+                        if (v && !hasDistanceToBorder) distanceToBorder = 1.0f;
+                        if (v && !hasBorderLaps) borderLaps = 1;
                     }
                     if (obj["doExclusionsBorder"].is<JsonVariant>()) {
                         bool v = obj["doExclusionsBorder"];
                         doMowExclusionBorder = v;
                     }
+                    if (obj["simplifyEpsilon"].is<JsonVariant>()) simplifyEpsilon = obj["simplifyEpsilon"];
+                    if (obj["checkTurnRadius"].is<JsonVariant>()) checkTurnRadius = obj["checkTurnRadius"];
                     return true;
                 }
 
@@ -318,12 +340,17 @@ namespace ArduMower {
                     obj["patternAngle"] = patternAngle;
                     obj["mowOfs"] = mowOfs;
                     obj["patternRings"] = (pattern == 2);
+                    obj["distanceToBorder"] = distanceToBorder;
+                    obj["borderLaps"] = borderLaps;
+                    obj["mowBorderCcw"] = mowBorderCcw;
                     // Runtime-Flags (können unterwegs umgeschaltet werden)
                     obj["doMowExclusions"] = doMowExclusions;
                     obj["doMowPerimeter"] = doMowPerimeter;
                     obj["doMowArea"] = doMowArea;
                     obj["doPerimeterBorder"] = doMowBorder;
                     obj["doExclusionsBorder"] = doMowExclusionBorder;
+                    obj["simplifyEpsilon"] = simplifyEpsilon;
+                    obj["checkTurnRadius"] = checkTurnRadius;
 
                     JsonArray perim = obj["perimeter"].to<JsonArray>();
                     writeRing(perim, perimeter);

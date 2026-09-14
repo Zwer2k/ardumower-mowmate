@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount, setContext } from "svelte";
+  import { onMount, onDestroy, setContext } from "svelte";
+  import { writable, type Readable } from "svelte/store";
   import { zoom } from "d3-zoom";
   import { select, pointer } from "d3-selection";
 
@@ -24,6 +25,22 @@
     svg: SVGSVGElement;
     contentGroup: SVGGElement;
     setPanEnabled(v: boolean): void;
+    /** Screen pixels per map unit (metre) at the current zoom level. */
+    pixelsPerUnit: Readable<number>;
+  }
+
+  // Screen pixels per map unit. Points use it to size touch hit areas in
+  // finger-sized pixels instead of metres, so the hit area does not grow
+  // when the user zooms in for precise editing.
+  const pixelsPerUnit = writable(1);
+  let resizeObserver: ResizeObserver | null = null;
+
+  function updatePixelsPerUnit() {
+    if (!contentGroup) return;
+    const m = contentGroup.getScreenCTM();
+    if (!m) return;
+    const scale = Math.hypot(m.a, m.b);
+    if (scale > 0 && Number.isFinite(scale)) pixelsPerUnit.set(scale);
   }
 
   let svg: SVGSVGElement;
@@ -36,7 +53,8 @@
   setContext<DragContext>("map-drag", {
     get svg() { return svg; },
     get contentGroup() { return contentGroup; },
-    setPanEnabled(v: boolean) { panEnabled = v; }
+    setPanEnabled(v: boolean) { panEnabled = v; },
+    pixelsPerUnit,
   });
 
   onMount(() => {
@@ -46,10 +64,24 @@
         .on("zoom", ({ transform }) => {
           const { k, x, y } = transform;
           select(g).attr("transform", `translate(${x}, ${y}) scale(${k})`);
+          updatePixelsPerUnit();
         });
       select(svg).call(zoomBehaviour);
     }
+    updatePixelsPerUnit();
+    if (svg && typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => updatePixelsPerUnit());
+      resizeObserver.observe(svg);
+    }
   });
+
+  onDestroy(() => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+  });
+
+  // viewBox changes (new map loaded) change the base scale as well
+  $: if (contentGroup && $MapStore.presentation.viewBox) updatePixelsPerUnit();
 
   function emitMapClick(clientX: number, clientY: number) {
     if (!contentGroup || !svg) return;

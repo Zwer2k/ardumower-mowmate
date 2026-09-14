@@ -3,10 +3,13 @@
   import IconSettings from "carbon-icons-svelte/lib/Settings.svelte";
   import IconTrashCan from "carbon-icons-svelte/lib/TrashCan.svelte";
   import IconMagicWand from "carbon-icons-svelte/lib/MagicWand.svelte";
+  import IconReport from "carbon-icons-svelte/lib/Report.svelte";
   import { socketService } from "../../stores/socket";
 
   export let busy: boolean;
   export let onOpenMowSettings: () => void;
+  export let onOpenRouteReport: () => void = () => {};
+  export let hasRouteReport = false;
 </script>
 
 <Row class="map-calc-row">
@@ -38,6 +41,16 @@
         on:click={() => socketService.sendCalculateWaypoints()}
       >
         <span class="btn-label">Calculate</span>
+      </Button>
+      <Button
+        kind="ghost"
+        size="small"
+        disabled={busy || !hasRouteReport}
+        icon={IconReport}
+        iconDescription="Route check report"
+        on:click={onOpenRouteReport}
+      >
+        <span class="btn-label">Report</span>
       </Button>
     </div>
   </Column>

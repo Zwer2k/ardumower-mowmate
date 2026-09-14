@@ -30,6 +30,18 @@ using namespace ArduMower::Modem::Http;
 // as UTF-8" WebSocket disconnects.
 static void sanitizeUtf8InPlace(String& str) {
   const size_t oldLen = str.length();
+  // Fast path: serializeJson() output is plain ASCII in practically all cases.
+  // Only allocate and rebuild the string if a control byte or a non-ASCII byte
+  // is actually present (avoids one heap alloc + copy per WebSocket send).
+  {
+    const char *p = str.c_str();
+    bool clean = true;
+    for (size_t i = 0; i < oldLen; i++) {
+      unsigned char c = (unsigned char)p[i];
+      if (c >= 0x80 || (c < 0x20 && c != '\r' && c != '\n' && c != '\t')) { clean = false; break; }
+    }
+    if (clean) return;
+  }
   String out;
   out.reserve(oldLen);
   for (size_t i = 0; i < oldLen; i++) {
@@ -340,6 +352,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       map.doMowBorder = settings.doMowBorder;
       map.doMowExclusions = settings.doMowExclusions;
       map.doMowExclusionBorder = settings.doMowExclusionBorder;
+      map.simplifyEpsilon = settings.simplifyEpsilon;
+      map.checkTurnRadius = settings.checkTurnRadius;
         Log(DBG, "%s setMap: parsed perimeter=%d exclusions=%d dockpoints=%d searchWire=%d waypoints=%d rotation=%.1f", _LOG_,
           map.perimeter.size(), map.exclusions.size(), map.dockpoints.size(), map.searchWire.size(), map.waypoints.size(), map.rotation);
       const bool mapIdMatches = requestedMapId.length() > 0 && requestedMapId == _source.currentMapId();
@@ -375,9 +389,12 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       if (!jsonData["doMowBorder"].isNull()) s.doMowBorder = jsonData["doMowBorder"];
       if (!jsonData["doMowExclusions"].isNull()) s.doMowExclusions = jsonData["doMowExclusions"];
       if (!jsonData["doMowExclusionBorder"].isNull()) s.doMowExclusionBorder = jsonData["doMowExclusionBorder"];
-      Log(INFO, "%s setMowSettings received: pattern=%d width=%.2f angle=%d distToBorder=%d laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusions=%d doMowExclusionBorder=%d",
+      if (!jsonData["simplifyEpsilon"].isNull()) s.simplifyEpsilon = jsonData["simplifyEpsilon"];
+      if (!jsonData["checkTurnRadius"].isNull()) s.checkTurnRadius = jsonData["checkTurnRadius"];
+      Log(INFO, "%s setMowSettings received: pattern=%d width=%.2f angle=%d distToBorder=%d laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusions=%d doMowExclusionBorder=%d simplify=%.3f checkRadius=%.2f",
           _LOG_, s.pattern, s.width, s.angle, s.distanceToBorder, s.borderLaps,
-          s.doMowArea, s.doMowPerimeter, s.doMowBorder, s.doMowExclusions, s.doMowExclusionBorder);
+          s.doMowArea, s.doMowPerimeter, s.doMowBorder, s.doMowExclusions, s.doMowExclusionBorder,
+          s.simplifyEpsilon, s.checkTurnRadius);
       _socketHandler->setMowSettings(s);
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
     }
@@ -564,6 +581,11 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
 
    case RequestDataType::requestClock: {
     _socketHandler->sendClock(this);
+    break;
+  }
+
+  case RequestDataType::requestFirmwareStatus: {
+    _socketHandler->requestFirmwareStatus(jsonData["force"] | false);
     break;
   }
 
@@ -1563,6 +1585,10 @@ void UiSocketHandler::finishMapChunkSend() {
     _mapListPending = false;
     sendMapList(NULL);
   }
+  if (_routeReportPending) {
+    _routeReportPending = false;
+    sendRouteReport(NULL);
+  }
   if (_drivenTrackPending) {
     _drivenTrackPending = false;
     sendDrivenTrack(NULL);
@@ -1685,11 +1711,19 @@ void UiSocketHandler::logToUiLoop()
   uint32_t now = millis();
   if (now - _lastLogSend < 100) return;
 
+  if (countConnectedClients() == 0) return;
   if (!_ws->availableForWriteAll())
     return;
 
   _lastLogSend = now;
-  sendData(ResponseDataType::modemLog, NULL, logToUi, false);
+  // force=true: rate limit and "is there anything new" are already handled
+  // above. The generic timestamp check cannot be used, because a burst goes
+  // out in several updates that all carry the timestamp of the newest line -
+  // the remaining lines would never be sent.
+  // Advance the send cursor only once the data actually left the modem,
+  // otherwise a failed send would silently skip those lines.
+  if (sendData(ResponseDataType::modemLog, NULL, logToUi, true))
+    logToUi.commitSent();
 }
 
 void UiSocketHandler::broadcastFlashProgress(size_t current, size_t total)
@@ -1894,12 +1928,19 @@ void UiSocketHandler::processCalculateWaypoints() {
       _LOG_, settings.pattern, settings.width, settings.angle, settings.distanceToBorder, settings.borderLaps,
       settings.doMowArea, settings.doMowBorder, settings.doMowExclusionBorder);
   auto state = _source.state();
+  // Der Bericht wird vor jedem Lauf verworfen, damit der Browser nie einen
+  // veralteten Bericht zur neuen Route angezeigt bekommt.
+  _routeReport = ArduMower::Modem::PathPlanner::RouteReport();
+  const float mowSpeed = _source.desiredState().speed;
   decltype(ArduMower::Modem::PathPlanner::calculateWaypoints(map, settings, &state)) waypoints;
   try {
-    waypoints = ArduMower::Modem::PathPlanner::calculateWaypoints(map, settings, &state);
+    waypoints = ArduMower::Modem::PathPlanner::calculateWaypoints(
+        map, settings, &state, &_routeReport, mowSpeed);
   } catch (...) {
     Log(ERR, "%s processCalculateWaypoints: exception during calculation", _LOG_);
+    _routeReport = ArduMower::Modem::PathPlanner::RouteReport();
     sendProgress("calculate", 100, "Failed");
+    sendData(ResponseDataType::mowerState, NULL, true);
     _calculateWaypointsRunning = false;
     return;
   }
@@ -1912,6 +1953,7 @@ void UiSocketHandler::processCalculateWaypoints() {
   sendData(ResponseDataType::map, NULL, true);
   sendMapList(NULL);
   Log(INFO, "%s processCalculateWaypoints: %d waypoints generated, map broadcast", _LOG_, map.waypoints.size());
+  sendRouteReport();
   sendProgress("calculate", 100, "Complete");
   sendData(ResponseDataType::mowerState, NULL, true);
   _calculateWaypointsRunning = false;
@@ -1933,6 +1975,7 @@ void UiSocketHandler::abortMapChunkSend() {
     // Reset pending flags so we don't send stale data that could overlap
     // with the fresh map transfer triggered after the abort.
     _mapListPending = false;
+    _routeReportPending = false;
     _drivenTrackPending = false;
     _flashProgressPending = false;
     Log(DBG, "%s abortMapChunkSend: ongoing chunk send aborted", _LOG_);
@@ -1986,10 +2029,10 @@ void UiSocketHandler::sendBufferedTerminalTo(UiSocketItem* item, uint16_t maxChu
 #endif
 
 template<typename T>
-void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, T data, bool force)
+bool UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, T &&data, bool force)
 {
   if (!force && (data.timestamp == 0 || data.timestamp == oldDataTimestamp[dataType])) {
-    return;
+    return false;
   }
 
   // Rate limit sends per data type (skip if sent too recently)
@@ -2005,7 +2048,7 @@ void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
       default:                               minInterval = 0;     break;
     }
     if (minInterval > 0 && (now - lastSentTimestamp[dataType]) < minInterval)
-      return;
+      return false;
     lastSentTimestamp[dataType] = now;
   }
 
@@ -2026,6 +2069,9 @@ void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
 
   JsonDocument doc;
   doc["type"] = dataType;
+  // Forwarding reference, not by value: marshal() may record on the source
+  // object how much it produced (see LogToUi), and a copy would discard that.
+  // Temporaries from the 3-argument overload still bind.
   auto _j = doc["data"].to<JsonObject>(); data.marshal(_j);
   if (dataType == ResponseDataType::mowerState) {
     _j["uploaded_map_id"] = _source.lastUploadedMapId();
@@ -2051,13 +2097,14 @@ void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
   sanitizeUtf8InPlace(stateStr);
 
   if (sendTo != NULL) {
-    sendTo->sendText(stateStr);
-  } else {
-    if (countConnectedClients() == 0) return;
-    if (!broadcastHeapOk(stateStr.length()) || !sendTextAllWithRetry(stateStr)) {
-      _ws->cleanupClients();
-    }
+    return sendTo->sendText(stateStr);
   }
+  if (countConnectedClients() == 0) return false;
+  if (!broadcastHeapOk(stateStr.length()) || !sendTextAllWithRetry(stateStr)) {
+    _ws->cleanupClients();
+    return false;
+  }
+  return true;
 }
 
 void UiSocketHandler::sendMapList(UiSocketItem *sendTo)
@@ -2177,6 +2224,49 @@ void UiSocketHandler::sendSchedule(UiSocketItem *sendTo)
   }
 }
 
+void UiSocketHandler::requestFirmwareStatus(bool force)
+{
+  if (onFirmwareStatusRequest) onFirmwareStatusRequest(force);
+}
+
+void UiSocketHandler::broadcastFirmwareStatus(const ArduMower::Modem::Ota::FirmwareStatus &status)
+{
+  // Ohne Client verpufft die Nachricht – das wäre sonst nicht zu sehen.
+  if (countConnectedClients() == 0)
+  {
+    Log(DBG, "%sfirmware-status: no client connected, dropped", _LOG_);
+    return;
+  }
+
+  JsonDocument doc;
+  doc["type"] = ResponseDataType::firmwareStatus;
+  doc["timestamp"] = millis();
+  auto dataObj = doc["data"].to<JsonObject>();
+  dataObj["reachable"] = status.reachable;
+  dataObj["checking"] = status.checking;
+  dataObj["updateAvailable"] = status.updateAvailable;
+  dataObj["checked"] = status.checked;
+  if (status.current) dataObj["current"] = status.current;
+  if (status.latest) dataObj["latest"] = status.latest;
+  if (status.target) dataObj["target"] = status.target;
+  if (status.error) dataObj["error"] = status.error;
+  if (status.versionCount > 0)
+  {
+    auto versions = dataObj["versions"].to<JsonArray>();
+    for (uint8_t i = 0; i < status.versionCount; i++) versions.add(status.versions[i]);
+  }
+
+  String json;
+  serializeJson(doc, json);
+
+  Log(DBG, "%sfirmware-status: clients=%zu versions=%u len=%u",
+    _LOG_, countConnectedClients(), (unsigned)status.versionCount, (unsigned)json.length());
+
+  if (!broadcastHeapOk(json.length()) || !sendTextAllWithRetry(json)) {
+    _ws->cleanupClients();
+  }
+}
+
 void UiSocketHandler::sendClock(UiSocketItem *sendTo)
 {
   JsonDocument doc;
@@ -2198,6 +2288,68 @@ void UiSocketHandler::sendClock(UiSocketItem *sendTo)
       _ws->cleanupClients();
     }
   }
+}
+
+// Ergebnis der Routenprüfung senden. Bewusst nicht über die generische
+// sendData-Vorlage: die verlangt einen timestamp und ein marshal() am
+// Nutzdatentyp. Der Fortschrittskanal scheidet ebenfalls aus, er löscht sich
+// bei 100 Prozent selbst und trägt nur einen Text.
+void UiSocketHandler::sendRouteReport(UiSocketItem *sendTo)
+{
+#ifdef ENABLE_MAP
+  if (!_routeReport.valid) return;
+
+  // Ein Textframe mitten in einer fragmentierten Karten-Übertragung verletzt
+  // das WebSocket-Framing und würde für die empfangenden Clients verworfen.
+  // Deshalb zurückstellen, bis der Chunk-Transfer fertig ist.
+  if (sendTo == NULL && mapChunkSendState.active) {
+    _routeReportPending = true;
+    return;
+  }
+
+  JsonDocument doc;
+  doc["type"] = ResponseDataType::routeReport;
+  doc["timestamp"] = millis();
+  auto dataObj = doc["data"].to<JsonObject>();
+  dataObj["pointCount"] = _routeReport.pointCount;
+  dataObj["totalLength"] = _routeReport.totalLength;
+  dataObj["rotationCount"] = _routeReport.rotationCount;
+  dataObj["trackedCorners"] = _routeReport.trackedCorners;
+  dataObj["estimatedSeconds"] = _routeReport.estimatedSeconds;
+  dataObj["findingsTotal"] = _routeReport.findingsTotal;
+  dataObj["turnRadius"] = _routeReport.turnRadius;
+  dataObj["areaCount"] = _routeReport.areaCount;
+  dataObj["borderCount"] = _routeReport.borderCount;
+  dataObj["exclusionBorderCount"] = _routeReport.exclusionBorderCount;
+  dataObj["transitCount"] = _routeReport.transitCount;
+  dataObj["connectorCount"] = _routeReport.connectorCount;
+
+  JsonArray arr = dataObj["findings"].to<JsonArray>();
+  for (const auto &f : _routeReport.findings) {
+    JsonObject o = arr.add<JsonObject>();
+    o["sev"] = f.severity;
+    o["kind"] = f.kind;
+    o["idx"] = f.index;
+    if (f.index2 != f.index) o["idx2"] = f.index2;
+    if (f.angleDeg != 0.0f) o["ang"] = f.angleDeg;
+    if (f.shortfall != 0.0f) o["miss"] = f.shortfall;
+  }
+
+  String json;
+  serializeJson(doc, json);
+  sanitizeUtf8InPlace(json);
+
+  if (sendTo != NULL) {
+    sendTo->sendText(json);
+  } else {
+    if (countConnectedClients() == 0) return;
+    if (!broadcastHeapOk(json.length()) || !sendTextAllWithRetry(json)) {
+      _ws->cleanupClients();
+    }
+  }
+#else
+  (void)sendTo;
+#endif
 }
 
 void UiSocketHandler::processScheduleTrigger()
@@ -2255,36 +2407,20 @@ void UiSocketHandler::processScheduleTriggerStateMachine()
 
   switch (_scheduleTriggerPhase) {
     case 0:
-      // Load the scheduled map into RAM.
-      if (!_source.loadMap(_scheduleTriggerMapId)) {
-        Log(WARN, "%s processScheduleTriggerStateMachine: loadMap failed for %s", _LOG_, _scheduleTriggerMapId.c_str());
+      // Upload the persisted version of the scheduled map directly.
+      // Previously the map was made current via loadMap(), which preferred
+      // the RAM draft — a schedule mowed with unsaved edits — and switched
+      // the map away under an open editor. uploadSavedMapToMower() reads the
+      // SPIFFS copy and leaves the current map alone.
+      if (!_cmd.uploadSavedMapToMower(_scheduleTriggerMapId)) {
+        Log(WARN, "%s processScheduleTriggerStateMachine: upload of saved map %s could not be started", _LOG_, _scheduleTriggerMapId.c_str());
         _scheduleTriggerPending = false;
         _scheduleManager.computeNextRun();
         _scheduleDirty = true;
         return;
       }
-      _scheduleTriggerPhase = 1;
-      Log(DBG, "%s processScheduleTriggerStateMachine: map loaded, waiting for current map", _LOG_);
-      break;
-
-    case 1:
-      // Wait until currentMapId matches and map chunk send has settled.
-      if (_source.currentMapId() == _scheduleTriggerMapId && !mapChunkSendState.active) {
-        _scheduleTriggerPhase = 2;
-      }
-      break;
-
-    case 2:
-      // Upload map to mower.
-      if (_cmd.uploadMapToMower()) {
-        _scheduleTriggerPhase = 3;
-        sendProgress("upload", 0, "Uploading scheduled map");
-      } else {
-        Log(WARN, "%s processScheduleTriggerStateMachine: upload start failed", _LOG_);
-        _scheduleTriggerPending = false;
-        _scheduleManager.computeNextRun();
-        _scheduleDirty = true;
-      }
+      _scheduleTriggerPhase = 3;
+      sendProgress("upload", 0, "Uploading scheduled map");
       break;
 
     case 3:

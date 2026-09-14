@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Button } from "carbon-components-svelte";
-  import IconUpload from "carbon-icons-svelte/lib/Upload.svelte";
   import IconEdit from "carbon-icons-svelte/lib/Edit.svelte";
   import IconTools from "carbon-icons-svelte/lib/Tools.svelte";
   import IconMagicWand from "carbon-icons-svelte/lib/MagicWand.svelte";
@@ -11,7 +10,6 @@
   import IconClose from "carbon-icons-svelte/lib/Close.svelte";
 
   export let workflowBusy: boolean;
-  export let busy: boolean;
   export let renameMode: boolean;
   export let showManage: boolean;
   export let edit: boolean;
@@ -20,7 +18,6 @@
   export let canConfirmRename: boolean;
   export let canSave: boolean;
   export let canRevert: boolean;
-  export let onUpload: () => void;
   export let onToggleManage: () => void;
   export let onToggleEdit: () => void;
   export let onToggleCalculate: () => void;
@@ -53,15 +50,6 @@
       <span class="btn-label">Cancel</span>
     </Button>
   {:else}
-    <Button
-      kind="secondary"
-      size="small"
-      disabled={busy || workflowBusy}
-      icon={IconUpload}
-      iconDescription="Upload map to mower"
-      tooltipPosition="top"
-      on:click={onUpload}
-    />
     <Button
       kind={showManage ? "primary" : "secondary"}
       size="small"

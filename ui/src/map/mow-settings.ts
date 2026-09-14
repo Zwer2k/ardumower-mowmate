@@ -14,6 +14,8 @@ const defaultSettings: MowSettings = {
   doMowBorder: false,
   doMowExclusions: true,
   doMowExclusionBorder: false,
+  simplifyEpsilon: 0.02,
+  checkTurnRadius: 0.3,
 };
 
 export const mowSettingsStore = writable<MowSettings>(defaultSettings);

@@ -71,7 +71,7 @@ function startLoadingTimer() {
           ...w,
           state: "idle",
           pendingLoadId: "",
-          error: "Karte konnte nicht geladen werden (Timeout)",
+          error: "The map could not be loaded (timeout)",
         };
       });
       updateSocket((s) => ({
@@ -278,7 +278,7 @@ const workflowActions: Omit<MapWorkflowStore, "subscribe" | "set" | "update"> = 
     // Doppelte Namen verhindern, außer wenn der Name der aktuellen Karte
     // unverändert bleibt.
     if (requestedName !== currentName && isNameUsed(requestedName, currentMapId)) {
-      const message = `Name "${requestedName}" ist bereits vergeben.`;
+      const message = `The name "${requestedName}" is already taken.`;
       mapWorkflowStore.update((wf) => ({ ...wf, error: message }));
       ErrorStore.set(new Error(message));
       return { action: "none", name: currentName };

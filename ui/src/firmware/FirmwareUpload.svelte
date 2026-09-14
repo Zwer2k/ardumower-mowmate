@@ -13,23 +13,60 @@
   import type { Readable } from "svelte/store";
   import { onDestroy } from "svelte";
   import { FirmwareFlashStatus, FirmwareUploader, FirmwareUploadStatus, FirmwareUploadType } from "./service";
-  import type { FirmwareRelease } from "./github-releases";
-  import { checkFirmwareUpdates, firmwareUpdateStore } from "./update-store";
-  import { flashProgressStore, resetFlashProgress } from "../stores/socket";
+  import {
+    firmwareStatusStore,
+    flashProgressStore,
+    resetFlashProgress,
+    socketService,
+  } from "../stores/socket";
 
   export let open: boolean = false;
 
   let uploadType: FirmwareUploadType = FirmwareUploadType.modem;
-  let source: "github" | "file" = "github";
+  // Startwert ist die lokale Datei: Die GitHub-Quelle kommt erst dazu, wenn das
+  // Modem bestätigt hat, dass es github.com selbst erreicht.
+  let source: "github" | "file" = "file";
+  let sourcePinned = false;
+  let checkRequested = false;
   let ref: null | HTMLInputElement;
   let selectedReleaseVersion = "";
   let downloadError: string | null = null;
   let downloading = false;
 
-  const sourceOptions = [
-    { id: "github", text: "GitHub Release" },
-    { id: "file", text: "Local file" },
-  ];
+  // Nicht jeder Grund ist ein Erreichbarkeitsproblem – die Überschrift darf das
+  // also nicht pauschal behaupten.
+  const unavailableInfo = (error: string | null): { title: string; subtitle: string } => {
+    switch (error) {
+      case "wifi-disconnected":
+        return {
+          title: "Modem is not connected to WiFi",
+          subtitle: "Without a network connection the modem cannot download firmware. Install from a local file instead.",
+        };
+      case "clock-not-synced":
+        return {
+          title: "Modem clock is not set yet",
+          subtitle: "Until the time is synced the modem cannot validate the GitHub certificate. This usually resolves a moment after startup.",
+        };
+      case "update-active":
+        return {
+          title: "Modem is busy with a firmware update",
+          subtitle: "Wait for the running update to finish, then check again.",
+        };
+      case null:
+        return {
+          title: "Modem has not checked GitHub yet",
+          subtitle: "The background check runs shortly after startup. Use Check again to look now.",
+        };
+      default:
+        return {
+          title: "GitHub not reachable from the modem",
+          subtitle: `The modem could not reach GitHub (${error}). Install from a local file instead.`,
+        };
+    }
+  };
+
+  const githubSourceOption = { id: "github", text: "GitHub Release" };
+  const fileSourceOption = { id: "file", text: "Local file" };
 
   const uploadTypeOptions = [
     { id: FirmwareUploadType.modem, text: "Modem Firmware" },
@@ -40,16 +77,45 @@
 
   let uploader = new FirmwareUploader();
 
-  $: releaseOptions = $firmwareUpdateStore.releases.map((release) => ({
-    id: release.version,
-    text: `${release.version}${release.version === $firmwareUpdateStore.releases[0]?.version ? " (latest)" : ""}`,
+  // Die Liste kommt aus dem Hintergrund-Check des Modems – der Browser fragt
+  // GitHub gar nicht mehr selbst.
+  $: releaseOptions = $firmwareStatusStore.versions.map((version, index) => ({
+    id: version,
+    text: `${version}${index === 0 ? " (latest)" : ""}`,
   }));
-  $: if (!selectedReleaseVersion && $firmwareUpdateStore.releases.length > 0) {
-    selectedReleaseVersion = $firmwareUpdateStore.releases[0].version;
+  $: if (!selectedReleaseVersion && releaseOptions.length > 0) {
+    selectedReleaseVersion = releaseOptions[0].id;
   }
-  $: if (open && !$firmwareUpdateStore.loaded && !$firmwareUpdateStore.loading) {
-    void checkFirmwareUpdates();
+
+  // Nicht der Browser lädt die Firmware, sondern das Modem – also entscheidet
+  // dessen Erreichbarkeit, ob die GitHub-Quelle überhaupt angeboten wird.
+  $: githubAvailable = $firmwareStatusStore.reachable === true;
+  // Solange das Modem noch kein Ergebnis und keinen Grund gemeldet hat, ist
+  // "nicht erreichbar" schlicht falsch – der Hintergrund-Check läuft erst kurz
+  // nach dem Start an.
+  $: githubChecking =
+    $firmwareStatusStore.checking ||
+    ($firmwareStatusStore.reachable === null && !$firmwareStatusStore.error);
+  $: sourceOptions = githubAvailable
+    ? [githubSourceOption, fileSourceOption]
+    : [fileSourceOption];
+  $: githubUnavailable = unavailableInfo($firmwareStatusStore.error);
+  // Quelle nie unter einem laufenden Upload wegziehen – daran hängt die Anzeige.
+  $: sourceSwitchable = $uploaderStatus < FirmwareUploadStatus.uploading;
+  $: if (sourceSwitchable && !githubAvailable && source === "github") source = "file";
+  $: if (sourceSwitchable && githubAvailable && !sourcePinned && uploadType === FirmwareUploadType.modem) {
+    source = "github";
   }
+
+  // Wer den Dialog öffnet, will jetzt updaten und nicht auf den nächsten
+  // Hintergrund-Lauf warten – also einmalig sofort nachsehen lassen.
+  $: if (open && !$firmwareStatusStore.checked && !$firmwareStatusStore.checking && !checkRequested) {
+    checkRequested = true;
+    socketService.sendRequestFirmwareStatus(true);
+  }
+  $: if (!open) checkRequested = false;
+
+
 
   function uploadChange(e: CustomEvent<ReadonlyArray<File>>) {
     if (!(ref && ref.files && ref.files.length > 0)) {
@@ -75,17 +141,17 @@
 
   function handleSourceChange(e: CustomEvent<{ selectedId: "github" | "file" }>) {
     source = e.detail.selectedId;
+    sourcePinned = true;
     resetUploadState();
   }
 
-  async function installRelease() {
-    const release = $firmwareUpdateStore.releases.find((item) => item.version === selectedReleaseVersion);
-    if (!release || downloading) return;
+  async function installVersion(version: string | null) {
+    if (!version || downloading) return;
 
     resetUploadState();
     downloading = true;
     try {
-      await uploader.installGithubRelease(release.version);
+      await uploader.installGithubRelease(version);
     } catch (error) {
       downloadError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -266,15 +332,28 @@
         />
       </div>
       {#if uploadType === FirmwareUploadType.modem}
-        <div style="width: 100%; margin-bottom: 1rem; position: relative; z-index: 999;">
-          <Dropdown
-            titleText="Update source"
-            items={sourceOptions}
-            selectedId={source}
-            on:select={handleSourceChange}
-            direction="bottom"
+        {#if githubChecking}
+          <p style="margin-bottom: 1rem;">Checking whether the modem can reach GitHub...</p>
+        {:else if githubAvailable}
+          <div style="width: 100%; margin-bottom: 1rem; position: relative; z-index: 999;">
+            <Dropdown
+              titleText="Update source"
+              items={sourceOptions}
+              selectedId={source}
+              on:select={handleSourceChange}
+              direction="bottom"
+            />
+          </div>
+        {:else}
+          <InlineNotification
+            kind="info"
+            title={githubUnavailable.title}
+            subtitle={githubUnavailable.subtitle}
+            hideCloseButton
+            lowContrast
           />
-        </div>
+          <Button kind="ghost" on:click={() => socketService.sendRequestFirmwareStatus(true)}>Check again</Button>
+        {/if}
       {/if}
     {/if}
     <div style="width: 100%;">
@@ -341,26 +420,7 @@
       {/if}
     </div>
     {#if $uploaderStatus < FirmwareUploadStatus.uploading && source === "github"}
-      {#if $firmwareUpdateStore.loading}
-        <p>Loading releases from GitHub...</p>
-      {:else if $firmwareUpdateStore.error}
-        <InlineNotification
-          kind="error"
-          title="GitHub releases unavailable"
-          subtitle={$firmwareUpdateStore.error}
-          hideCloseButton
-          lowContrast
-        />
-        <Button kind="ghost" on:click={() => checkFirmwareUpdates(true)}>Retry</Button>
-      {:else if releaseOptions.length === 0}
-        <InlineNotification
-          kind="warning"
-          title="No compatible firmware found"
-          subtitle="No release contains firmware for this ESP target."
-          hideCloseButton
-          lowContrast
-        />
-      {:else}
+      {#if releaseOptions.length > 0}
         <div class="release-picker">
           <Dropdown
             titleText="Version"
@@ -369,11 +429,32 @@
             direction="bottom"
           />
           <p>
-            Installed: {$firmwareUpdateStore.modemInfo?.git_tag || $firmwareUpdateStore.modemInfo?.git_hash}
-            · Target: {$firmwareUpdateStore.modemInfo?.firmware_target}
+            Installed: {$firmwareStatusStore.current ?? "unknown"}
+            · Target: {$firmwareStatusStore.target ?? "unknown"}
           </p>
-          <Button on:click={installRelease} disabled={downloading}>Install {selectedReleaseVersion}</Button>
+          <Button on:click={() => installVersion(selectedReleaseVersion)} disabled={downloading}>
+            Install {selectedReleaseVersion}
+          </Button>
         </div>
+      {:else if $firmwareStatusStore.error === "no-firmware-release"}
+        <InlineNotification
+          kind="warning"
+          title="No compatible firmware found"
+          subtitle={`No GitHub release contains a ${$firmwareStatusStore.target ?? "matching"}-firmware.bin asset.`}
+          hideCloseButton
+          lowContrast
+        />
+      {:else}
+        <!-- Leere Liste ohne gemeldeten Grund: Das Modem hat noch nichts
+             geliefert. Nicht als "gibt es nicht" ausgeben. -->
+        <InlineNotification
+          kind="info"
+          title="No release list from the modem yet"
+          subtitle="The modem fetches the list from GitHub in the background. Use Check again to fetch it now."
+          hideCloseButton
+          lowContrast
+        />
+        <Button kind="ghost" on:click={() => socketService.sendRequestFirmwareStatus(true)}>Check again</Button>
       {/if}
       {#if downloadError}
         <InlineNotification kind="error" title="Download failed" subtitle={downloadError} hideCloseButton lowContrast />

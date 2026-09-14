@@ -417,12 +417,20 @@ namespace ArduMower
         bool doMowBorder = false;
         bool doMowExclusions = true;
         bool doMowExclusionBorder = false;
+        // Schwelle der Routenvereinfachung (m). Verändert die berechnete Route:
+        // größere Werte entfernen mehr nahezu kollineare Wegpunkte.
+        float simplifyEpsilon = 0.02f;
+        // Minimaler Wendekreis (m) für die Routenprüfung. Verändert die Route
+        // NICHT, sondern nur den Prüfbericht. Faustregel: Mähgeschwindigkeit
+        // geteilt durch die maximale Drehrate des Reglers.
+        float checkTurnRadius = 0.30f;
 
         MowSettings()
             : timestamp(0), pattern(0), width(0.3f), angle(0),
               distanceToBorder(0.0f), borderLaps(0), mowBorderCcw(false),
               doMowArea(true), doMowPerimeter(true), doMowBorder(false),
-              doMowExclusions(true), doMowExclusionBorder(false) {}
+              doMowExclusions(true), doMowExclusionBorder(false),
+              simplifyEpsilon(0.02f), checkTurnRadius(0.30f) {}
 
         bool operator==(const MowSettings &other) {
           return timestamp == other.timestamp
@@ -436,7 +444,9 @@ namespace ArduMower
               && doMowPerimeter == other.doMowPerimeter
               && doMowBorder == other.doMowBorder
               && doMowExclusions == other.doMowExclusions
-              && doMowExclusionBorder == other.doMowExclusionBorder;
+              && doMowExclusionBorder == other.doMowExclusionBorder
+              && simplifyEpsilon == other.simplifyEpsilon
+              && checkTurnRadius == other.checkTurnRadius;
         }
         bool operator!=(const MowSettings &other) { return !(*this == other); }
         void marshal(JsonObject o) const;
@@ -554,6 +564,9 @@ namespace ArduMower
         virtual bool powerOff() = 0;
 
         virtual bool uploadMapToMower() = 0;
+        // Upload the persisted version of a map without making it the current
+        // map (used by the scheduler). Must not touch RAM drafts.
+        virtual bool uploadSavedMapToMower(const String &id) { (void)id; return false; }
         virtual bool uploadMapToMowerActive() { return false; }
         virtual bool uploadMapToMowerSuccess() { return false; }
         virtual UploadProgress uploadProgress() { return UploadProgress(); }

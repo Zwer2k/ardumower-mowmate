@@ -16,12 +16,13 @@
   const message = $derived(state?.message ?? "");
   const confirmText = $derived(state?.confirmText ?? "OK");
   const cancelText = $derived(state?.cancelText ?? "Abbrechen");
+  const dismissText = $derived(state?.dismissText ?? "");
   const confirmKind = $derived(state?.kind === "danger" ? "danger" : "primary");
 </script>
 
 <ComposedModal
   {open}
-  on:close={() => closeConfirm(false)}
+  on:close={() => closeConfirm("dismiss")}
   preventCloseOnClickOutside
 >
   <ModalHeader {title} />
@@ -29,10 +30,15 @@
     <p>{message}</p>
   </ModalBody>
   <ModalFooter>
-    <Button kind="secondary" on:click={() => closeConfirm(false)}>
+    {#if dismissText}
+      <Button kind="ghost" on:click={() => closeConfirm("dismiss")}>
+        {dismissText}
+      </Button>
+    {/if}
+    <Button kind="secondary" on:click={() => closeConfirm("cancel")}>
       {cancelText}
     </Button>
-    <Button kind={confirmKind} on:click={() => closeConfirm(true)}>
+    <Button kind={confirmKind} on:click={() => closeConfirm("confirm")}>
       {confirmText}
     </Button>
   </ModalFooter>

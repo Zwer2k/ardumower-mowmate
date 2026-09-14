@@ -1,6 +1,6 @@
 <script lang="ts">
   import { TextInput, Dropdown, Row, Grid, Loading, ProgressBar } from "carbon-components-svelte";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import Canvas from "./Canvas.svelte";
   import Exclusion from "./Exclusion.svelte";
   import Track from "./Track.svelte";
@@ -13,11 +13,14 @@
   import { socketStore, socketService } from "../stores/socket";
   import { mowSettingsStore } from "./mow-settings";
   import { filterWaypointsByToggles } from "./core/waypoint-filter";
-  import { openConfirm } from "../stores/confirm-dialog";
+  import { openConfirm, openConfirmChoice } from "../stores/confirm-dialog";
   import { mapWorkflowStore, isMapDirty } from "./map-workflow";
   import { isMowerMapSynced, setMapDirty } from "./services/map-sync";
   import { get } from "svelte/store";
   import MowSettingsDialog from "./MowSettingsDialog.svelte";
+  import RouteReportDialog from "./RouteReportDialog.svelte";
+  import MapFindingHighlight from "./overlay/MapFindingHighlight.svelte";
+  import { routeReportStore } from "./route-report";
   import MapToolbar from "./toolbar/MapToolbar.svelte";
   import MapManagementToolbar from "./toolbar/MapManagementToolbar.svelte";
   import MapEditToolbar from "./toolbar/MapEditToolbar.svelte";
@@ -27,7 +30,6 @@
   import MapStatusOverlay from "./overlay/MapStatusOverlay.svelte";
   import MapGotoOverlay from "./overlay/MapGotoOverlay.svelte";
   import {
-    buildEditItems,
     categoryFromEditItemId,
     itemBelongsToCategory,
     deletePointByEditItemId,
@@ -42,14 +44,22 @@
     removeFloatingPoint,
     buildPointId,
     buildInitialCandidates,
-    type EditItem,
   } from "./interactions/map-edit";
   import { createGotoState } from "./interactions/map-goto";
   import { createCompassState } from "./interactions/map-compass";
-  import { currentMapRotationStore } from "./service";
+  import {
+    recordMapSnapshot,
+    undoMapEdit,
+    redoMapEdit,
+    resetMapHistory,
+    canUndoMapEdit,
+    canRedoMapEdit,
+  } from "./interactions/map-history";
+  import { SaveSuccess } from "../stores/success";
+  import { currentMapRotationStore, mapEditLock } from "./service";
   import { mapChunkProgress } from "./map-chunk-buffer";
   import type { Point, MapArea } from "./model";
-  import type { MowSettingsData } from "../model";
+  import type { MowSettingsData, RouteFinding } from "../model";
   import { gamepadStore, GamepadButton } from "../stores/gamepad";
   import { gamepadMode } from "../stores/gamepad-mode";
   import { remoteControlOpen } from "../stores/remote-control";
@@ -60,18 +70,52 @@
   let wasEditing = false;
   let showMowSettings = false;
   let showMowerMapDialog = false;
-  let selectedId: string | null = null;
+  let showRouteReport = false;
+  // Open the report by itself once a fresh one arrives, but never re-open it
+  // for a report the user has already dismissed.
+  let lastShownReport: unknown = null;
+  $: if ($routeReportStore && $routeReportStore !== lastShownReport) {
+    lastShownReport = $routeReportStore;
+    showRouteReport = true;
+    // The indices of the previous report do not apply to the new route.
+    highlightedFindingIdx = [];
+  }
+
+  // Waypoint indices a route-check finding points at. They index the raw
+  // waypoint list, which is what the modem numbered them against.
+  let highlightedFindingIdx: number[] = [];
+
+  function focusFinding(f: RouteFinding) {
+    const indices = [f.idx, f.idx2].filter(
+      (i): i is number => typeof i === "number" && i >= 0 && i < rawWaypoints.length,
+    );
+    highlightedFindingIdx = indices;
+    showRouteReport = false;
+    // In the editor, also select the waypoint so it can be fixed right away.
+    if (edit && indices.length > 0) {
+      stopDraw();
+      editCategory = "waypoints";
+      editItemId = `map-0-waypoints-point-${indices[0]}`;
+    }
+  }
+
+  function clearFindingHighlight() {
+    if (highlightedFindingIdx.length > 0) highlightedFindingIdx = [];
+  }
   let editItemId: string | null = null;
-  let editItems: EditItem[] = [];
   let mapSyncTimer: ReturnType<typeof setTimeout> | null = null;
   let skipNextMapSync = true;
   let lastSyncedMap = "";
   const categoryOptions: { id: string; text: string }[] = [
-    { id: "perimeter", text: "Edit Perimeter" },
-    { id: "dockpoints", text: "Edit Dockingpoints" },
-    { id: "exclusion", text: "Edit Exclusions" },
-    { id: "waypoints", text: "Edit Waypoints" },
+    { id: "perimeter", text: "Edit perimeter" },
+    { id: "dockpoints", text: "Edit docking points" },
+    { id: "exclusion", text: "Edit exclusions" },
+    { id: "waypoints", text: "Edit waypoints" },
   ];
+
+  function defaultMapName(): string {
+    return `Map ${$socketStore.maps.length + 1}`;
+  }
 
   let editCategory: MapArea = "perimeter";
 
@@ -80,10 +124,10 @@
 
   $: editPoint = edit && !!editItemId && editItemId.indexOf("-point-") !== -1;
   $: editEdge = edit && !!editItemId && editItemId.indexOf("-edge-") !== -1;
-  $: selectedId = editItemId;
   $: selectedExclusionMatch = editItemId?.match(/-exclusion-([0-9]+)/);
   $: selectedExclusionIndex = selectedExclusionMatch ? parseInt(selectedExclusionMatch[1]) : null;
-  $: canAdd = edit && !drawActive && mowerPos && mowerPos.x !== 0 && mowerPos.y !== 0 && (
+  $: hasMowerFix = !!mowerPos && !(mowerPos.x === 0 && mowerPos.y === 0);
+  $: canAdd = edit && !drawActive && hasMowerFix && (
     editEdge ||
     editPoint ||
     (editCategory === "perimeter" && perimeterPoints <= 1) ||
@@ -94,7 +138,7 @@
       (selectedExclusionIndex !== null && ($MapStore.map?.exclusions[selectedExclusionIndex].points.length ?? 0) <= 1)
     ))
   );
-  $: canCreateExclusion = edit && !drawActive && mowerPos && mowerPos.x !== 0 && mowerPos.y !== 0 && editCategory === "exclusion";
+  $: canCreateExclusion = edit && !drawActive && hasMowerFix && editCategory === "exclusion";
   $: canDeleteExclusion = edit && !drawActive && editCategory === "exclusion" && selectedExclusionIndex !== null;
 
   // ─── Map management ────────────────────────────────────────────────────────
@@ -166,6 +210,8 @@
       clearTimeout(mapSyncTimer);
       mapSyncTimer = null;
     }
+    // The snapshots belong to the map being left.
+    resetMapHistory();
     edit = false;
     wasEditing = false;
     editItemId = null;
@@ -177,10 +223,10 @@
     const opts: { id: string; text: string }[] = [];
     const isNew = $socketStore.isNewMap || $mapWorkflowStore.state === "creating" || $mapWorkflowStore.state === "intercepting";
     if (isNew) {
-      const name = $mapWorkflowStore.pendingName || `Karte ${$socketStore.maps.length + 1}`;
+      const name = $mapWorkflowStore.pendingName || defaultMapName();
       opts.push({
         id: "__unsaved__",
-        text: `${name} (unsaved)`,
+        text: `${name} ● (unsaved)`,
       });
     }
     for (const m of $socketStore.maps) {
@@ -188,7 +234,9 @@
       seen.add(m.id);
       opts.push({
         id: m.id,
-        text: `${m.name} (${m.area.toFixed(1)} m²)${m.id === $socketStore.activeMapId ? ' ★ default' : ''}`,
+        // "●" marks a map with unsaved changes, so drafts stay recognizable
+        // after switching away from them.
+        text: `${m.name}${m.unsaved ? ' ●' : ''} (${m.area.toFixed(1)} m²)${m.id === $socketStore.activeMapId ? ' ★ default' : ''}`,
       });
     }
     return opts;
@@ -203,6 +251,19 @@
     }
   }
 
+  // Undo history belongs to one map. Reset it whenever the backend hands us a
+  // different map — a user-initiated switch goes through stopEditForMapChange(),
+  // but a schedule run or an intercepted transfer does not.
+  let historyMapId: string | null = null;
+  $: {
+    const id = $socketStore.currentMapId || "";
+    if (historyMapId !== id) {
+      historyMapId = id;
+      resetMapHistory();
+      highlightedFindingIdx = [];
+    }
+  }
+
   $: effectiveMapId = $socketStore.currentMapId || "";
   $: effectiveMap = $socketStore.maps.find((m) => m.id === effectiveMapId);
   $: effectiveMapName = effectiveMap?.name || "";
@@ -210,7 +271,7 @@
   $: selectedIsCurrentMap = selectedMapId === (effectiveMapId || "__unsaved__");
   $: canSave = isDirty && selectedIsCurrentMap && !$mapWorkflowStore.renameMode && !workflowBusy;
   $: canRevert = isDirty && selectedIsCurrentMap && !$mapWorkflowStore.renameMode && !workflowBusy;
-  $: canRename = ($MapStore.map?.perimeter.points.length ?? 0) >= 3 && !!effectiveMapId;
+  $: canRename = !!effectiveMapId;
   $: workflowBusy = $mapWorkflowStore.state === "loading" || $mapWorkflowStore.state === "saving" || $mapWorkflowStore.state === "renaming" || $mapWorkflowStore.state === "deleting";
 
   onMount(() => {
@@ -253,13 +314,24 @@
     const dirty = get(isMapDirty);
     let discardCurrent = false;
     if (dirty && id !== effectiveMapId && !!effectiveMapId) {
-      const choice = await openConfirm({
-        title: "Ungespeicherte Änderungen",
-        message: "Änderungen speichern, bevor zu einer anderen Karte gewechselt wird?",
-        confirmText: "Speichern",
-        cancelText: "Verwerfen",
+      const choice = await openConfirmChoice({
+        title: "Unsaved changes",
+        message: "Save the changes before switching to another map?",
+        confirmText: "Save",
+        cancelText: "Discard",
+        dismissText: "Cancel",
       });
-      if (choice) {
+      if (choice === "dismiss") {
+        // Escape/X/"Cancel" used to discard the changes. Reset the dropdown
+        // selection and stay on the current map instead.
+        const keep = selectedMapId;
+        selectedMapId = "";
+        await tick();
+        selectedMapId = keep;
+        dropdownSelectedId = keep;
+        return;
+      }
+      if (choice === "confirm") {
         socketService.sendMap(buildMapSetData(get(MapStore).map, compassRotation));
         onSaveMap();
       } else {
@@ -276,13 +348,15 @@
 
   async function onNewMap() {
     if (isDirty && selectedIsCurrentMap) {
-      const choice = await openConfirm({
-        title: "Ungespeicherte Änderungen",
-        message: "Änderungen speichern, bevor eine neue Karte erstellt wird?",
-        confirmText: "Speichern",
-        cancelText: "Verwerfen",
+      const choice = await openConfirmChoice({
+        title: "Unsaved changes",
+        message: "Save the changes before creating a new map?",
+        confirmText: "Save",
+        cancelText: "Discard",
+        dismissText: "Cancel",
       });
-      if (choice) {
+      if (choice === "dismiss") return;
+      if (choice === "confirm") {
         socketService.sendMap(buildMapSetData(get(MapStore).map, compassRotation));
         onSaveMap();
       } else {
@@ -291,7 +365,7 @@
       }
     }
     stopEditForMapChange();
-    const defaultName = `Karte ${$socketStore.maps.length + 1}`;
+    const defaultName = defaultMapName();
     currentMapRotationStore.set(0);
     mapWorkflowStore.startNewMap(defaultName);
     socketService.sendCreateMap(defaultName);
@@ -300,7 +374,7 @@
 
   function onCopyMap() {
     if (!effectiveMapId) return;
-    socketService.sendCopyMap(`${effectiveMapName || "Karte"} Kopie`);
+    socketService.sendCopyMap(`${effectiveMapName || "Map"} copy`);
   }
 
   $: if (
@@ -312,8 +386,7 @@
     !$socketStore.isLoadingMap &&
     $mapWorkflowStore.pendingName === ""
   ) {
-    const defaultName = `Karte ${$socketStore.maps.length + 1}`;
-    mapWorkflowStore.startNewMap(defaultName);
+    mapWorkflowStore.startNewMap(defaultMapName());
     showManage = true;
   }
 
@@ -327,7 +400,7 @@
       lastSyncedMap = JSON.stringify(mapData);
       socketService.sendMap(mapData);
     }
-    const name = $mapWorkflowStore.pendingName || effectiveMapName || `Karte ${$socketStore.maps.length + 1}`;
+    const name = $mapWorkflowStore.pendingName || effectiveMapName || defaultMapName();
     mapWorkflowStore.startSaveMap(name, compassRotation);
     socketService.sendSaveMap(name, compassRotation);
   }
@@ -346,23 +419,31 @@
     const target = selectedMapId || dropdownSelectedId || effectiveMapId;
     if (!target) return;
     const message = target === "__unsaved__" || $socketStore.isNewMap
-      ? "Neue Karte verwerfen? Ungespeicherte Änderungen gehen verloren."
-      : "Änderungen an der Karte verwerfen und gespeicherte Version laden?";
+      ? "Discard the new map? Unsaved changes will be lost."
+      : "Discard the changes and reload the saved version of this map?";
     const choice = await openConfirm({
-      title: "Änderungen verwerfen",
+      title: "Discard changes",
       message,
-      confirmText: "Verwerfen",
-      cancelText: "Abbrechen",
+      confirmText: "Discard",
+      cancelText: "Cancel",
       kind: "danger",
     });
     if (!choice) return;
     stopDraw();
+    mapWorkflowStore.resetDirtyState();
+    socketService.sendDiscardMap();
     if (target === "__unsaved__" || $socketStore.isNewMap) {
-      mapWorkflowStore.resetDirtyState();
-      socketService.sendDiscardMap();
-    } else {
-      mapWorkflowStore.resetDirtyState();
-      socketService.sendDiscardMap();
+      // Das Backend ersetzt eine verworfene neue Karte durch eine leere Karte
+      // ohne ID; ohne Folge-Load landete man sofort wieder im Namensdialog
+      // der nächsten neuen Karte. Stattdessen zur Default-Karte zurück.
+      const fallbackId = $socketStore.activeMapId || $socketStore.maps.find((m) => m.id !== target)?.id;
+      if (fallbackId) {
+        stopEditForMapChange();
+        selectedMapId = fallbackId;
+        dropdownSelectedId = fallbackId;
+        mapWorkflowStore.startLoadMap(fallbackId);
+        socketService.sendLoadMap(fallbackId);
+      }
     }
   }
 
@@ -422,7 +503,7 @@
       }
       return;
     }
-    const fallbackName = effectiveMapName || $mapWorkflowStore.pendingName || `Karte ${$socketStore.maps.length + 1}`;
+    const fallbackName = effectiveMapName || $mapWorkflowStore.pendingName || defaultMapName();
     mapWorkflowStore.cancelRename(fallbackName);
   }
 
@@ -430,16 +511,16 @@
     const target = dropdownSelectedId || effectiveMapId;
     if (!target || target === "__unsaved__") return;
     const choice = await openConfirm({
-      title: "Karte löschen",
-      message: "Karte wirklich löschen? Dies kann nicht rückgängig gemacht werden.",
-      confirmText: "Löschen",
-      cancelText: "Abbrechen",
+      title: "Delete map",
+      message: "Really delete this map? This cannot be undone.",
+      confirmText: "Delete",
+      cancelText: "Cancel",
       kind: "danger",
     });
     if (!choice) return;
-    // Das Backend übernimmt das Löschen und das anschließende Umschalten
-    // auf die erste verfügbare Karte. Es sendet eine aktualisierte mapList,
-    // die den socketStore und das Dropdown aktualisiert.
+    // The backend performs the deletion and switches to the first remaining
+    // map. It then sends an updated mapList, which refreshes socketStore and
+    // the dropdown.
     mapWorkflowStore.startDeleteMap(target);
     socketService.sendDeleteMap(target);
   }
@@ -478,7 +559,7 @@
         waypoints: map.waypoints.points.map(toBackendPoint),
         rotation,
       }),
-      $mapWorkflowStore.pendingName || effectiveMapName || `Karte ${$socketStore.maps.length + 1}`,
+      $mapWorkflowStore.pendingName || effectiveMapName || defaultMapName(),
       rotation,
     );
   }
@@ -491,14 +572,10 @@
   $: rawWaypoints = $MapStore.map?.waypoints.points ?? [];
   $: filteredWaypoints = $MapStore.map ? filterWaypointsByToggles(rawWaypoints, $MapStore.map, $mowSettingsStore) : [];
   $: waypointsPoints = rawWaypoints.length;
+  $: highlightedFindingPoints = highlightedFindingIdx
+    .map((i) => rawWaypoints[i])
+    .filter((p): p is Point => !!p);
   $: totalPoints = perimeterPoints + dockpointsPoints + waypointsPoints + exclusionPoints.reduce((a, b) => a + b, 0);
-
-  $: nearPos = !!(mowerPos && mowerPos.x !== 0 && mowerPos.y !== 0
-    && $MapStore.map?.perimeter.points.some((pt) => {
-        const dx = pt.x - mowerPos.x;
-        const dy = pt.y + mowerPos.y;
-        return dx * dx + dy * dy < 0.0025;
-      }));
 
   // ─── Edit/draw state ───────────────────────────────────────────────────────
   let drawActive = false;
@@ -512,26 +589,12 @@
   }> = [];
   let floatingPoint: Point | null = null;
 
-  $: editItems = $MapStore && $MapStore.map ? buildEditItems($MapStore.map, editCategory) : [];
-
   function selectEditCategory(e: CustomEvent) {
     const id = e.detail?.selectedId as MapArea | undefined;
     if (!id) return;
     editCategory = id;
     editItemId = null;
     stopDraw();
-  }
-
-  function selectEditItem(e: CustomEvent) {
-    editItemId = e.detail?.selectedId ?? null;
-  }
-
-  function shouldFilterItem(item: { text: string }, value: string) {
-    return item.text.toLowerCase().includes(value.toLowerCase());
-  }
-
-  function clearEditItem() {
-    editItemId = null;
   }
 
   function onDeleteClick() {
@@ -572,6 +635,7 @@
 
   function onCreateExclusionClick() {
     if (!mowerPos) return;
+    recordMapSnapshot();
     MapStore.update((store) => {
       const map = { ...store.map };
       map.exclusions = [
@@ -598,6 +662,7 @@
     const match = editItemId.match(/-exclusion-([0-9]+)/);
     if (!match) return;
     const exclusionIndex = parseInt(match[1]);
+    recordMapSnapshot();
     MapStore.update((store) => {
       const map = { ...store.map };
       map.exclusions = map.exclusions.filter((_, i) => i !== exclusionIndex);
@@ -612,6 +677,7 @@
   let lastGamepadButtons: Record<number, number> = {};
   let gamepadMoveInterval: ReturnType<typeof setInterval> | null = null;
   let lastSelectedPointPos: Point | null = null;
+  let gamepadGestureActive = false;
 
   // Set gamepad mode based on edit state: map-edit when drawing, point selected, or edge selected (for Add button)
   $: if (browser) {
@@ -699,7 +765,15 @@
     const rawDx = gp.rawX;
     const rawDy = gp.rawY;
     const magnitude = Math.sqrt(rawDx * rawDx + rawDy * rawDy);
-    if (magnitude < 0.15) return; // Deadzone: stop movement when stick released
+    if (magnitude < 0.15) {
+      // Deadzone: stop movement when stick released, and end the undo gesture.
+      gamepadGestureActive = false;
+      return;
+    }
+    if (!gamepadGestureActive) {
+      gamepadGestureActive = true;
+      recordMapSnapshot();
+    }
 
     const dx = rawDx * moveScale;
     const dy = rawDy * moveScale;
@@ -738,11 +812,13 @@
       gamepadMoveInterval = null;
     }
     lastGamepadButtons = {};
+    gamepadGestureActive = false;
   }
 
   onDestroy(() => {
     if (gamepadUnsubscribe) gamepadUnsubscribe();
     if (gamepadMoveInterval) clearInterval(gamepadMoveInterval);
+    mapEditLock.set(false);
   });
 
   function onDrawClick() {
@@ -779,9 +855,51 @@
     floatingPoint = null;
   }
 
+  function doUndo() {
+    if (!edit) return;
+    // A half-finished draw gesture would leave a floating point behind.
+    if (drawActive) stopDraw();
+    if (undoMapEdit()) editItemId = null;
+  }
+
+  function doRedo() {
+    if (!edit) return;
+    if (drawActive) stopDraw();
+    if (redoMapEdit()) editItemId = null;
+  }
+
+  function isTypingTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el || !el.tagName) return false;
+    const tag = el.tagName.toUpperCase();
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+  }
+
   function onKeyDown(event: KeyboardEvent) {
-    if (event.key === "Escape" && drawActive) {
-      stopDraw();
+    // Never steal keys from the rename field or any other text input.
+    if (isTypingTarget(event.target)) return;
+
+    const mod = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    // Redo first: Ctrl+Shift+Z also matches the undo combo.
+    if (mod && (key === "y" || (key === "z" && event.shiftKey))) {
+      event.preventDefault();
+      doRedo();
+      return;
+    }
+    if (mod && key === "z") {
+      event.preventDefault();
+      doUndo();
+      return;
+    }
+    if (event.key === "Escape") {
+      if (drawActive) stopDraw();
+      else if (editItemId) editItemId = null;
+      return;
+    }
+    if (edit && !drawActive && editPoint && (event.key === "Delete" || event.key === "Backspace")) {
+      event.preventDefault();
+      onDeleteClick();
     }
   }
 
@@ -890,6 +1008,10 @@
   $: storedCrc = $socketStore.currentMapMeta?.crc ?? 0;
   $: sync = { needsUpload: hasState && !isMowerMapSynced($socketStore.state, $socketStore.currentMapId, storedCrc) };
 
+  // Während des Editierens dürfen eingehende Map-Transfers (Echo des eigenen
+  // setMap) den lokalen Zustand nicht überschreiben, siehe mapEditLock.
+  $: mapEditLock.set(edit);
+
   $: if (!edit && wasEditing && $MapStore && $MapStore.map) {
     if (mapSyncTimer) {
       clearTimeout(mapSyncTimer);
@@ -902,6 +1024,9 @@
       if (serializedMap !== lastSyncedMap) {
         lastSyncedMap = serializedMap;
         socketService.sendMap(mapData);
+        // Closing the editor syncs silently; say so, otherwise it is unclear
+        // whether the changes reached the modem.
+        SaveSuccess.set({ action: "sync map", date: new Date() });
       }
     }
   } else if (edit) {
@@ -921,6 +1046,7 @@
   function onMapClick(event: CustomEvent<{ x: number; y: number }>) {
     const { x, y } = event.detail;
     mouseMapPos = { x, y };
+    clearFindingHighlight();
     if (drawActive) {
       onDrawMapClick(event);
       return;
@@ -974,7 +1100,6 @@
           </div>
           <MapToolbar
             {workflowBusy}
-            {busy}
             renameMode={$mapWorkflowStore.renameMode}
             {showManage}
             {edit}
@@ -987,7 +1112,6 @@
               $mapWorkflowStore.state === "intercepting" ||
               $mapWorkflowStore.pendingName !== effectiveMapName
             )}
-            onUpload={onUploadMap}
             onToggleManage={toggleManage}
             onToggleEdit={toggleEdit}
             onToggleCalculate={toggleCalculate}
@@ -1042,24 +1166,23 @@
           {edit}
           {editCategory}
           categoryItems={categoryOptions}
-          {editItems}
-          bind:selectedId
           {editPoint}
           {editEdge}
           {drawActive}
           {canAdd}
           {canCreateExclusion}
           {canDeleteExclusion}
+          canUndo={$canUndoMapEdit}
+          canRedo={$canRedoMapEdit}
+          onUndo={doUndo}
+          onRedo={doRedo}
           onSelectCategory={selectEditCategory}
-          onSelect={selectEditItem}
-          onClear={clearEditItem}
           onDrawClick={onDrawClick}
           onSplitClick={onSplitClick}
           onAddClick={onAddClick}
           onDeleteClick={onDeleteClick}
           onCreateExclusionClick={onCreateExclusionClick}
           onDeleteExclusionClick={onDeleteExclusionClick}
-          {shouldFilterItem}
         />
       {/if}
 
@@ -1067,6 +1190,8 @@
         <MapCalculateToolbar
           {busy}
           onOpenMowSettings={() => (showMowSettings = true)}
+          onOpenRouteReport={() => (showRouteReport = true)}
+          hasRouteReport={$routeReportStore != null}
         />
       {/if}
 
@@ -1102,6 +1227,7 @@
       {waypointsPoints}
       {totalPoints}
       needsUpload={sync.needsUpload}
+      onUploadMap={onUploadMap}
       {selectedExclusionIndex}
       onCompassDown={compassState.onDown}
       mouseMapPos={edit ? mouseMapPos : null}
@@ -1164,7 +1290,7 @@
           />
         {/each}
         <Waypoints
-          value={{ points: filteredWaypoints }}
+          value={{ points: edit && editCategory === "waypoints" ? rawWaypoints : filteredWaypoints }}
           waypointsId="map-0-waypoints"
           {edit}
           {editCategory}
@@ -1219,6 +1345,8 @@
           {/each}
         {/if}
 
+        <MapFindingHighlight points={highlightedFindingPoints} />
+
         <MapGotoOverlay
           {targetPos}
           {mowerPos}
@@ -1242,6 +1370,7 @@
 </div>
 
 <MowSettingsDialog bind:open={showMowSettings} />
+<RouteReportDialog bind:open={showRouteReport} onSelectFinding={focusFinding} />
 
 <MowerMapDialog
   bind:open={showMowerMapDialog}

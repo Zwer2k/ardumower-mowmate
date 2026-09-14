@@ -130,7 +130,7 @@ namespace ArduMower {
         String MapManager::generateDefaultName() const {
             int n = 1;
             while (true) {
-                String candidate = "Karte " + String(n);
+                String candidate = "Map " + String(n);
                 bool exists = false;
                 for (const auto &m : _index.maps) {
                     if (m.name == candidate) {
@@ -235,26 +235,22 @@ namespace ArduMower {
                 }
             }
 
-            // 2. Keine aktuelle Karte: prüfen, ob gleiche Geometrie bereits existiert
+            // 2. Keine aktuelle Karte: immer eine neue Karte anlegen.
+            // Früher wurde hier per Geometrie-Hash in eine vorhandene Karte
+            // "hineingespeichert" – dadurch benannte "Kopie → Speichern" (ohne
+            // Änderung) stillschweigend das Original um, statt eine zweite
+            // Karte zu erzeugen. Dubletten sind Sache des Benutzers.
             if (!meta) {
-                for (auto &m : _index.maps) {
-                    if (m.hash == hash) {
-                        meta = &m;
-                        break;
-                    }
-                }
-                if (meta) {
-                    fileName = meta->file;
-                    meta->name = displayName;
-                    meta->area = area;
-                    meta->crc = crc;
-                    meta->rotation = rotation;
-                    meta->timestamp = millis();
-                    Log(INFO, "%s save: existierende Karte '%s' aktualisiert", _LOG_, displayName.c_str());
-                } else {
+                {
                     fileName = allocateFileName();
                     MapMeta newMeta;
+                    // Die ID bleibt aus Kompatibilität der Geometrie-Hash; ist
+                    // er bereits vergeben, wird sie über die Datei-Nummer
+                    // eindeutig gemacht.
                     newMeta.id = hash;
+                    if (findMeta(newMeta.id) != nullptr) {
+                        newMeta.id = hash + "-" + String(_index.nextFileId);
+                    }
                     newMeta.name = displayName;
                     newMeta.area = area;
                     newMeta.hash = hash;
@@ -264,7 +260,7 @@ namespace ArduMower {
                     newMeta.file = fileName;
                     _index.maps.push_back(newMeta);
                     meta = &_index.maps.back();
-                    Log(INFO, "%s save: neue Karte '%s' (%s, %.1f m²)", _LOG_, displayName.c_str(), hash.c_str(), area);
+                    Log(INFO, "%s save: neue Karte '%s' (%s, %.1f m²)", _LOG_, displayName.c_str(), meta->id.c_str(), area);
                 }
             }
 
@@ -385,8 +381,15 @@ namespace ArduMower {
             for (auto it = _index.maps.begin(); it != _index.maps.end(); ++it) {
                 if (it->id == id) {
                     if (SPIFFS.exists(it->file)) SPIFFS.remove(it->file);
-                    if (_index.activeId == id) _index.activeId = "";
+                    const bool wasActive = (_index.activeId == id);
                     _index.maps.erase(it);
+                    // Beim Löschen der Default-Karte sofort auf die erste
+                    // verbleibende Karte umschalten – dieselbe Reparatur, die
+                    // begin() sonst erst nach dem nächsten Neustart macht.
+                    // Bis dahin liefen loadActive() und der Scheduler ins Leere.
+                    if (wasActive) {
+                        _index.activeId = _index.maps.empty() ? "" : _index.maps.front().id;
+                    }
                     saveIndex();
                     return true;
                 }

@@ -27,14 +27,16 @@ import {
   RequestDataType,
   type ClockData,
   type DrivenTrackData,
+  type FirmwareStatusData,
+  type RouteReportData,
 } from "../model";
+import { routeReportStore, clearRouteReport } from "../map/route-report";
 import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer, resetMapTransferTracking } from "../map/map-chunk-buffer";
 import { MapPointType } from "../map/map-chunk-buffer";
 import { mowSettingsStore } from "../map/mow-settings";
 import { currentMapRotationStore, updateDrivenTrack } from "../map/service";
 import { mapWorkflowStore } from "../map/workflow/map-workflow-store";
 import { setMapDirty } from "../map/services/map-sync";
-import { saveCachedMap, isCachedMapCurrent, loadCachedMap } from "../map/map-cache";
 import type { MapWorkflowStore, MapWorkflowState } from "../map/workflow/map-workflow-store";
 
 let workflowModule: any = null;
@@ -146,6 +148,59 @@ export function resetFlashProgress() {
   flashProgressStore.set(null);
 }
 
+export interface FirmwareStatus {
+  /** null = seit dem Verbindungsaufbau noch nichts vom Modem gehört. */
+  reachable: boolean | null;
+  checking: boolean;
+  updateAvailable: boolean;
+  /** false = das Modem hat seit dem Boot noch nicht bei GitHub nachgesehen. */
+  checked: boolean;
+  current: string | null;
+  latest: string | null;
+  target: string | null;
+  /** Installierbare Releases, neuste zuerst – vom Modem bei GitHub geholt. */
+  versions: string[];
+  error: string | null;
+}
+
+const emptyFirmwareStatus: FirmwareStatus = {
+  reachable: null,
+  checking: false,
+  updateAvailable: false,
+  checked: false,
+  current: null,
+  latest: null,
+  target: null,
+  versions: [],
+  error: null,
+};
+
+/** Firmware-Stand aus Sicht des Modems: Das Modem selbst fragt GitHub im
+ *  Hintergrund ab und lädt später auch die Firmware – nicht der Browser. Nur
+ *  seine Sicht entscheidet, ob es ein Update gibt und ob die GitHub-Quelle im
+ *  Firmware-Dialog angeboten wird. */
+export const firmwareStatusStore = writable<FirmwareStatus>(emptyFirmwareStatus);
+
+/** Während einer laufenden Prüfung den letzten bekannten Stand behalten, sonst
+ *  flackert die GitHub-Quelle im Firmware-Dialog kurz weg. */
+export function applyFirmwareStatus(data: FirmwareStatusData) {
+  firmwareStatusStore.update((prev) => ({
+    reachable: data.checking ? prev.reachable : data.reachable,
+    checking: data.checking,
+    updateAvailable: data.updateAvailable,
+    checked: data.checked,
+    current: data.current ?? prev.current,
+    latest: data.latest ?? prev.latest,
+    target: data.target ?? prev.target,
+    versions: data.versions ?? prev.versions,
+    error: data.error ?? null,
+  }));
+}
+
+export function resetFirmwareStatus() {
+  firmwareStatusStore.set(emptyFirmwareStatus);
+}
+
 function setFlashProgress(progress: number, source: "modem" | "mower") {
   flashProgressStore.set({
     progress: Math.max(0, Math.min(100, progress)),
@@ -175,6 +230,13 @@ class SocketService {
   private nextMapSyncId = 1;
   private pendingUpload: { mapData: import("../model").MapSetData; syncId: number; mapId: string } | null = null;
   private pendingUploadRetry: ReturnType<typeof setTimeout> | null = null;
+  // Last plain setMap() (editor sync). The backend rejects setMap while it is
+  // streaming the map to clients (mapAck.accepted=false); without a retry the
+  // edit was silently lost, because the editor only resends when the map
+  // changed again.
+  private lastSetMap: { mapData: import("../model").MapSetData; syncId: number; mapId: string; attempts: number } | null = null;
+  private setMapRetry: ReturnType<typeof setTimeout> | null = null;
+  private static readonly SET_MAP_MAX_RETRIES = 20;
   private readonly boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
   constructor() {
@@ -259,6 +321,10 @@ class SocketService {
           // zurückgesetzten Transfer-IDs.
           resetMapTransferTracking();
 
+          // Ohne force: das Modem antwortet aus dem Ergebnis seines letzten
+          // Hintergrund-Checks, es geht dafür nicht ins Netz.
+          this.sendRequestFirmwareStatus();
+
           socketStore.update((s) => ({ ...s, connected: true }));
 
           for (const message of this.pendingMessages) {
@@ -295,6 +361,8 @@ class SocketService {
 
           this.clearAllTimers();
           socketStore.update((s) => ({ ...s, socket: null, connected: false }));
+          // Nach einem Reconnect kann das Netz ein anderes sein – erneut fragen.
+          resetFirmwareStatus();
 
           if (
             this.reconnect &&
@@ -496,8 +564,17 @@ class SocketService {
                       } else {
                         this.pendingUpload = null;
                       }
+                    } else if (this.lastSetMap?.syncId === data.syncId) {
+                      if (this.lastSetMap.mapId === data.mapId && data.mapId === newState.currentMapId) {
+                        this.scheduleSetMapRetry();
+                      } else {
+                        this.lastSetMap = null;
+                      }
                     }
                     break;
+                  }
+                  if (this.lastSetMap?.syncId === data.syncId) {
+                    this.lastSetMap = null;
                   }
                   if (data.mapId !== newState.currentMapId) break;
                   const meta = {
@@ -630,6 +707,12 @@ class SocketService {
                 case ResponseDataType.clock:
                   newState.clock = jsonData.data as ClockData;
                   break;
+                case ResponseDataType.firmwareStatus:
+                  applyFirmwareStatus(jsonData.data as FirmwareStatusData);
+                  break;
+                case ResponseDataType.routeReport:
+                  routeReportStore.set(jsonData.data as RouteReportData);
+                  break;
                 default:
               }
               return newState;
@@ -666,7 +749,7 @@ class SocketService {
               mwf.finishLoadMap(workflowFinishLoadMap.id, workflowFinishLoadMap.name, workflowFinishLoadMap.rotation);
             }
             if (workflowLoadFailed) {
-              mwf.setError("Karte konnte nicht geladen werden");
+              mwf.setError("The map could not be loaded");
             }
             if (workflowFinishDelete) {
               mwf.finishDelete();
@@ -816,11 +899,42 @@ class SocketService {
   sendMap(mapData: import("../model").MapSetData) {
     const syncId = this.nextMapSyncId++;
     const mapId = get(socketStore).currentMapId;
+    this.clearSetMapRetry();
+    this.lastSetMap = { mapData, syncId, mapId, attempts: 0 };
+    this.sendLastSetMap();
+  }
+
+  private sendLastSetMap() {
+    const last = this.lastSetMap;
+    if (!last) return;
     const req: RequestSocketMessage = {
       type: RequestDataType.setMap,
-      data: { ...mapData, syncId, mapId },
+      data: { ...last.mapData, syncId: last.syncId, mapId: last.mapId },
     };
     this.sendMessage(req);
+  }
+
+  private scheduleSetMapRetry() {
+    const last = this.lastSetMap;
+    if (!last) return;
+    if (last.attempts >= SocketService.SET_MAP_MAX_RETRIES) {
+      console.warn("[Socket] setMap rejected repeatedly, giving up (sync", last.syncId, ")");
+      this.lastSetMap = null;
+      return;
+    }
+    last.attempts += 1;
+    this.clearSetMapRetry();
+    this.setMapRetry = setTimeout(() => {
+      this.setMapRetry = null;
+      this.sendLastSetMap();
+    }, 300);
+  }
+
+  private clearSetMapRetry() {
+    if (this.setMapRetry) {
+      clearTimeout(this.setMapRetry);
+      this.setMapRetry = null;
+    }
   }
 
   sendMapAndUpload(mapData: import("../model").MapSetData) {
@@ -892,6 +1006,8 @@ class SocketService {
     };
     this.sendMessage(req);
     resetMapChunkBuffer();
+    // The old report belongs to the old route.
+    clearRouteReport();
   }
 
   sendListMaps() {
@@ -924,12 +1040,17 @@ class SocketService {
       clearTimeout(this.pendingUploadRetry);
       this.pendingUploadRetry = null;
     }
+    // A pending editor sync belongs to the map being left.
+    this.lastSetMap = null;
+    this.clearSetMapRetry();
     // currentMapId sofort auf die Ziel-ID setzen, damit das Frontend während
     // des Ladens weiß, welche Karte geladen wird, und finishLoadMap korrekt
     // ausgelöst wird. startLoadMap versucht denselben Zustand über updateSocket
     // zu setzen, falls das Workflow-Store bereits registriert ist.
     socketStore.update((s) => ({ ...s, currentMapMeta: null, currentMapId: id, isLoadingMap: true, isNewMap: false }));
     mapMetaStore.set(null);
+    // The report describes the route of the map we are leaving.
+    clearRouteReport();
     const req: RequestSocketMessage = {
       type: RequestDataType.loadMap,
       data: { id, discardCurrent },
@@ -1018,6 +1139,14 @@ class SocketService {
     const req: RequestSocketMessage = {
       type: RequestDataType.requestSchedule,
       data: {},
+    };
+    this.sendMessage(req);
+  }
+
+  sendRequestFirmwareStatus(force = false) {
+    const req: RequestSocketMessage = {
+      type: RequestDataType.requestFirmwareStatus,
+      data: { force },
     };
     this.sendMessage(req);
   }

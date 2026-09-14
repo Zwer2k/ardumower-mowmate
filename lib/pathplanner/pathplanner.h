@@ -38,11 +38,16 @@ struct Settings {
     bool mowArea;
     bool mowExclusionBorder;
     bool mowBorderCcw;
+    // Schwelle der Routenvereinfachung in Metern. Wirkt als Verschmelzungsradius
+    // für doppelte Punkte und (halbiert) als erlaubte Abweichung beim Entfernen
+    // nahezu kollinearer Punkte. Größere Werte ergeben weniger Wegpunkte.
+    float simplifyEpsilon;
 
     Settings()
         : timestamp(0), pattern(0), width(0.3f), angle(0),
           distanceToBorder(0), borderLaps(0),
-          mowArea(true), mowExclusionBorder(true), mowBorderCcw(false) {}
+          mowArea(true), mowExclusionBorder(true), mowBorderCcw(false),
+          simplifyEpsilon(0.02f) {}
 };
 
 struct Position {

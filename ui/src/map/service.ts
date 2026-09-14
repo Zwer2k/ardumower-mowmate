@@ -12,7 +12,6 @@ import {
 } from "./map-chunk-buffer";
 import { calculatePresentation } from "./core/presentation";
 import { cloneMap, emptyMap, emptyPresentation } from "./core/map-utils";
-import { loadCachedMap, saveCachedMap, isCachedMapCurrent } from "./map-cache";
 
 export { cloneMap, emptyMap, emptyPresentation };
 export { calculatePresentation } from "./core/presentation";
@@ -20,6 +19,14 @@ export { rotatePointsAroundOrigin, pointsToEdges, pointsForPolygon, edgeArrowPat
 
 export const drivenTrackStore = writable<DrivenTrackData | null>(null);
 export const currentMapRotationStore = writable<number>(0);
+
+/** true while the map editor is active. Incoming map transfers must not
+ *  overwrite the local editing state then: every debounced setMap() makes the
+ *  backend re-broadcast the map to all clients — including the editing one —
+ *  and applying that echo reverted edits made in the meantime (points jumped
+ *  back while dragging) and re-triggered the sync, ping-ponging with the
+ *  backend. The editor pushes its final state itself when editing ends. */
+export const mapEditLock = writable<boolean>(false);
 
 export function updateDrivenTrack(incoming: DrivenTrackData): void {
   drivenTrackStore.update((current) => {
@@ -148,13 +155,14 @@ function updateMapStore() {
     MapStore.set({ map, presentation });
   }
 
-  // Beim Start: Gespeicherte Map aus localStorage laden, falls vorhanden
-  // Dies verhindert, dass die Karte bei einem Reconnect neu übertragen werden muss.
-  const cached = loadCachedMap();
-  if (cached) {
-    map = cached.map;
-    setMap();
-  }
+  // Note: the localStorage map cache (map-cache.ts) is intentionally not
+  // consulted here. Nothing ever writes it, so restoring it only showed a
+  // stale map from an older UI version until the real transfer arrived.
+
+  let editLocked = false;
+  mapEditLock.subscribe((locked) => {
+    editLocked = locked;
+  });
 
   mapSnapshotStore.subscribe((snapshot) => {
     map.perimeter = { points: snapshot.perimeter.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
@@ -174,6 +182,7 @@ function updateMapStore() {
         tag,
       })),
     };
+    if (editLocked) return;
     setMap();
   });
   // Rotation ändert die Präsentation nicht mehr; sie fließt über den Store

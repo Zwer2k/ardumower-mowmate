@@ -10,13 +10,14 @@
   export let waypointsPoints: number;
   export let totalPoints: number;
   export let needsUpload: boolean;
+  export let onUploadMap: (() => void) | null = null;
   export let selectedExclusionIndex: number | null = null;
-  export let onCompassDown: (e: MouseEvent) => void;
+  export let onCompassDown: (e: PointerEvent) => void;
   export let mouseMapPos: { x: number; y: number } | null = null;
 </script>
 
   <div class="map-top-right" role="group" aria-label="Map overlay controls" on:wheel|stopPropagation>
-  <button class="compass-btn" on:mousedown={onCompassDown} title="Karte drehen (ziehen für feine Ausrichtung)">
+  <button class="compass-btn" on:pointerdown={onCompassDown} title="Rotate the map (drag for fine alignment, click for 90°)">
     <svg viewBox="-12 -12 24 24" width="28" height="28">
       <g transform="rotate({compassRotation})">
         <circle cx="0" cy="0" r="10" fill="white" stroke="#999" stroke-width="1.5"/>
@@ -39,7 +40,13 @@
     <div><strong>Dock:</strong> {dockpointsPoints}</div>
     <div><strong>Way:</strong> {waypointsPoints}</div>
     <div><strong>Total:</strong> {totalPoints}</div>
-    <div class:sync-ok={!needsUpload} class:sync-warn={needsUpload}>{needsUpload ? '⚠' : '✓'} {needsUpload ? 'not synced' : 'synced'}</div>
+    {#if needsUpload && onUploadMap}
+      <button class="sync-btn sync-warn" on:click={onUploadMap} title="Upload this map to the mower">
+        ⚠ not synced — upload
+      </button>
+    {:else}
+      <div class:sync-ok={!needsUpload} class:sync-warn={needsUpload}>{needsUpload ? '⚠' : '✓'} {needsUpload ? 'not synced' : 'synced'}</div>
+    {/if}
   </div>
   <MowAreaToggles />
 </div>
@@ -64,6 +71,7 @@
     border: none;
     cursor: pointer;
     padding: 0;
+    touch-action: none;
   }
   .map-point-counts {
     background: rgba(255, 255, 255, 0.9);
@@ -90,6 +98,21 @@
     border-radius: 2px;
     margin: -0.1rem -0.25rem;
     padding: 0.1rem 0.25rem;
+  }
+  .sync-btn {
+    display: block;
+    width: 100%;
+    margin-top: 0.15rem;
+    padding: 0.15rem 0.25rem;
+    font: inherit;
+    text-align: left;
+    background: #fdecea;
+    border: 1px solid #ef9a9a;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .sync-btn:hover {
+    background: #f9d7d4;
   }
   .sync-ok {
     color: #2e7d32;

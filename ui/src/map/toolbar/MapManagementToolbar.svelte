@@ -87,7 +87,7 @@
         <span class="btn-label">JSON</span>
       </Button>
       {#if pendingName && pendingName !== effectiveMapName}
-        <span class="pending-map-name" title="Bisheriger Kartenname">→ {previousMapName}</span>
+        <span class="pending-map-name" title="Previous map name">→ {previousMapName}</span>
       {/if}
     </div>
   </Column>

@@ -96,7 +96,7 @@ export function newScheduleEntry(currentMapId: string, currentMapName: string): 
   return {
     id: 0,
     enabled: true,
-    name: "Mähen",
+    name: "Mow",
     mapId: currentMapId,
     mapName: currentMapName,
     mode: 0,

@@ -43,6 +43,22 @@ const texts: { language: { [language: string]: any } } = {
           success: "Bluetooth Pairings cleared",
           error: "Failed clear Bluetooth Pairings"
         },
+        "sync map": {
+          success: "Map changes sent to the modem",
+          error: "Failed to send the map changes"
+        },
+        "copy mower map": {
+          success: "Map JSON copied to the clipboard",
+          error: "Failed to copy the map JSON"
+        },
+        "import mower map": {
+          success: "Mower map imported",
+          error: "Failed to import the mower map"
+        },
+        "import geojson map": {
+          success: "GeoJSON map imported",
+          error: "Failed to import the GeoJSON map"
+        },
       },
       settings: {
         general: {
