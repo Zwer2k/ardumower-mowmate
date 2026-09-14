@@ -1,6 +1,7 @@
 #ifdef ENABLE_MAP
 #include "path_planner.h"
 #include "pathplanner.h"
+#include "route_report.h"
 #include "mower_map.h"
 #include "domain.h"
 #include "log.h"
@@ -66,6 +67,9 @@ static PPC::Settings toPlannerSettings(const ArduMower::Domain::Robot::MowSettin
     ps.mowBorderCcw = settings.mowBorderCcw;
     ps.distanceToBorder = settings.distanceToBorder;
     ps.borderLaps = settings.borderLaps;
+    ps.simplifyEpsilon = settings.simplifyEpsilon;
+    // checkTurnRadius geht bewusst NICHT in die Planer-Settings: der Wert
+    // dient nur der Routenprüfung und darf die Route nicht verändern.
     return ps;
 }
 
@@ -190,7 +194,9 @@ Polygon filterRouteByToggles(const Polygon &route,
 
 Polygon calculateWaypoints(ArduMower::Domain::Robot::MowerMap &map,
     ArduMower::Domain::Robot::MowSettings &settings,
-    const ArduMower::Domain::Robot::State::State *state)
+    const ArduMower::Domain::Robot::State::State *state,
+    RouteReport *report,
+    float mowSpeed)
 {
     Log(INFO, "%scalculateWaypoints: width=%.2f angle=%d distToBorder=%.2f borderLaps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
         _LOG_, settings.width, settings.angle, settings.distanceToBorder, settings.borderLaps,
@@ -229,6 +235,41 @@ Polygon calculateWaypoints(ArduMower::Domain::Robot::MowerMap &map,
     }
     Log(INFO, "%scalculateWaypoints: tags area=%d border=%d exclusionBorder=%d transit=%d neutral=%d", _LOG_,
         areaCount, borderCount, exclusionBorderCount, transitCount, untaggedCount);
+
+    if (report != nullptr) {
+        PPC::RouteCheckParams cp;
+        cp.minTurnRadius = settings.checkTurnRadius;
+        cp.mowSpeed = mowSpeed > 0.01f ? mowSpeed : 0.3f;
+        const PPC::RouteReport rr = PPC::analyzeRoute(route, cp);
+
+        report->valid = true;
+        report->pointCount = rr.stats.pointCount;
+        report->totalLength = static_cast<float>(rr.stats.totalLength);
+        report->rotationCount = rr.stats.rotationCount;
+        report->trackedCorners = rr.stats.trackedCorners;
+        report->estimatedSeconds = static_cast<float>(rr.stats.estimatedSeconds);
+        report->findingsTotal = rr.stats.findingsTotal;
+        report->turnRadius = settings.checkTurnRadius;
+        report->areaCount = areaCount;
+        report->borderCount = borderCount;
+        report->exclusionBorderCount = exclusionBorderCount;
+        report->transitCount = transitCount;
+        report->connectorCount = untaggedCount;
+        report->findings.reserve(rr.findings.size());
+        for (const auto &f : rr.findings) {
+            RouteFinding out;
+            out.severity = static_cast<uint8_t>(f.severity);
+            out.kind = static_cast<uint8_t>(f.kind);
+            out.index = f.index;
+            out.index2 = f.index2;
+            out.angleDeg = static_cast<float>(f.angleDeg);
+            out.shortfall = static_cast<float>(f.shortfall);
+            report->findings.push_back(out);
+        }
+        Log(INFO, "%scalculateWaypoints: check radius=%.2f length=%.1fm rotations=%d corners=%d findings=%d", _LOG_,
+            report->turnRadius, report->totalLength, report->rotationCount,
+            report->trackedCorners, report->findingsTotal);
+    }
 
     // Die Route wird ungefiltert gespeichert; die Laufzeit-Toggles entscheiden
     // später bei Upload/Anzeige, welche Punkte tatsächlich gemäht werden.

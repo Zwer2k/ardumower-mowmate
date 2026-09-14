@@ -112,6 +112,10 @@ namespace ArduMower {
                 bool doMowPerimeter = true;  // true: Perimeter mitfahren
                 bool doMowBorder = false;      // true: Randstreifen maehen (distanceToBorder+borderLaps)
                 bool doMowExclusionBorder = false; // true: Randstreifen um Aussparungen
+                // Schwelle der Routenvereinfachung in m; verändert die Route.
+                float simplifyEpsilon = 0.02f;
+                // Mindestwendekreis in m; nur für den Prüfbericht, verändert die Route nicht.
+                float checkTurnRadius = 0.30f;
 
                 // Flag, ob aktuell ein Lesevorgang läuft (z.B. für Map-Transfer)
                 bool reading = false;
@@ -288,6 +292,8 @@ namespace ArduMower {
                         bool v = obj["doExclusionsBorder"];
                         doMowExclusionBorder = v;
                     }
+                    if (obj["simplifyEpsilon"].is<JsonVariant>()) simplifyEpsilon = obj["simplifyEpsilon"];
+                    if (obj["checkTurnRadius"].is<JsonVariant>()) checkTurnRadius = obj["checkTurnRadius"];
                     return true;
                 }
 
@@ -324,6 +330,8 @@ namespace ArduMower {
                     obj["doMowArea"] = doMowArea;
                     obj["doPerimeterBorder"] = doMowBorder;
                     obj["doExclusionsBorder"] = doMowExclusionBorder;
+                    obj["simplifyEpsilon"] = simplifyEpsilon;
+                    obj["checkTurnRadius"] = checkTurnRadius;
 
                     JsonArray perim = obj["perimeter"].to<JsonArray>();
                     writeRing(perim, perimeter);

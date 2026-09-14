@@ -1474,7 +1474,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
 
     // Remove redundant points and backtracking so perimeter edges are not
     // traversed multiple times and no 180-degree turns remain on the border.
-    route = simplifyRoute(route, perimeter);
+    route = simplifyRoute(route, perimeter, settings.simplifyEpsilon);
 
     PP_LOG(0, "%scalculateWaypoints done: %d waypoints", _LOG_, route.size());
     return route;

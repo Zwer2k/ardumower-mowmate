@@ -352,6 +352,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       map.doMowBorder = settings.doMowBorder;
       map.doMowExclusions = settings.doMowExclusions;
       map.doMowExclusionBorder = settings.doMowExclusionBorder;
+      map.simplifyEpsilon = settings.simplifyEpsilon;
+      map.checkTurnRadius = settings.checkTurnRadius;
         Log(DBG, "%s setMap: parsed perimeter=%d exclusions=%d dockpoints=%d searchWire=%d waypoints=%d rotation=%.1f", _LOG_,
           map.perimeter.size(), map.exclusions.size(), map.dockpoints.size(), map.searchWire.size(), map.waypoints.size(), map.rotation);
       const bool mapIdMatches = requestedMapId.length() > 0 && requestedMapId == _source.currentMapId();
@@ -387,9 +389,12 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       if (!jsonData["doMowBorder"].isNull()) s.doMowBorder = jsonData["doMowBorder"];
       if (!jsonData["doMowExclusions"].isNull()) s.doMowExclusions = jsonData["doMowExclusions"];
       if (!jsonData["doMowExclusionBorder"].isNull()) s.doMowExclusionBorder = jsonData["doMowExclusionBorder"];
-      Log(INFO, "%s setMowSettings received: pattern=%d width=%.2f angle=%d distToBorder=%d laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusions=%d doMowExclusionBorder=%d",
+      if (!jsonData["simplifyEpsilon"].isNull()) s.simplifyEpsilon = jsonData["simplifyEpsilon"];
+      if (!jsonData["checkTurnRadius"].isNull()) s.checkTurnRadius = jsonData["checkTurnRadius"];
+      Log(INFO, "%s setMowSettings received: pattern=%d width=%.2f angle=%d distToBorder=%d laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusions=%d doMowExclusionBorder=%d simplify=%.3f checkRadius=%.2f",
           _LOG_, s.pattern, s.width, s.angle, s.distanceToBorder, s.borderLaps,
-          s.doMowArea, s.doMowPerimeter, s.doMowBorder, s.doMowExclusions, s.doMowExclusionBorder);
+          s.doMowArea, s.doMowPerimeter, s.doMowBorder, s.doMowExclusions, s.doMowExclusionBorder,
+          s.simplifyEpsilon, s.checkTurnRadius);
       _socketHandler->setMowSettings(s);
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
     }
@@ -1580,6 +1585,10 @@ void UiSocketHandler::finishMapChunkSend() {
     _mapListPending = false;
     sendMapList(NULL);
   }
+  if (_routeReportPending) {
+    _routeReportPending = false;
+    sendRouteReport(NULL);
+  }
   if (_drivenTrackPending) {
     _drivenTrackPending = false;
     sendDrivenTrack(NULL);
@@ -1919,12 +1928,19 @@ void UiSocketHandler::processCalculateWaypoints() {
       _LOG_, settings.pattern, settings.width, settings.angle, settings.distanceToBorder, settings.borderLaps,
       settings.doMowArea, settings.doMowBorder, settings.doMowExclusionBorder);
   auto state = _source.state();
+  // Der Bericht wird vor jedem Lauf verworfen, damit der Browser nie einen
+  // veralteten Bericht zur neuen Route angezeigt bekommt.
+  _routeReport = ArduMower::Modem::PathPlanner::RouteReport();
+  const float mowSpeed = _source.desiredState().speed;
   decltype(ArduMower::Modem::PathPlanner::calculateWaypoints(map, settings, &state)) waypoints;
   try {
-    waypoints = ArduMower::Modem::PathPlanner::calculateWaypoints(map, settings, &state);
+    waypoints = ArduMower::Modem::PathPlanner::calculateWaypoints(
+        map, settings, &state, &_routeReport, mowSpeed);
   } catch (...) {
     Log(ERR, "%s processCalculateWaypoints: exception during calculation", _LOG_);
+    _routeReport = ArduMower::Modem::PathPlanner::RouteReport();
     sendProgress("calculate", 100, "Failed");
+    sendData(ResponseDataType::mowerState, NULL, true);
     _calculateWaypointsRunning = false;
     return;
   }
@@ -1937,6 +1953,7 @@ void UiSocketHandler::processCalculateWaypoints() {
   sendData(ResponseDataType::map, NULL, true);
   sendMapList(NULL);
   Log(INFO, "%s processCalculateWaypoints: %d waypoints generated, map broadcast", _LOG_, map.waypoints.size());
+  sendRouteReport();
   sendProgress("calculate", 100, "Complete");
   sendData(ResponseDataType::mowerState, NULL, true);
   _calculateWaypointsRunning = false;
@@ -1958,6 +1975,7 @@ void UiSocketHandler::abortMapChunkSend() {
     // Reset pending flags so we don't send stale data that could overlap
     // with the fresh map transfer triggered after the abort.
     _mapListPending = false;
+    _routeReportPending = false;
     _drivenTrackPending = false;
     _flashProgressPending = false;
     Log(DBG, "%s abortMapChunkSend: ongoing chunk send aborted", _LOG_);
@@ -2256,6 +2274,68 @@ void UiSocketHandler::sendClock(UiSocketItem *sendTo)
       _ws->cleanupClients();
     }
   }
+}
+
+// Ergebnis der Routenprüfung senden. Bewusst nicht über die generische
+// sendData-Vorlage: die verlangt einen timestamp und ein marshal() am
+// Nutzdatentyp. Der Fortschrittskanal scheidet ebenfalls aus, er löscht sich
+// bei 100 Prozent selbst und trägt nur einen Text.
+void UiSocketHandler::sendRouteReport(UiSocketItem *sendTo)
+{
+#ifdef ENABLE_MAP
+  if (!_routeReport.valid) return;
+
+  // Ein Textframe mitten in einer fragmentierten Karten-Übertragung verletzt
+  // das WebSocket-Framing und würde für die empfangenden Clients verworfen.
+  // Deshalb zurückstellen, bis der Chunk-Transfer fertig ist.
+  if (sendTo == NULL && mapChunkSendState.active) {
+    _routeReportPending = true;
+    return;
+  }
+
+  JsonDocument doc;
+  doc["type"] = ResponseDataType::routeReport;
+  doc["timestamp"] = millis();
+  auto dataObj = doc["data"].to<JsonObject>();
+  dataObj["pointCount"] = _routeReport.pointCount;
+  dataObj["totalLength"] = _routeReport.totalLength;
+  dataObj["rotationCount"] = _routeReport.rotationCount;
+  dataObj["trackedCorners"] = _routeReport.trackedCorners;
+  dataObj["estimatedSeconds"] = _routeReport.estimatedSeconds;
+  dataObj["findingsTotal"] = _routeReport.findingsTotal;
+  dataObj["turnRadius"] = _routeReport.turnRadius;
+  dataObj["areaCount"] = _routeReport.areaCount;
+  dataObj["borderCount"] = _routeReport.borderCount;
+  dataObj["exclusionBorderCount"] = _routeReport.exclusionBorderCount;
+  dataObj["transitCount"] = _routeReport.transitCount;
+  dataObj["connectorCount"] = _routeReport.connectorCount;
+
+  JsonArray arr = dataObj["findings"].to<JsonArray>();
+  for (const auto &f : _routeReport.findings) {
+    JsonObject o = arr.add<JsonObject>();
+    o["sev"] = f.severity;
+    o["kind"] = f.kind;
+    o["idx"] = f.index;
+    if (f.index2 != f.index) o["idx2"] = f.index2;
+    if (f.angleDeg != 0.0f) o["ang"] = f.angleDeg;
+    if (f.shortfall != 0.0f) o["miss"] = f.shortfall;
+  }
+
+  String json;
+  serializeJson(doc, json);
+  sanitizeUtf8InPlace(json);
+
+  if (sendTo != NULL) {
+    sendTo->sendText(json);
+  } else {
+    if (countConnectedClients() == 0) return;
+    if (!broadcastHeapOk(json.length()) || !sendTextAllWithRetry(json)) {
+      _ws->cleanupClients();
+    }
+  }
+#else
+  (void)sendTo;
+#endif
 }
 
 void UiSocketHandler::processScheduleTrigger()

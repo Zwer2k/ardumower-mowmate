@@ -11,6 +11,8 @@
   let distanceToBorder: number = 0;
   let borderLaps: number = 0;
   let mowBorderCcw: boolean = false;
+  let simplifyEpsilon: number = 0.02;
+  let checkTurnRadius: number = 0.3;
 
   const patterns = [
     { id: 0, text: "Lines" },
@@ -30,6 +32,8 @@
     distanceToBorder = s.distanceToBorder;
     borderLaps = s.borderLaps;
     mowBorderCcw = s.mowBorderCcw;
+    simplifyEpsilon = s.simplifyEpsilon ?? 0.02;
+    checkTurnRadius = s.checkTurnRadius ?? 0.3;
   }
 
   function handleOk() {
@@ -40,6 +44,8 @@
       distanceToBorder,
       borderLaps,
       mowBorderCcw,
+      simplifyEpsilon,
+      checkTurnRadius,
     });
     open = false;
   }
@@ -114,6 +120,30 @@
         on:toggle={(e) => { mowBorderCcw = e.detail.toggled; }}
       />
     </div>
+
+    <div class="settings-group">
+      <h6 class="group-title">Route calculation</h6>
+      <NumberInput
+        label="Simplification threshold (m)"
+        helperText="Removes waypoints that deviate less than this from a straight line. Larger values give fewer waypoints."
+        bind:value={simplifyEpsilon}
+        min={0}
+        max={0.5}
+        step={0.01}
+      />
+    </div>
+
+    <div class="settings-group">
+      <h6 class="group-title">Route check &mdash; does not change the route</h6>
+      <NumberInput
+        label="Minimum turn radius (m)"
+        helperText="Only used to flag corners in the route check report. Rule of thumb: mowing speed divided by the controller's maximum turn rate."
+        bind:value={checkTurnRadius}
+        min={0}
+        max={5}
+        step={0.05}
+      />
+    </div>
   </div>
 </Modal>
 
@@ -133,6 +163,20 @@
 
   .mow-settings-toggles :global(.bx--toggle) {
     width: 100%;
+  }
+
+  .settings-group {
+    border-top: 1px solid #e0e0e0;
+    padding-top: 0.75rem;
+  }
+
+  .group-title {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #525252;
+    text-transform: uppercase;
   }
 
   /* Deaktivierte Inputs leicht grau einfärben, damit sie sichtbar deaktiviert

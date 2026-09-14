@@ -155,6 +155,8 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   _map.doMowBorder = _mowSettings.doMowBorder;
   _map.doMowExclusions = _mowSettings.doMowExclusions;
   _map.doMowExclusionBorder = _mowSettings.doMowExclusionBorder;
+  _map.simplifyEpsilon = _mowSettings.simplifyEpsilon;
+  _map.checkTurnRadius = _mowSettings.checkTurnRadius;
   _map.timestamp = millis();
   _currentMapUnsaved = true;
   _mapListDirty = true;
@@ -182,6 +184,8 @@ void MowerAdapter::syncMowSettingsFromMap() {
   _mowSettings.doMowBorder = _map.doMowBorder;
   _mowSettings.doMowExclusions = _map.doMowExclusions;
   _mowSettings.doMowExclusionBorder = _map.doMowExclusionBorder;
+  _mowSettings.simplifyEpsilon = _map.simplifyEpsilon;
+  _mowSettings.checkTurnRadius = _map.checkTurnRadius;
   _mowSettings.timestamp = millis();
   Log(INFO, "%ssyncMowSettingsFromMap: pattern=%d width=%.2f angle=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusionBorder=%d",
       _LOG_, _mowSettings.pattern, _mowSettings.width, _mowSettings.angle,
@@ -568,6 +572,8 @@ bool MowerAdapter::importMowerMap(const String &json, ArduMower::Domain::Robot::
   _mowSettings.doMowExclusions = outMap.doMowExclusions;
   _mowSettings.doMowExclusionBorder = outMap.doMowExclusionBorder;
   _mowSettings.mowBorderCcw = outMap.mowBorderCcw;
+  _mowSettings.simplifyEpsilon = outMap.simplifyEpsilon;
+  _mowSettings.checkTurnRadius = outMap.checkTurnRadius;
   _mowSettings.timestamp = millis();
   return true;
 }

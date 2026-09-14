@@ -28,7 +28,9 @@ import {
   type ClockData,
   type DrivenTrackData,
   type FirmwareStatusData,
+  type RouteReportData,
 } from "../model";
+import { routeReportStore, clearRouteReport } from "../map/route-report";
 import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer, resetMapTransferTracking } from "../map/map-chunk-buffer";
 import { MapPointType } from "../map/map-chunk-buffer";
 import { mowSettingsStore } from "../map/mow-settings";
@@ -701,6 +703,9 @@ class SocketService {
                 case ResponseDataType.firmwareStatus:
                   applyFirmwareStatus(jsonData.data as FirmwareStatusData);
                   break;
+                case ResponseDataType.routeReport:
+                  routeReportStore.set(jsonData.data as RouteReportData);
+                  break;
                 default:
               }
               return newState;
@@ -994,6 +999,8 @@ class SocketService {
     };
     this.sendMessage(req);
     resetMapChunkBuffer();
+    // The old report belongs to the old route.
+    clearRouteReport();
   }
 
   sendListMaps() {
@@ -1035,6 +1042,8 @@ class SocketService {
     // zu setzen, falls das Workflow-Store bereits registriert ist.
     socketStore.update((s) => ({ ...s, currentMapMeta: null, currentMapId: id, isLoadingMap: true, isNewMap: false }));
     mapMetaStore.set(null);
+    // The report describes the route of the map we are leaving.
+    clearRouteReport();
     const req: RequestSocketMessage = {
       type: RequestDataType.loadMap,
       data: { id, discardCurrent },

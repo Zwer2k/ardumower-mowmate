@@ -18,6 +18,9 @@
   import { isMowerMapSynced, setMapDirty } from "./services/map-sync";
   import { get } from "svelte/store";
   import MowSettingsDialog from "./MowSettingsDialog.svelte";
+  import RouteReportDialog from "./RouteReportDialog.svelte";
+  import MapFindingHighlight from "./overlay/MapFindingHighlight.svelte";
+  import { routeReportStore } from "./route-report";
   import MapToolbar from "./toolbar/MapToolbar.svelte";
   import MapManagementToolbar from "./toolbar/MapManagementToolbar.svelte";
   import MapEditToolbar from "./toolbar/MapEditToolbar.svelte";
@@ -56,7 +59,7 @@
   import { currentMapRotationStore, mapEditLock } from "./service";
   import { mapChunkProgress } from "./map-chunk-buffer";
   import type { Point, MapArea } from "./model";
-  import type { MowSettingsData } from "../model";
+  import type { MowSettingsData, RouteFinding } from "../model";
   import { gamepadStore, GamepadButton } from "../stores/gamepad";
   import { gamepadMode } from "../stores/gamepad-mode";
   import { remoteControlOpen } from "../stores/remote-control";
@@ -67,6 +70,38 @@
   let wasEditing = false;
   let showMowSettings = false;
   let showMowerMapDialog = false;
+  let showRouteReport = false;
+  // Open the report by itself once a fresh one arrives, but never re-open it
+  // for a report the user has already dismissed.
+  let lastShownReport: unknown = null;
+  $: if ($routeReportStore && $routeReportStore !== lastShownReport) {
+    lastShownReport = $routeReportStore;
+    showRouteReport = true;
+    // The indices of the previous report do not apply to the new route.
+    highlightedFindingIdx = [];
+  }
+
+  // Waypoint indices a route-check finding points at. They index the raw
+  // waypoint list, which is what the modem numbered them against.
+  let highlightedFindingIdx: number[] = [];
+
+  function focusFinding(f: RouteFinding) {
+    const indices = [f.idx, f.idx2].filter(
+      (i): i is number => typeof i === "number" && i >= 0 && i < rawWaypoints.length,
+    );
+    highlightedFindingIdx = indices;
+    showRouteReport = false;
+    // In the editor, also select the waypoint so it can be fixed right away.
+    if (edit && indices.length > 0) {
+      stopDraw();
+      editCategory = "waypoints";
+      editItemId = `map-0-waypoints-point-${indices[0]}`;
+    }
+  }
+
+  function clearFindingHighlight() {
+    if (highlightedFindingIdx.length > 0) highlightedFindingIdx = [];
+  }
   let editItemId: string | null = null;
   let mapSyncTimer: ReturnType<typeof setTimeout> | null = null;
   let skipNextMapSync = true;
@@ -225,6 +260,7 @@
     if (historyMapId !== id) {
       historyMapId = id;
       resetMapHistory();
+      highlightedFindingIdx = [];
     }
   }
 
@@ -536,6 +572,9 @@
   $: rawWaypoints = $MapStore.map?.waypoints.points ?? [];
   $: filteredWaypoints = $MapStore.map ? filterWaypointsByToggles(rawWaypoints, $MapStore.map, $mowSettingsStore) : [];
   $: waypointsPoints = rawWaypoints.length;
+  $: highlightedFindingPoints = highlightedFindingIdx
+    .map((i) => rawWaypoints[i])
+    .filter((p): p is Point => !!p);
   $: totalPoints = perimeterPoints + dockpointsPoints + waypointsPoints + exclusionPoints.reduce((a, b) => a + b, 0);
 
   // ─── Edit/draw state ───────────────────────────────────────────────────────
@@ -1007,6 +1046,7 @@
   function onMapClick(event: CustomEvent<{ x: number; y: number }>) {
     const { x, y } = event.detail;
     mouseMapPos = { x, y };
+    clearFindingHighlight();
     if (drawActive) {
       onDrawMapClick(event);
       return;
@@ -1150,6 +1190,8 @@
         <MapCalculateToolbar
           {busy}
           onOpenMowSettings={() => (showMowSettings = true)}
+          onOpenRouteReport={() => (showRouteReport = true)}
+          hasRouteReport={$routeReportStore != null}
         />
       {/if}
 
@@ -1303,6 +1345,8 @@
           {/each}
         {/if}
 
+        <MapFindingHighlight points={highlightedFindingPoints} />
+
         <MapGotoOverlay
           {targetPos}
           {mowerPos}
@@ -1326,6 +1370,7 @@
 </div>
 
 <MowSettingsDialog bind:open={showMowSettings} />
+<RouteReportDialog bind:open={showRouteReport} onSelectFinding={focusFinding} />
 
 <MowerMapDialog
   bind:open={showMowerMapDialog}

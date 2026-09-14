@@ -319,4 +319,6 @@ void MowSettings::marshal(JsonObject o) const
   o["doMowBorder"] = doMowBorder;
   o["doMowExclusions"] = doMowExclusions;
   o["doMowExclusionBorder"] = doMowExclusionBorder;
+  o["simplifyEpsilon"] = simplifyEpsilon;
+  o["checkTurnRadius"] = checkTurnRadius;
 }

@@ -13,6 +13,9 @@
 #include <deque>
 #include <ArduinoJson.h>
 #include "domain.h"
+#ifdef ENABLE_MAP
+#include "path_planner.h"
+#endif
 #include "schedule.h"
 #ifdef MOWER_TERMINAL
 #include "terminal.h"
@@ -89,6 +92,7 @@ namespace ArduMower
         mapAck,
         responsePong,
         firmwareStatus,
+        routeReport,
         responseDataTypeLength
       };
 
@@ -197,6 +201,8 @@ namespace ArduMower
         void sendData(ResponseDataType dataType, UiSocketItem *sendTo = NULL, bool force = false);
         void sendMapList(UiSocketItem *sendTo = NULL);
         void sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted);
+        // Ergebnis der Routenprüfung der letzten Wegpunktberechnung.
+        void sendRouteReport(UiSocketItem *sendTo = NULL);
         void sendSchedule(UiSocketItem *sendTo = NULL);
         void sendClock(UiSocketItem *sendTo = NULL);
         bool setSchedule(bool enabled, const std::vector<ArduMower::Modem::Schedule::Entry> &entries);
@@ -288,6 +294,7 @@ namespace ArduMower
         uint32_t sensorSummaryRefCount = 0;
 
         bool _mapListPending = false;
+        bool _routeReportPending = false;
         bool _drivenTrackPending = false;
         bool _flashProgressPending = false;
         int _flashProgressPct = 0;
@@ -350,6 +357,11 @@ namespace ArduMower
         uint32_t _calculateWaypointsTimestamp = 0;
         ArduMower::Domain::Robot::MowerMap _calculateWaypointsMap;
         ArduMower::Domain::Robot::MowSettings _calculateWaypointsSettings;
+#ifdef ENABLE_MAP
+        // Bericht der letzten Wegpunktberechnung, damit ihn ein später
+        // verbundener Client erneut abrufen kann.
+        ArduMower::Modem::PathPlanner::RouteReport _routeReport;
+#endif
 
   #ifdef MOWER_TERMINAL
   Terminal &_terminal;

@@ -294,6 +294,41 @@ export interface MowSettings {
   doMowBorder: boolean;
   doMowExclusions: boolean;
   doMowExclusionBorder: boolean;
+  /** Route simplification threshold in m. Changes the calculated route. */
+  simplifyEpsilon: number;
+  /** Minimum turn radius in m. Only used by the route check, never changes the route. */
+  checkTurnRadius: number;
+}
+
+/** One issue found by the route check. Indices refer to waypoints. */
+export interface RouteFinding {
+  /** 0 = info, 1 = warning, 2 = error */
+  sev: number;
+  /** 0 = tight corner, 1 = adjacent corners overlap, 2 = zero length segment */
+  kind: number;
+  idx: number;
+  idx2?: number;
+  /** turn angle in degrees */
+  ang?: number;
+  /** missing or overlapping metres */
+  miss?: number;
+}
+
+/** Result of the route check that runs after every waypoint calculation. */
+export interface RouteReportData {
+  pointCount: number;
+  totalLength: number;
+  rotationCount: number;
+  trackedCorners: number;
+  estimatedSeconds: number;
+  findingsTotal: number;
+  turnRadius: number;
+  areaCount: number;
+  borderCount: number;
+  exclusionBorderCount: number;
+  transitCount: number;
+  connectorCount: number;
+  findings: RouteFinding[];
 }
 
 /** Was das Modem selbst über die verfügbare Firmware weiss. Es fragt GitHub im
@@ -337,6 +372,7 @@ export enum ResponseDataType {
   mapAck,
   pong,
   firmwareStatus,
+  routeReport,
 }
 
 export interface ScheduleEntry {
@@ -479,6 +515,8 @@ export interface MowSettingsData {
   doMowBorder: boolean;
   doMowExclusions: boolean;
   doMowExclusionBorder: boolean;
+  simplifyEpsilon: number;
+  checkTurnRadius: number;
 }
 
 export interface NavigateToData {
