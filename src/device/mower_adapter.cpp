@@ -604,6 +604,8 @@ void MowerAdapter::begin()
   _desiredState.speed = settings.mower.mowSpeed;
   _desiredState.fixTimeout = settings.mower.fixTimeout;
   _desiredState.finishAndRestart = settings.mower.finishAndRestart;
+  _desiredState.mowPwm = settings.mower.cutterPwm;
+  _desiredState.mowHeight = settings.mower.mowHeight;
 
   // Position settings werden erst nach dem ersten erfolgreichen Versions-Austausch
   // (parseVersionResponse) an den Mower gesendet. Hier wäre die Verbindung noch nicht bereit.
@@ -965,19 +967,34 @@ bool MowerAdapter::changeSpeed(float speed)
 // change way percentage (path coverage / overlap)
 bool MowerAdapter::changeWayPerc(float perc)
 {
-  Log(DBG, "%schangeWayPerc(%.2f)", _LOG_CMD_, perc);
+  // perc is a FRACTION 0..1 (Sunray: mowPointsIdx = numPoints * perc), so two decimals
+  // would quantise to 1% of the whole route - on a 5000 point route that is 50 waypoints
+  Log(DBG, "%schangeWayPerc(%.5f)", _LOG_CMD_, perc);
   char buffer[48];
-  snprintf(buffer, sizeof(buffer), "AT+C,-1,-1,-1,-1,-1,%.2f,-1,-1", perc);
+  snprintf(buffer, sizeof(buffer), "AT+C,-1,-1,-1,-1,-1,%.5f,-1,-1", perc);
   String command(buffer);
   return sendCommand(command);
 }
 
-// change mow height (AT+S2)
+// change mow height in millimeters (AT+C field 10)
+// NOTE: AT+S2 is Sunray's obstacle list REQUEST and ignores any payload - it never set the height.
 bool MowerAdapter::changeMowHeight(int height)
 {
   Log(DBG, "%schangeMowHeight(%d)", _LOG_CMD_, height);
-  char buffer[32];
-  snprintf(buffer, sizeof(buffer), "AT+S2,%d", height);
+  char buffer[48];
+  snprintf(buffer, sizeof(buffer), "AT+C,-1,-1,-1,-1,-1,-1,-1,-1,-1,%d,-1", height);
+  String command(buffer);
+  return sendCommand(command);
+}
+
+// change max cutter PWM, 0..255 (AT+C field 9 -> Sunray motor.setMowMaxPwm)
+bool MowerAdapter::changeMowPwm(int pwm)
+{
+  Log(DBG, "%schangeMowPwm(%d)", _LOG_CMD_, pwm);
+  if (pwm < 0) pwm = 0;
+  if (pwm > 255) pwm = 255;
+  char buffer[48];
+  snprintf(buffer, sizeof(buffer), "AT+C,-1,-1,-1,-1,-1,-1,-1,-1,%d,-1,-1", pwm);
   String command(buffer);
   return sendCommand(command);
 }
@@ -1039,6 +1056,34 @@ bool MowerAdapter::requestVersion()
 {
   Log(DBG, "%srequestVersion", _LOG_);
   return sendCommand("AT+V", false);
+}
+
+// Re-apply the persisted mower settings, e.g. after the mower rebooted: Sunray only keeps these
+// in its SD state file, which most boards (MOW800 has no SD slot at all) never restore.
+// All four values are fields of the same AT+C, so one command is enough.
+bool MowerAdapter::applyMowerSettings()
+{
+  if (_lastMowerSettingsApplied) {
+    Log(DBG, "%sapplyMowerSettings: already applied, skipping", _LOG_);
+    return true;
+  }
+
+  int pwm = settings.mower.cutterPwm;
+  if (pwm < 0) pwm = 0;
+  if (pwm > 255) pwm = 255;
+
+  char command[96];
+  //                          mow op spd fixTO restart perc skip sonar pwm height dock
+  snprintf(command, sizeof(command), "AT+C,-1,-1,%.2f,%d,%d,-1,-1,-1,%d,%d,-1",
+           settings.mower.mowSpeed, settings.mower.fixTimeout,
+           settings.mower.finishAndRestart ? 1 : 0, pwm, settings.mower.mowHeight);
+  Log(INFO, "%sapplyMowerSettings: speed=%.2f fixTimeout=%d finishAndRestart=%d cutterPwm=%d mowHeight=%d", _LOG_,
+      settings.mower.mowSpeed, settings.mower.fixTimeout,
+      settings.mower.finishAndRestart ? 1 : 0, pwm, settings.mower.mowHeight);
+
+  bool ok = sendCommand(command, true);
+  if (ok) _lastMowerSettingsApplied = true;
+  return ok;
 }
 
 bool MowerAdapter::applyPositionSettings()
@@ -1602,6 +1647,8 @@ void MowerAdapter::parseVersionResponse(const char* line)
 
   // Positionseinstellungen an den Mower senden, sobald die Kommunikation bereit ist
   applyPositionSettings();
+  // Mower-Settings ebenfalls neu setzen - Sunray stellt sie nach einem Reboot nicht selbst wieder her
+  applyMowerSettings();
 }
 
 void MowerAdapter::parseStateResponse(const char* line)
@@ -1776,6 +1823,12 @@ void MowerAdapter::parseATCCommand(const char* line)
         case 8:
           // sonarEnabled
           break;
+        case 9:
+          _desiredState.mowPwm = atoi(val);
+          break;
+        case 10:
+          _desiredState.mowHeight = atoi(val);
+          break;
         }
       });
 
@@ -1798,6 +1851,7 @@ bool MowerAdapter::assertSendIsInitialized()
       _state.timestamp = 0;
       sendIsInitialized = false;
       _lastPosApplied = false;  // Force re-send of AT+P after Sunray reboot
+      _lastMowerSettingsApplied = false;  // ...and of the mower settings
     } else {
       return true;
     }

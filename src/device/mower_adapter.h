@@ -81,6 +81,7 @@ namespace ArduMower
       volatile bool _mapUploadPending = false;
       // Track last applied position settings to avoid redundant AT+P commands
       bool _lastPosApplied = false;
+      bool _lastMowerSettingsApplied = false;
       bool _lastPosAbsolute = false;
       double _lastPosLon = 0.0;
       double _lastPosLat = 0.0;
@@ -236,6 +237,7 @@ namespace ArduMower
       virtual bool changeSpeed(float speed);
       virtual bool changeWayPerc(float perc);
       virtual bool changeMowHeight(int height);
+      virtual bool changeMowPwm(int pwm);
       virtual bool tuneParam(int index, float value);
       virtual bool dock();
       virtual bool finishAndRestartEnabled(bool enabled);
@@ -256,6 +258,7 @@ namespace ArduMower
       virtual bool requestControl();
       virtual bool requestObstacles();
       virtual bool applyPositionSettings();
+      virtual bool applyMowerSettings();
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
       virtual bool requestGpsDetails();
       virtual bool sendUbx(const String &hexCmd);

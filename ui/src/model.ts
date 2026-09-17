@@ -63,6 +63,17 @@ export namespace Settings {
     lon: number;
     lat: number;
   }
+  export interface Mower {
+    mow_speed: number;
+    goto_speed: number;
+    fix_timeout: number;
+    finish_and_restart: boolean;
+    cutter_pwm: number;
+    mow_height: number;
+    support_cutter_speed: boolean;
+    support_cutter_height: boolean;
+    has_sonar: boolean;
+  }
 }
 
 export interface Settings {
@@ -77,6 +88,7 @@ export interface Settings {
   mqtt: Settings.Mqtt;
   prometheus: Settings.Prometheus;
   position: Settings.Position;
+  mower: Settings.Mower;
 }
 
 export interface Info {

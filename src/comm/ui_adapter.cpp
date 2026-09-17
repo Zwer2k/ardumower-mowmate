@@ -273,6 +273,8 @@ void UiAdapter::handleApiPostRobotCommand(AsyncWebServerRequest *request, JsonVa
     ok = _cmd.changeWayPerc(json.as<JsonObject>()["perc"] | 1.0f);
   else if (action == "changeMowHeight")
     ok = _cmd.changeMowHeight(json.as<JsonObject>()["height"] | 55);
+  else if (action == "changeMowPwm")
+    ok = _cmd.changeMowPwm(json.as<JsonObject>()["pwm"] | 255);
   else if (action == "tuneParam")
     ok = _cmd.tuneParam(json.as<JsonObject>()["index"] | 0, json.as<JsonObject>()["value"] | 0.0f);
   else if (action == "customCmd")
@@ -282,20 +284,33 @@ void UiAdapter::handleApiPostRobotCommand(AsyncWebServerRequest *request, JsonVa
     _settings.mower.mowSpeed = desired->speed;
     _settings.mower.fixTimeout = desired->fixTimeout;
     _settings.mower.finishAndRestart = desired->finishAndRestart;
+    _settings.mower.cutterPwm = desired->mowPwm;
+    _settings.mower.mowHeight = desired->mowHeight;
     ok = _settings.save();
   }
   else if (action == "resetMowerDefaults") {
+    // capability flags describe the hardware and must survive a defaults reset
+    const bool keepCutterSpeed = _settings.mower.supportCutterSpeed;
+    const bool keepCutterHeight = _settings.mower.supportCutterHeight;
+    const bool keepSonar = _settings.mower.hasSonar;
     _settings.mower = ArduMower::Modem::Settings::Mower();
+    _settings.mower.supportCutterSpeed = keepCutterSpeed;
+    _settings.mower.supportCutterHeight = keepCutterHeight;
+    _settings.mower.hasSonar = keepSonar;
     ok = _settings.save();
     if (ok) {
       auto *desired = _source.desiredStateP();
       desired->speed = _settings.mower.mowSpeed;
       desired->fixTimeout = _settings.mower.fixTimeout;
       desired->finishAndRestart = _settings.mower.finishAndRestart;
+      desired->mowPwm = _settings.mower.cutterPwm;
+      desired->mowHeight = _settings.mower.mowHeight;
       // Apply to mower immediately
       _cmd.changeSpeed(_settings.mower.mowSpeed);
       _cmd.setFixTimeout(_settings.mower.fixTimeout);
       _cmd.finishAndRestartEnabled(_settings.mower.finishAndRestart);
+      _cmd.changeMowPwm(_settings.mower.cutterPwm);
+      _cmd.changeMowHeight(_settings.mower.mowHeight);
     }
   }
   else {
