@@ -61,10 +61,15 @@
         settingsOpen = false;
     }
 
-    // Close when clicking outside the wrapper
+    // Close when clicking outside the wrapper.
+    // Uses composedPath() instead of contains(e.target): the path is captured when the event is
+    // dispatched, so it still holds the original ancestors even if a handler removed the clicked
+    // element from the DOM first (e.g. a control that swaps itself for an input on click).
+    // contains() would see a detached node and wrongly treat the click as "outside".
     function onDocClick(e: MouseEvent) {
         if (!open) return;
-        if (wrapperRef && !wrapperRef.contains(e.target as Node)) {
+        if (!wrapperRef) return;
+        if (!e.composedPath().includes(wrapperRef)) {
             open = false;
         }
     }

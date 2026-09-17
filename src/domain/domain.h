@@ -174,8 +174,10 @@ namespace ArduMower
         bool finishAndRestart;
         int op;
         int fixTimeout;
+        int mowPwm;
+        int mowHeight;
 
-        DesiredState() : timestamp(1), speed(0.2f), mowerMotorEnabled(false), finishAndRestart(false), op(-1), fixTimeout(-1){};
+        DesiredState() : timestamp(1), speed(0.2f), mowerMotorEnabled(false), finishAndRestart(false), op(-1), fixTimeout(-1), mowPwm(255), mowHeight(55){};
         void marshal(JsonObject o) const;
       };
 
@@ -521,6 +523,7 @@ namespace ArduMower
         virtual bool changeSpeed(float speed) = 0;
         virtual bool changeWayPerc(float perc) = 0;
         virtual bool changeMowHeight(int height) = 0;
+        virtual bool changeMowPwm(int pwm) = 0;
         virtual bool tuneParam(int index, float value) = 0;
         virtual bool dock() = 0;
         virtual bool finishAndRestartEnabled(bool enabled) = 0;

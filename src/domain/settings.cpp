@@ -33,6 +33,11 @@ const char * _t_mower_mow_speed = "mow_speed";
 const char * _t_mower_goto_speed = "goto_speed";
 const char * _t_mower_fix_timeout = "fix_timeout";
 const char * _t_mower_finish_and_restart = "finish_and_restart";
+const char * _t_mower_cutter_pwm = "cutter_pwm";
+const char * _t_mower_mow_height = "mow_height";
+const char * _t_mower_support_cutter_speed = "support_cutter_speed";
+const char * _t_mower_support_cutter_height = "support_cutter_height";
+const char * _t_mower_has_sonar = "has_sonar";
 
 const char * _t_sta_ssid = "sta_ssid";
 const char * _t_sta_psk = "sta_psk";
@@ -382,6 +387,11 @@ void Mower::marshal(JsonObject o) const
   o[_t_mower_goto_speed] = gotoSpeed;
   o[_t_mower_fix_timeout] = fixTimeout;
   o[_t_mower_finish_and_restart] = finishAndRestart;
+  o[_t_mower_cutter_pwm] = cutterPwm;
+  o[_t_mower_mow_height] = mowHeight;
+  o[_t_mower_support_cutter_speed] = supportCutterSpeed;
+  o[_t_mower_support_cutter_height] = supportCutterHeight;
+  o[_t_mower_has_sonar] = hasSonar;
 }
 
 bool Mower::unmarshal(JsonObject o)
@@ -394,6 +404,16 @@ bool Mower::unmarshal(JsonObject o)
     fixTimeout = o[_t_mower_fix_timeout].as<int>();
   if (o[_t_mower_finish_and_restart].is<JsonVariant>())
     finishAndRestart = o[_t_mower_finish_and_restart].as<bool>();
+  if (o[_t_mower_cutter_pwm].is<JsonVariant>())
+    cutterPwm = o[_t_mower_cutter_pwm].as<int>();
+  if (o[_t_mower_mow_height].is<JsonVariant>())
+    mowHeight = o[_t_mower_mow_height].as<int>();
+  if (o[_t_mower_support_cutter_speed].is<JsonVariant>())
+    supportCutterSpeed = o[_t_mower_support_cutter_speed].as<bool>();
+  if (o[_t_mower_support_cutter_height].is<JsonVariant>())
+    supportCutterHeight = o[_t_mower_support_cutter_height].as<bool>();
+  if (o[_t_mower_has_sonar].is<JsonVariant>())
+    hasSonar = o[_t_mower_has_sonar].as<bool>();
   return true;
 }
 

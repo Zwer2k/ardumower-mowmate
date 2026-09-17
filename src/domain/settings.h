@@ -190,12 +190,21 @@ namespace ArduMower
       class Mower : public Group
       {
       public:
-        Mower() : mowSpeed(0.3f), gotoSpeed(0.5f), fixTimeout(60), finishAndRestart(false) {}
+        Mower() : mowSpeed(0.3f), gotoSpeed(0.5f), fixTimeout(60), finishAndRestart(false), cutterPwm(255), mowHeight(55),
+                 supportCutterSpeed(true), supportCutterHeight(true), hasSonar(true) {}
 
         float mowSpeed;
         float gotoSpeed;
         int fixTimeout;
         bool finishAndRestart;
+        int cutterPwm;   // max cutter PWM 0..255 (AT+C field 9)
+        int mowHeight;   // cutter height in mm (AT+C field 10)
+
+        // capability flags - Sunray reports none of these, so the user declares what the mower has.
+        // They only show/hide the matching controls; they never change what is sent.
+        bool supportCutterSpeed;
+        bool supportCutterHeight;
+        bool hasSonar;
 
         virtual void marshal(JsonObject o) const override;
         virtual bool unmarshal(JsonObject o) override;

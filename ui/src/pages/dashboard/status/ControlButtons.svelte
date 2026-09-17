@@ -1,9 +1,17 @@
+<script module lang="ts">
+    // The popover destroys this component when it closes, so instance state would be lost.
+    // The operator's waypoint selection must survive that - it is a target, not a view detail.
+    let wayPercVal = $state(100);   // %, typical range 0-100
+    let waySeeded = false;          // seed from the mower only once per page load
+</script>
+
 <script lang="ts">
     import { slide } from "svelte/transition";
     import type { DesiredState } from "../../../model";
     import { RobotCommandService } from "../../../service";
     import { socketStore } from "../../../stores/socket";
     import { MapStore } from "../../../map/service";
+    import { BackendSettings } from "../../../stores/backend";
     import PlayFilled from "carbon-icons-svelte/lib/PlayFilled.svelte";
     import StopFilled from "carbon-icons-svelte/lib/StopFilled.svelte";
     import Home from "carbon-icons-svelte/lib/Home.svelte";
@@ -14,6 +22,11 @@
     import ChartLine from "carbon-icons-svelte/lib/ChartLine.svelte";
 
     let { desiredState = null }: { desiredState?: DesiredState | null } = $props();
+
+    // capability flags from settings; when settings are not loaded yet, show everything
+    const supportCutterSpeed = $derived($BackendSettings?.mower?.support_cutter_speed ?? true);
+    const supportCutterHeight = $derived($BackendSettings?.mower?.support_cutter_height ?? true);
+    const hasSonar = $derived($BackendSettings?.mower?.has_sonar ?? true);
 
     let commandLog: { time: string; action: string; success: boolean; error?: string }[] = $state([]);
 
@@ -40,20 +53,43 @@
     // svelte-ignore state_referenced_locally
     if (desiredState) { speedVal = desiredState.speed ?? speedVal; fixTimeoutVal = desiredState.fix_timeout ?? fixTimeoutVal; }
     let mowHeightVal = $state(55);     // mm, typical range 30-85
-    let wayPercVal = $state(100);      // %, typical range 0-100
+    // svelte-ignore state_referenced_locally
+    if (desiredState?.mow_height != null) mowHeightVal = desiredState.mow_height;
+    let cutterSpeedVal = $state(100);  // percent; converted to 0..255 PWM on send
+    // svelte-ignore state_referenced_locally
+    if (desiredState?.mow_pwm != null) cutterSpeedVal = Math.round(desiredState.mow_pwm * 100 / 255);
     let wayPercManuallySetAt = $state<number | null>(null);
+    let wayEditing = $state(false);   // true while the waypoint field is open
+
+    // focus and select the waypoint field as soon as it appears
+    function focusOnMount(node: HTMLInputElement) {
+        node.focus();
+        node.select();
+    }
     const WAY_PERC_MIRROR_PAUSE_MS = 3000;
 
-    // mirror mower's current waypoint index into the Way % slider, unless recently changed manually
+    // Mirror the mower's progress into the control - but only while it is actually mowing.
+    // When idle the field is a target selector, so overwriting it would fight the operator.
     $effect(() => {
         const total = $MapStore?.map?.waypoints?.points?.length ?? 0;
         const idx = $socketStore?.state?.position?.mow_point_index ?? -1;
+        const mowing = ($socketStore?.state?.job ?? 0) === 1;   // 1 = MOW
+        if (wayEditing) return;
         if (total > 0 && idx >= 0) {
+            if (!waySeeded) {
+                // seed once from the mower's real position, whatever the job is - otherwise
+                // the $state(100) default would show the last waypoint as the current one
+                waySeeded = true;
+                wayPercVal = parseFloat(((idx / total) * 100).toFixed(3));
+                return;
+            }
+            if (!mowing) return;
             if (wayPercManuallySetAt && (Date.now() - wayPercManuallySetAt < WAY_PERC_MIRROR_PAUSE_MS)) {
                 return;
             }
-            const target = parseFloat((((idx + 1) / total) * 100).toFixed(1));
-            if (Math.abs(target - wayPercVal) > 0.05) wayPercVal = target;
+            // mow_point_index is 0-based, so no +1 here - otherwise index 0 would read as 1
+            const target = parseFloat(((idx / total) * 100).toFixed(3));
+            if (Math.abs(target - wayPercVal) > 0.001) wayPercVal = target;
         }
     });
 
@@ -88,14 +124,39 @@
         send('changeMowHeight', { height: val });
     }
 
+    function onCutterSpeedChange(e: Event) {
+        const val = parseInt((e.target as HTMLInputElement).value, 10);
+        cutterSpeedVal = val;
+        // AT+C field 9 is a raw PWM ceiling (0..255)
+        send('changeMowPwm', { pwm: Math.round(val * 255 / 100) });
+    }
+
     function onWayPercChange(e: Event) {
         const val = parseFloat((e.target as HTMLInputElement).value);
         setWayPerc(val);
     }
 
+    // total waypoints of the active map; 0 while no map is loaded
+    const wayTotal = $derived($MapStore?.map?.waypoints?.points?.length ?? 0);
+    // the percentage expressed as an absolute waypoint number - the unit the route actually has
+    const wayIdx = $derived(wayTotal > 0 ? Math.round((wayPercVal / 100) * wayTotal) : 0);
+
+    // step by exactly one waypoint when the map size is known, else fall back to 0.1%
     function adjustWayPerc(delta: number) {
-        const next = Math.max(0, Math.min(100, wayPercVal + delta));
-        setWayPerc(next);
+        if (wayTotal > 0) {
+            const idx = Math.max(0, Math.min(wayTotal, wayIdx + delta));
+            setWayPerc((idx / wayTotal) * 100);
+            return;
+        }
+        setWayPerc(Math.max(0, Math.min(100, wayPercVal + delta * 0.1)));
+    }
+
+    function onWayIdxChange(e: Event) {
+        if (wayTotal <= 0) return;
+        const raw = parseInt((e.target as HTMLInputElement).value, 10);
+        if (Number.isNaN(raw)) return;
+        const idx = Math.max(0, Math.min(wayTotal, raw));
+        setWayPerc((idx / wayTotal) * 100);
     }
 
     function setWayPerc(val: number) {
@@ -157,11 +218,13 @@
                    onchange={(e) => send('finishAndRestartEnabled', { enabled: e.currentTarget.checked })} />
             Finish &amp; Restart
         </label>
+        {#if hasSonar}
         <label class="toggle-label">
             <input type="checkbox"
                    onchange={(e) => send('sonarEnabled', { enabled: e.currentTarget.checked })} />
             Sonar
         </label>
+        {/if}
     </div>
 
     <div class="slider-section">
@@ -181,6 +244,7 @@
                    onchange={onFixTimeoutChange} />
             <span class="slider-value">{fixTimeoutVal}s</span>
         </label>
+        {#if supportCutterHeight}
         <label class="slider-group">
             <span class="slider-label">Mow Ht</span>
             <input type="range" class="slider-input"
@@ -189,17 +253,45 @@
                    onchange={onMowHeightChange} />
             <span class="slider-value">{mowHeightVal} mm</span>
         </label>
+        {/if}
+        {#if supportCutterSpeed}
+        <label class="slider-group">
+            <span class="slider-label">Cutter speed</span>
+            <input type="range" class="slider-input"
+                   min="10" max="100" step="1"
+                   value={cutterSpeedVal}
+                   onchange={onCutterSpeedChange} />
+            <span class="slider-value">{cutterSpeedVal} %</span>
+        </label>
+        {/if}
         <div class="slider-group way-perc-group">
             <span class="slider-label">Way %</span>
-            <div class="way-perc-control">
-                <button type="button" class="step-btn" onclick={() => adjustWayPerc(-0.1)} aria-label="Way % verringern">−</button>
+            <div class="way-perc-control" class:narrow={wayEditing}>
+                <button type="button" class="step-btn" onclick={() => adjustWayPerc(-1)} aria-label="Ein Wegpunkt zurück">−</button>
                 <input type="range" class="slider-input"
                        min="0" max="100" step="0.1"
                        value={wayPercVal}
                        onchange={onWayPercChange} />
-                <button type="button" class="step-btn" onclick={() => adjustWayPerc(0.1)} aria-label="Way % erhöhen">+</button>
+                <button type="button" class="step-btn" onclick={() => adjustWayPerc(1)} aria-label="Ein Wegpunkt vor">+</button>
             </div>
-            <span class="slider-value">{wayPercVal.toFixed(1)}%</span>
+            {#if wayTotal > 0 && wayEditing}
+                <span class="way-point-value">
+                    <input type="number" class="way-point-input"
+                           min="0" max={wayTotal} step="1"
+                           value={wayIdx}
+                           use:focusOnMount
+                           onblur={() => wayEditing = false}
+                           onchange={onWayIdxChange}
+                           aria-label="Wegpunkt-Nummer" />
+                    <span class="way-point-total">/{wayTotal}</span>
+                </span>
+            {:else if wayTotal > 0}
+                <button type="button" class="slider-value way-perc-display"
+                        onclick={() => wayEditing = true}
+                        title="Wegpunkt direkt eingeben">{wayPercVal.toFixed(1)}%</button>
+            {:else}
+                <span class="slider-value">{wayPercVal.toFixed(1)}%</span>
+            {/if}
         </div>
     </div>
 
@@ -471,6 +563,67 @@
         flex: 1;
         min-width: 0;
         width: auto;
+    }
+
+    /* while editing the slider gives up exactly what the wider value column takes,
+       so the row keeps its total width and nothing jumps: 129+65 == 99+95 */
+    .way-perc-control.narrow {
+        width: 99px;
+    }
+
+    .way-perc-display {
+        background: none;
+        border: none;
+        padding: 0;
+        font: inherit;
+        font-family: monospace;
+        cursor: pointer;
+        text-decoration: underline dotted;
+        text-underline-offset: 2px;
+    }
+
+    .way-perc-display:hover {
+        color: #006064;
+    }
+
+    .way-point-value {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 2px;
+        /* carries two numbers, so wider than the 65px of .slider-value */
+        width: 95px;
+        flex-shrink: 0;
+        min-width: 0;
+        font-family: monospace;
+        color: #333;
+    }
+
+    .way-point-input {
+        flex: 1 1 auto;
+        width: 100%;
+        min-width: 0;
+        padding: 0 2px;
+        font: inherit;
+        text-align: right;
+        color: inherit;
+        background: transparent;
+        border: 1px solid rgba(0, 0, 0, 0.3);
+        border-radius: 3px;
+        -moz-appearance: textfield;
+    }
+
+    /* the spinner arrows would eat most of the 65px this column has */
+    .way-point-input::-webkit-outer-spin-button,
+    .way-point-input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+
+    .way-point-total {
+        flex: 0 0 auto;
+        opacity: 0.6;
+        font-size: 0.85em;
+        white-space: nowrap;
     }
 
     .slider-label {

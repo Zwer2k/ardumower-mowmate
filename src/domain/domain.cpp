@@ -75,6 +75,8 @@ const char * _t_desiredState_mowerMotorEnabled = "mower_motor_enabled";
 const char * _t_desiredState_finishAndRestart = "finish_and_restart";
 const char * _t_desiredState_op = "op";
 const char * _t_desiredState_fixTimeout = "fix_timeout";
+const char * _t_desiredState_mowPwm = "mow_pwm";
+const char * _t_desiredState_mowHeight = "mow_height";
 
 #define same(other, prop) (prop == other.prop)
 
@@ -222,6 +224,8 @@ void DesiredState::marshal(JsonObject o) const
   o[_t_desiredState_finishAndRestart] = finishAndRestart;
   o[_t_desiredState_op] = op;
   o[_t_desiredState_fixTimeout] = fixTimeout;
+  o[_t_desiredState_mowPwm] = mowPwm;
+  o[_t_desiredState_mowHeight] = mowHeight;
 }
 
 bool SensorSummary::operator==(const SensorSummary &other)
