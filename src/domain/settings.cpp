@@ -1,5 +1,6 @@
 #include "settings.h"
 #include "log.h"
+#include "atomic_file.h"
 #include "url.h"
 #include "git_version.h"
 #include <Arduino.h>
@@ -105,6 +106,7 @@ void Settings::begin()
     return;
   }
 
+  ArduMower::Util::recoverAtomicFile(SPIFFS, _filename);
   File file = SPIFFS.open(_filename.c_str());
   if (!file || file.isDirectory())
   {
@@ -160,16 +162,11 @@ bool Settings::save()
     return false;
   }
 
-  File file = SPIFFS.open(_filename.c_str(), FILE_WRITE);
-  if (!file)
+  if (!ArduMower::Util::writeJsonAtomic(SPIFFS, _filename, doc))
   {
-    Log(ERR, "Settings::save::file-open-error");
+    Log(ERR, "Settings::save::write-error");
     return false;
   }
-
-  serializeJson(doc, file);
-
-  file.close();
 
   Log(INFO, "Settings::save::success");
 

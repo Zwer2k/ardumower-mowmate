@@ -1,5 +1,6 @@
 #include "map_manager.h"
 #include "log.h"
+#include "atomic_file.h"
 #include <MD5Builder.h>
 
 #define _LOG_ "MapManager::"
@@ -57,6 +58,7 @@ namespace ArduMower {
             _index.nextFileId = 0;
             _index.maps.clear();
 
+            ArduMower::Util::recoverAtomicFile(SPIFFS, INDEX_FILE);
             File file = SPIFFS.open(INDEX_FILE);
             if (!file || file.isDirectory()) {
                 Log(INFO, "%s loadIndex: kein Index vorhanden, starte leer", _LOG_);
@@ -89,12 +91,6 @@ namespace ArduMower {
         }
 
         bool MapManager::saveIndex() {
-            File file = SPIFFS.open(INDEX_FILE, FILE_WRITE);
-            if (!file) {
-                Log(ERR, "%s saveIndex: Index-Datei konnte nicht geöffnet werden", _LOG_);
-                return false;
-            }
-
             JsonDocument doc;
             JsonObject root = doc.to<JsonObject>();
             root["activeId"] = _index.activeId;
@@ -103,8 +99,10 @@ namespace ArduMower {
             for (const auto &meta : _index.maps) {
                 meta.marshal(maps.add<JsonObject>());
             }
-            serializeJson(doc, file);
-            file.close();
+            if (!ArduMower::Util::writeJsonAtomic(SPIFFS, INDEX_FILE, doc)) {
+                Log(ERR, "%s saveIndex: Index-Datei konnte nicht geschrieben werden", _LOG_);
+                return false;
+            }
             return true;
         }
 
@@ -290,13 +288,10 @@ namespace ArduMower {
             }
 
             // Map-Datei schreiben
-            File file = SPIFFS.open(fileName, FILE_WRITE);
-            if (!file) {
-                Log(ERR, "%s save: Datei %s konnte nicht geöffnet werden", _LOG_, fileName.c_str());
+            if (!ArduMower::Util::writeJsonAtomic(SPIFFS, fileName, mapDoc)) {
+                Log(ERR, "%s save: Datei %s konnte nicht geschrieben werden", _LOG_, fileName.c_str());
                 return "";
             }
-            serializeJson(mapDoc, file);
-            file.close();
 
             // Aktiv setzen und Index speichern
             // Hinweis: activeId wird nur beim ersten Speichern gesetzt, wenn
@@ -321,6 +316,7 @@ namespace ArduMower {
                 Log(WARN, "%s load: Karte %s nicht gefunden", _LOG_, id.c_str());
                 return false;
             }
+            ArduMower::Util::recoverAtomicFile(SPIFFS, meta->file);
             File file = SPIFFS.open(meta->file);
             if (!file || file.isDirectory()) {
                 Log(ERR, "%s load: Datei %s nicht lesbar", _LOG_, meta->file.c_str());
@@ -354,23 +350,26 @@ namespace ArduMower {
             meta->timestamp = millis();
 
             // Meta-Bereich in der Map-Datei ebenfalls aktualisieren
+            ArduMower::Util::recoverAtomicFile(SPIFFS, meta->file);
             File file = SPIFFS.open(meta->file);
             if (!file || file.isDirectory()) {
                 saveIndex();
                 return true;
             }
             JsonDocument doc;
-            deserializeJson(doc, file);
+            auto err = deserializeJson(doc, file);
             file.close();
-
-            JsonObject root = doc.as<JsonObject>();
-            JsonObject metaObj = root["meta"].to<JsonObject>();
-            meta->marshal(metaObj);
-
-            file = SPIFFS.open(meta->file, FILE_WRITE);
-            if (file) {
-                serializeJson(doc, file);
-                file.close();
+            // An unreadable file must stay as it is: writing the document back
+            // would replace the whole map with nothing but its meta block.
+            if (!err) {
+                JsonObject root = doc.as<JsonObject>();
+                JsonObject metaObj = root["meta"].to<JsonObject>();
+                meta->marshal(metaObj);
+                if (!ArduMower::Util::writeJsonAtomic(SPIFFS, meta->file, doc)) {
+                    Log(ERR, "%s rename: Datei %s konnte nicht geschrieben werden", _LOG_, meta->file.c_str());
+                }
+            } else {
+                Log(ERR, "%s rename: Datei %s nicht lesbar (%s), nur Index aktualisiert", _LOG_, meta->file.c_str(), err.c_str());
             }
             saveIndex();
             return true;
@@ -381,6 +380,8 @@ namespace ArduMower {
             for (auto it = _index.maps.begin(); it != _index.maps.end(); ++it) {
                 if (it->id == id) {
                     if (SPIFFS.exists(it->file)) SPIFFS.remove(it->file);
+                    const String tmp = ArduMower::Util::atomicTmpPath(it->file);
+                    if (SPIFFS.exists(tmp)) SPIFFS.remove(tmp);
                     const bool wasActive = (_index.activeId == id);
                     _index.maps.erase(it);
                     // Beim Löschen der Default-Karte sofort auf die erste

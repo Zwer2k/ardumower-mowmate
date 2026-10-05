@@ -1,5 +1,6 @@
 #include "schedule.h"
 #include "log.h"
+#include "atomic_file.h"
 #include <SPIFFS.h>
 
 #define _LOG_ "Schedule::"
@@ -65,6 +66,7 @@ void Manager::begin()
     return;
   }
 
+  ArduMower::Util::recoverAtomicFile(SPIFFS, _filename);
   File file = SPIFFS.open(_filename.c_str());
   if (!file || file.isDirectory())
   {
@@ -108,15 +110,11 @@ bool Manager::save()
   JsonDocument doc;
   marshal(doc.to<JsonObject>());
 
-  File file = SPIFFS.open(_filename.c_str(), FILE_WRITE);
-  if (!file)
+  if (!ArduMower::Util::writeJsonAtomic(SPIFFS, _filename, doc))
   {
-    Log(ERR, "%ssave::file-open-error", _LOG_);
+    Log(ERR, "%ssave::write-error", _LOG_);
     return false;
   }
-
-  serializeJson(doc, file);
-  file.close();
   _dirty = false;
   Log(INFO, "%ssave::success entries=%u", _LOG_, (unsigned)_entries.size());
   return true;
