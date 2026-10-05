@@ -332,13 +332,24 @@ void Adapter::beginAp()
   Log(DBG, "WiFi::Adapter::beginAp");
   WiFi.setHostname(_settings.general.name.c_str());
   WiFi.mode(WIFI_AP);
-  if (_settings.wifi.apSettingsValid())
-    WiFi.softAP(_settings.wifi.ap_ssid.c_str(), _settings.wifi.ap_psk.c_str());
-  else
-    WiFi.softAP(_settings.wifi.default_ap_ssid, _settings.wifi.default_ap_psk);
+  const bool configured = _settings.wifi.apSettingsValid();
+  const char *ssid = configured ? _settings.wifi.ap_ssid.c_str() : _settings.wifi.default_ap_ssid;
+  const char *psk = configured ? _settings.wifi.ap_psk.c_str() : _settings.wifi.default_ap_psk;
+  if (!WiFi.softAP(ssid, psk))
+    Log(ERR, "WiFi::Adapter::AP::start-failed(ssid=\"%s\")", ssid);
 
-  auto ip = WiFi.softAPIP().toString();
-  Log(INFO, "WiFi::Adapter::AP::IP(%s)", ip.c_str());
+  // Without SSID and password the log was useless for connecting to a fresh
+  // modem. The default password is public anyway; a configured one is not
+  // printed because the log also reaches the web UI.
+  const String ip = WiFi.softAPIP().toString();
+  const String mac = WiFi.softAPmacAddress();
+  const String password = configured ? String("(configured)") : String("\"") + psk + "\" (default)";
+  Log(INFO, "WiFi::Adapter::AP started");
+  Log(INFO, "  SSID     : %s", ssid);
+  Log(INFO, "  Password : %s", password.c_str());
+  Log(INFO, "  IP       : %s", ip.c_str());
+  Log(INFO, "  MAC      : %s", mac.c_str());
+  Log(INFO, "  Channel  : %d", (int)WiFi.channel());
 }
 
 void Adapter::beginOff()
