@@ -1122,25 +1122,6 @@
             onCancelRename={cancelRename}
           />
         </div>
-        {#if !showManage && !edit && !showCalculate && !showSchedule}
-          <div class="toolbar-goto-group">
-            {#if hasMap}
-              {#if targetSet}
-                <span class="goto-badge">{targetDist.toFixed(1)}m / {targetBearing.toFixed(0)}°</span>
-                {#if isDriving}
-                  <button class="goto-btn stop" on:click={stopDrive}>Stop</button>
-                {:else}
-                  <button class="goto-btn drive" on:click={startDrive}>Drive</button>
-                {/if}
-                <button class="goto-btn clear" on:click={clearTarget}>✕</button>
-              {:else}
-                <span class="goto-hint">Click map to set target</span>
-              {/if}
-            {:else}
-              <span class="goto-hint">No map loaded</span>
-            {/if}
-          </div>
-        {/if}
       </Row>
 
       {#if showManage}
@@ -1486,12 +1467,6 @@
   .goto-btn.clear {
     padding: 4px 8px;
   }
-  .goto-hint {
-    font-size: 0.75em;
-    color: #888;
-    font-style: italic;
-    padding-left: 0.5rem;
-  }
   :global(.map-toolbar .bx--row) {
     flex-wrap: wrap;
     align-items: center;
@@ -1520,15 +1495,6 @@
   .toolbar-dropdown :global(.bx--dropdown),
   .toolbar-dropdown :global(.bx--text-input) {
     width: 100%;
-  }
-  .toolbar-goto-group {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.25rem;
-    margin-left: auto;
-    padding-left: 0.75rem;
   }
   @container (max-width: 800px) {
     .toolbar-main-group {
