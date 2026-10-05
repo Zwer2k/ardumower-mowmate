@@ -53,6 +53,8 @@ namespace ArduMower
         void reconnect();
         void fullReconnect();
         bool ntpSynced() const { return _ntpSynced; }
+        // Only in STA mode does a missing connection mean something is broken.
+        bool isStaMode() const { return _mode == Mode::STA; }
       };
     }
   }

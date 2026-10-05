@@ -209,6 +209,16 @@ void setup() {
       return;
     }
 
+    // The recovery below restores a client connection. In AP mode (and in the
+    // AP window of OFF mode) WiFi.status() is never WL_CONNECTED, so it fired
+    // every 30 s and fullReconnect() switched the radio to STA, taking the
+    // access point down before any phone could see it.
+    const bool staMode = wifiAdapter.isStaMode();
+    if (!staMode && state != ACTIVE) {
+      state = ACTIVE;
+      lastRecovery = now;
+    }
+
     // ----- RECOVERY STATE MACHINE (non-blocking) -----
     if (state == RECOVERING_DISCONNECT) {
       // disconnect(false,true) – wifioff=true triggert WiFi-Deinit/Reinit,
@@ -252,6 +262,11 @@ void setup() {
       Log(ERR, "wifi_health: heap fragmentiert (max=%u, free=%u) – restart", maxAlloc, freeHeap);
       delay(100);
       ESP.restart();
+      return;
+    }
+
+    if (!staMode) {
+      state = ACTIVE;
       return;
     }
 

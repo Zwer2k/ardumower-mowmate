@@ -332,7 +332,10 @@ void Adapter::beginAp()
   Log(DBG, "WiFi::Adapter::beginAp");
   WiFi.setHostname(_settings.general.name.c_str());
   WiFi.mode(WIFI_AP);
+  // The settings are pre-filled with the defaults, so "valid" alone does not
+  // mean the user set anything; only show the password when it is the default.
   const bool configured = _settings.wifi.apSettingsValid();
+  const bool defaultPsk = !configured || _settings.wifi.ap_psk == _settings.wifi.default_ap_psk;
   const char *ssid = configured ? _settings.wifi.ap_ssid.c_str() : _settings.wifi.default_ap_ssid;
   const char *psk = configured ? _settings.wifi.ap_psk.c_str() : _settings.wifi.default_ap_psk;
   if (!WiFi.softAP(ssid, psk))
@@ -343,7 +346,7 @@ void Adapter::beginAp()
   // printed because the log also reaches the web UI.
   const String ip = WiFi.softAPIP().toString();
   const String mac = WiFi.softAPmacAddress();
-  const String password = configured ? String("(configured)") : String("\"") + psk + "\" (default)";
+  const String password = defaultPsk ? String("\"") + _settings.wifi.default_ap_psk + "\" (default)" : String("(configured)");
   Log(INFO, "WiFi::Adapter::AP started");
   Log(INFO, "  SSID     : %s", ssid);
   Log(INFO, "  Password : %s", password.c_str());
