@@ -10,9 +10,9 @@
 ## Projekt-Überblick
 
 - **Firmware**: ESP32-S3 (Arduino/PlatformIO, `platformio.ini`, `src/`, `lib/`). C++ mit eigenen Unit-Tests in `test/` und `test_pathplanner/`.
-- **Web-UI**: Svelte (SvelteKit) in `ui/`, TypeScript, Carbon Components. Build via `ci/bin/build-ui.sh` bzw. Taskfile.
+- **Web-UI**: Svelte (SvelteKit) in `ui/`, TypeScript, Carbon Components. Build via `task build-ui` bzw. `task package-ui`.
 - **Pfadplanung**: `lib/pathplanner/` (Clipper2-basiert) plus `src/domain/path_planner.cpp`.
-- Build/Flash/Test-Workflows: `Taskfile.yml`, `ci/bin/`.
+- Build/Flash/Test-Workflows: `Taskfile.yml`; CI in `.github/workflows/ci.yml`.
 
 ## Wichtige Konventionen im Code
 
