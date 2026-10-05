@@ -652,7 +652,9 @@ void MowerAdapter::parseArduMowerResponse(const char* line)
     return;
   }
 
-  if (line[1] != ',' && !(line[0] == 'S' && (line[1] == '2' || line[1] == '3' || line[1] == '4')) && !(line[0] == 'U') && !(line[0] == '+' && line[1] == 'U'))
+  // Responses are "<tag>,..." with a single-character tag, except the numbered S variants.
+  // Every new S response has to be listed here or it is dropped before the dispatcher sees it.
+  if (line[1] != ',' && !(line[0] == 'S' && (line[1] == '2' || line[1] == '3' || line[1] == '4' || line[1] == '5')) && !(line[0] == 'U') && !(line[0] == '+' && line[1] == 'U'))
   {
     Log(DBG, "%sparseArduMowerResponse::guard::second-char(%c)", _LOG_, line[1]);
     return;
@@ -681,6 +683,8 @@ void MowerAdapter::parseArduMowerResponse(const char* line)
   else if (strncmp(payload, "S3,", 3) == 0)
 #endif
     { strncpy(_cachedRawSensorSummary, line, sizeof(_cachedRawSensorSummary) - 1); _cachedRawSensorSummary[sizeof(_cachedRawSensorSummary) - 1] = '\0'; parseSensorSummaryResponse(payload); }
+  else if (strncmp(payload, "S5,", 3) == 0)
+    parseMotorRpmResponse(payload);
   else if (strncmp(payload, "S,", 2) == 0)
     { strncpy(_cachedRawState, line, sizeof(_cachedRawState) - 1); _cachedRawState[sizeof(_cachedRawState) - 1] = '\0'; parseStateResponse(payload); }
   else if (strncmp(payload, "V,", 2) == 0)
@@ -1149,6 +1153,16 @@ bool MowerAdapter::requestStatsNow()
   return requestStats();
 }
 
+bool MowerAdapter::requestMotorRpm()
+{
+  uint32_t now = millis();
+  if (_lastMotorRpmRequest != 0 && now - _lastMotorRpmRequest < 5000) return true;
+  _lastMotorRpmRequest = now ? now : 1;
+  if (!assertSendIsInitialized())
+    return false;
+  return sendCommand("AT+S5", true);
+}
+
 bool MowerAdapter::requestSensorSummary()
 {
   uint32_t now = millis();
@@ -1373,6 +1387,32 @@ void MowerAdapter::parseStatisticsResponse(const char* line)
                      });
 
   _stats.timestamp = now;
+}
+
+// S5,<rpmLeft>,<rpmRight>,<rpmMow>,<pwmMow>,<ampsLeft>,<ampsRight>,<ampsMow>
+void MowerAdapter::parseMotorRpmResponse(const char* line)
+{
+  const uint32_t now = millis();
+
+  processCSVResponse(line,
+      [&](int index, const char* val, size_t len)
+      {
+        (void)len;
+        switch (index)
+        {
+        case 1: _motorRpm.left = atof(val); break;
+        case 2: _motorRpm.right = atof(val); break;
+        case 3: _motorRpm.mow = atof(val); break;
+        case 4: _motorRpm.pwmMow = atoi(val); break;
+        case 5: _motorRpm.ampsLeft = atof(val); break;
+        case 6: _motorRpm.ampsRight = atof(val); break;
+        case 7: _motorRpm.ampsMow = atof(val); break;
+        }
+      });
+
+  _motorRpm.timestamp = now;
+  _motorRpmHistory.add(now / 1000, _motorRpm.left, _motorRpm.right, _motorRpm.mow,
+                       _motorRpm.ampsLeft, _motorRpm.ampsRight, _motorRpm.ampsMow);
 }
 
 void MowerAdapter::parseSensorSummaryResponse(const char* line)
@@ -2373,18 +2413,23 @@ void MowerAdapter::loop()
   case 3: // AT+C (control state incl. speed)
     requestControl();
     break;
+  case 4: // AT+S5 (motor speeds)
+    requestMotorRpm();
+    break;
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
-  case 4: // AT+S4 (GPS details incl. satellites)
+  case 5: // AT+S4 (GPS details incl. satellites)
     requestGpsDetails();
     break;
 #endif
   }
+  // The wrap has to cover every case above. It did not before: the counter stopped one
+  // short, so the last slot never ran (GPS details with the map/GPS build, control state
+  // without it). Each request*() throttles itself, so a reachable slot only means the
+  // request now happens at the interval it already declares.
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
-  loopCase++;
-  if (loopCase > 3) loopCase = 0;
+  loopCase = (loopCase + 1) % 6;
 #else
-  loopCase++;
-  if (loopCase > 2) loopCase = 0;
+  loopCase = (loopCase + 1) % 5;
 #endif
 }
 

@@ -67,6 +67,9 @@ namespace ArduMower
       ArduMower::Domain::Robot::Obstacles _obstacles;
       ArduMower::Domain::Robot::MowerMap _map;
       ArduMower::Domain::Robot::MowSettings _mowSettings;
+      ArduMower::Domain::Robot::MotorRpm _motorRpm;
+      ArduMower::Domain::Robot::MotorRpmHistory _motorRpmHistory;
+      uint32_t _lastMotorRpmRequest = 0;
       ArduMower::Modem::MapManager _mapManager;
       String _lastUploadedMapId;
       int _lastUploadedMapCrc = 0;
@@ -203,6 +206,9 @@ namespace ArduMower
       virtual void endMowerMapRead() override { _map.endRead(); }
       virtual bool isMowerMapReading() override { return _map.isReading(); }
       virtual ArduMower::Domain::Robot::MowSettings mowSettings() { return _mowSettings; }
+      virtual ArduMower::Domain::Robot::MotorRpm motorRpm() override { return _motorRpm; }
+      virtual ArduMower::Domain::Robot::MotorRpm *motorRpmP() override { return &_motorRpm; }
+      virtual const ArduMower::Domain::Robot::MotorRpmHistory &motorRpmHistory() override { return _motorRpmHistory; }
       virtual ArduMower::Domain::Robot::MowSettings *mowSettingsP() { return &_mowSettings; }
 
       // Karten-Verwaltung
@@ -255,6 +261,8 @@ namespace ArduMower
       virtual bool requestStats();
       virtual bool requestStatsNow();
       virtual bool requestSensorSummary();
+      virtual bool requestMotorRpm();
+      void parseMotorRpmResponse(const char* line);
       virtual bool requestControl();
       virtual bool requestObstacles();
       virtual bool applyPositionSettings();

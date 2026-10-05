@@ -36,6 +36,7 @@ void UiAdapter::begin()
   _server.on("/api/modem/bluetooth/reset", HTTP_POST, [this](AsyncWebServerRequest* request) { handleApiResetModemBluetoothPairings(request); });
 
   _server.on("/api/robot/desired_state", HTTP_GET, [this](AsyncWebServerRequest* request) { handleApiGetRobotDesiredState(request); });
+  _server.on("/api/robot/motor_rpm", HTTP_GET, [this](AsyncWebServerRequest* request) { handleApiGetMotorRpm(request); });
 
   auto commandHandler = new AsyncCallbackJsonWebHandler("/api/robot/command", std::bind(&UiAdapter::handleApiPostRobotCommand, this, std::placeholders::_1, std::placeholders::_2));
   commandHandler->setMethod(HTTP_POST);
@@ -216,6 +217,58 @@ void UiAdapter::handleApiGetRobotDesiredState(AsyncWebServerRequest *request)
 
   auto desiredState = _source.desiredState();
   auto res = ArduMower::Domain::Json::encode(desiredState);
+  request->send(200, "application/json", res);
+}
+
+// Live motor speeds plus the recorded series. Served over HTTP rather than pushed over the
+// socket: the series is only interesting while its chart is open, and it is far too large to
+// put into a periodic push.
+void UiAdapter::handleApiGetMotorRpm(AsyncWebServerRequest *request)
+{
+  if (!auth(request))
+    return;
+
+  const auto &history = _source.motorRpmHistory();
+  auto rpm = _source.motorRpm();
+
+  // [t, rpmL, rpmR, rpmMow, ampsL, ampsR, ampsMow] per sample keeps the payload compact -
+  // a named object per sample would roughly triple it, and 240 samples have to fit through
+  // a small heap. Currents are sent in 10 mA steps, as stored.
+  JsonDocument doc;
+  doc["left"] = rpm.left;
+  doc["right"] = rpm.right;
+  doc["mow"] = rpm.mow;
+  doc["pwm_mow"] = rpm.pwmMow;
+  doc["amps_left"] = rpm.ampsLeft;
+  doc["amps_right"] = rpm.ampsRight;
+  doc["amps_mow"] = rpm.ampsMow;
+  doc["uptime_s"] = millis() / 1000;
+  doc["interval_s"] = history.intervalSec();
+  doc["count"] = history.count();
+
+  // ?samples=0 returns the live values only. The tile polls often and does not need the
+  // series; the chart asks for it rarely and does.
+  bool withSamples = true;
+  if (request->hasParam("samples"))
+    withSamples = request->getParam("samples")->value() != "0";
+
+  if (withSamples) {
+    JsonArray samples = doc["samples"].to<JsonArray>();
+    for (uint16_t i = 0; i < history.count(); i++) {
+      const auto &s = history.at(i);
+      JsonArray row = samples.add<JsonArray>();
+      row.add(s.t);
+      row.add(s.left);
+      row.add(s.right);
+      row.add(s.mow);
+      row.add(s.ampsLeft);
+      row.add(s.ampsRight);
+      row.add(s.ampsMow);
+    }
+  }
+
+  String res;
+  serializeJson(doc, res);
   request->send(200, "application/json", res);
 }
 

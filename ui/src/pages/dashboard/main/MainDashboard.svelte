@@ -14,6 +14,8 @@
     import { MapStore } from '../../../map/service';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import { onMount } from 'svelte';
+    import MotorRpmChart from './MotorRpmChart.svelte';
+    import { MotorRpmStore } from '../../../stores/motorRpm';
 
     // The mower reports its durations in seconds (Sunray counts them up once
     // per second). Show minutes below an hour and hours above, instead of
@@ -28,12 +30,20 @@
     let frame = $state(0);
     let lastClockAt = $state(0);
 
+    // The chart is collapsed by default; the series is only fetched while it is open.
+    let rpmChartOpen = $state(false);
+    $effect(() => {
+        MotorRpmStore.setSamplesWanted(rpmChartOpen);
+    });
+
     onMount(() => {
         if (!browser) return;
         lastClockAt = performance.now();
         clockInterval = setInterval(() => frame++, 1000);
+        MotorRpmStore.start();
         return () => {
             if (clockInterval) clearInterval(clockInterval);
+            MotorRpmStore.stop();
         };
     });
 
@@ -238,7 +248,26 @@
                         <div class="metric-label">Nächster Mähvorgang</div>
                     </Tile>
                     {/if}
+                    <Tile class="metric-tile compact rpm-tile">
+                        <button type="button" class="rpm-toggle"
+                                onclick={() => rpmChartOpen = !rpmChartOpen}
+                                aria-expanded={rpmChartOpen}
+                                title="Aufgezeichnete Drehzahlen ein-/ausblenden">
+                            <span class="metric-icon">⚙️</span>
+                            <span class="metric-stack">
+                                <span class="stack-row"><span class="stack-label">Mäh</span>{Math.round($MotorRpmStore.mow)}<span class="stack-amps">{$MotorRpmStore.ampsMow.toFixed(2)} A</span></span>
+                                <span class="stack-row"><span class="stack-label">L</span>{Math.round($MotorRpmStore.left)}<span class="stack-amps">{$MotorRpmStore.ampsLeft.toFixed(2)} A</span></span>
+                                <span class="stack-row"><span class="stack-label">R</span>{Math.round($MotorRpmStore.right)}<span class="stack-amps">{$MotorRpmStore.ampsRight.toFixed(2)} A</span></span>
+                            </span>
+                            <span class="metric-label">U/min · Strom {rpmChartOpen ? '▲' : '▼'}</span>
+                        </button>
+                    </Tile>
                 </div>
+                {#if rpmChartOpen}
+                    <Tile class="rpm-chart-tile">
+                        <MotorRpmChart samples={$MotorRpmStore.samples} intervalS={$MotorRpmStore.intervalS} />
+                    </Tile>
+                {/if}
             </Column><!--
             --><Column sm={4} md={8} lg={6} class="map-col">
                 <Tile class="map-tile">
@@ -341,6 +370,36 @@
         gap: 4px;
         justify-content: flex-start;
         margin-bottom: 0;
+    }
+
+    /* the whole tile is the toggle, so the button must not look like one */
+    .rpm-toggle {
+        display: contents;
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+        text-align: inherit;
+    }
+
+    :global(.rpm-tile) {
+        cursor: pointer;
+    }
+
+    /* current sits right of the rpm value, pushed to the edge so both columns line up */
+    .stack-amps {
+        margin-left: auto;
+        padding-left: 6px;
+        opacity: 0.7;
+        font-variant-numeric: tabular-nums;
+    }
+
+    :global(.rpm-chart-tile) {
+        margin-top: 4px;
+        padding: 0;
     }
 
     .status-icon {

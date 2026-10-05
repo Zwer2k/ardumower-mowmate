@@ -35,6 +35,11 @@ public:
   virtual bool dock() override { return true; }
   virtual bool changeSpeed(float speed) override { return true; };
   virtual bool changeMowPwm(int pwm) override { return true; }
+  ArduMower::Domain::Robot::MotorRpm _motorRpm;
+  ArduMower::Domain::Robot::MotorRpmHistory _motorRpmHistory;
+  virtual ArduMower::Domain::Robot::MotorRpm motorRpm() override { return _motorRpm; }
+  virtual ArduMower::Domain::Robot::MotorRpm *motorRpmP() override { return &_motorRpm; }
+  virtual const ArduMower::Domain::Robot::MotorRpmHistory &motorRpmHistory() override { return _motorRpmHistory; }
   virtual bool mowerEnabled(bool enabled) override { return true; }
   virtual bool mowerAuto() override { return true; }
 

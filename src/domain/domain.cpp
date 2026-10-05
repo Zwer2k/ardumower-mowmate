@@ -77,6 +77,13 @@ const char * _t_desiredState_op = "op";
 const char * _t_desiredState_fixTimeout = "fix_timeout";
 const char * _t_desiredState_mowPwm = "mow_pwm";
 const char * _t_desiredState_mowHeight = "mow_height";
+const char * _t_motorRpm_left = "left";
+const char * _t_motorRpm_right = "right";
+const char * _t_motorRpm_mow = "mow";
+const char * _t_motorRpm_pwmMow = "pwm_mow";
+const char * _t_motorRpm_ampsLeft = "amps_left";
+const char * _t_motorRpm_ampsRight = "amps_right";
+const char * _t_motorRpm_ampsMow = "amps_mow";
 
 #define same(other, prop) (prop == other.prop)
 
@@ -226,6 +233,65 @@ void DesiredState::marshal(JsonObject o) const
   o[_t_desiredState_fixTimeout] = fixTimeout;
   o[_t_desiredState_mowPwm] = mowPwm;
   o[_t_desiredState_mowHeight] = mowHeight;
+}
+
+bool MotorRpm::operator==(const MotorRpm &other)
+{
+  return timestamp == other.timestamp &&
+         left == other.left &&
+         right == other.right &&
+         mow == other.mow &&
+         pwmMow == other.pwmMow &&
+         ampsLeft == other.ampsLeft &&
+         ampsRight == other.ampsRight &&
+         ampsMow == other.ampsMow;
+}
+
+void MotorRpm::marshal(JsonObject o) const
+{
+  o[_t_motorRpm_left] = left;
+  o[_t_motorRpm_right] = right;
+  o[_t_motorRpm_mow] = mow;
+  o[_t_motorRpm_pwmMow] = pwmMow;
+  o[_t_motorRpm_ampsLeft] = ampsLeft;
+  o[_t_motorRpm_ampsRight] = ampsRight;
+  o[_t_motorRpm_ampsMow] = ampsMow;
+}
+
+bool MotorRpmHistory::add(uint32_t t, float left, float right, float mow,
+                          float ampsLeft, float ampsRight, float ampsMow)
+{
+  if (_count > 0 && t < _nextSampleAt) return false;
+  if (_count >= CAPACITY) compact();
+
+  Sample &s = _samples[_count++];
+  s.t = t;
+  s.left = (int16_t)lroundf(left);
+  s.right = (int16_t)lroundf(right);
+  s.mow = (int16_t)lroundf(mow);
+  s.ampsLeft = (int16_t)lroundf(ampsLeft * 100.0f);
+  s.ampsRight = (int16_t)lroundf(ampsRight * 100.0f);
+  s.ampsMow = (int16_t)lroundf(ampsMow * 100.0f);
+  _nextSampleAt = t + _intervalSec;
+  return true;
+}
+
+// Drop every second sample and double the interval: the series keeps its full time span
+// at half the resolution, so older parts of a long run get coarser while recent ones stay
+// as dense as the current interval allows.
+void MotorRpmHistory::compact()
+{
+  uint16_t n = 0;
+  for (uint16_t i = 0; i < _count; i += 2) _samples[n++] = _samples[i];
+  _count = n;
+  if (_intervalSec < 3600) _intervalSec *= 2;
+}
+
+void MotorRpmHistory::clear()
+{
+  _count = 0;
+  _intervalSec = 5;
+  _nextSampleAt = 0;
 }
 
 bool SensorSummary::operator==(const SensorSummary &other)

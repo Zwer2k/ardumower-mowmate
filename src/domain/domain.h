@@ -181,6 +181,57 @@ namespace ArduMower
         void marshal(JsonObject o) const;
       };
 
+      // Live motor speeds from AT+S5.
+      class MotorRpm
+      {
+      public:
+        uint32_t timestamp = 0;
+        float left = 0;
+        float right = 0;
+        float mow = 0;
+        int pwmMow = 0;
+        float ampsLeft = 0;
+        float ampsRight = 0;
+        float ampsMow = 0;
+
+        bool operator==(const MotorRpm &other);
+        bool operator!=(const MotorRpm &other) { return !(*this == other); }
+        void marshal(JsonObject o) const;
+      };
+
+      // Recorded motor speeds in constant memory. Samples start dense and are thinned
+      // whenever the buffer fills: every second sample is dropped and the interval doubles.
+      // A whole mowing run therefore fits without ever allocating, which matters on a heap
+      // this project keeps having to defend.
+      class MotorRpmHistory
+      {
+      public:
+        static const uint16_t CAPACITY = 240;
+        // currents are kept in 10 mA steps so a sample stays small; +-327 A is far beyond
+        // anything this hardware can deliver
+        struct Sample {
+          uint32_t t;
+          int16_t left; int16_t right; int16_t mow;
+          int16_t ampsLeft; int16_t ampsRight; int16_t ampsMow;
+        };
+
+        // t is seconds since boot; returns true if the sample was stored
+        bool add(uint32_t t, float left, float right, float mow,
+                 float ampsLeft, float ampsRight, float ampsMow);
+        void clear();
+        uint16_t count() const { return _count; }
+        uint16_t intervalSec() const { return _intervalSec; }
+        const Sample &at(uint16_t i) const { return _samples[i]; }
+
+      private:
+        void compact();
+
+        Sample _samples[CAPACITY];
+        uint16_t _count = 0;
+        uint16_t _intervalSec = 5;
+        uint32_t _nextSampleAt = 0;
+      };
+
       class SensorSummary
       {
       public:
@@ -480,6 +531,9 @@ namespace ArduMower
         virtual DesiredState *desiredStateP() = 0;
         virtual SensorSummary sensorSummary() = 0;
         virtual SensorSummary *sensorSummaryP() = 0;
+        virtual MotorRpm motorRpm() = 0;
+        virtual MotorRpm *motorRpmP() = 0;
+        virtual const MotorRpmHistory &motorRpmHistory() = 0;
         virtual GpsDetails gpsDetails() = 0;
         virtual GpsDetails *gpsDetailsP() = 0;
         virtual UbxResponse ubxResponse() = 0;
