@@ -341,6 +341,11 @@ void Adapter::beginAp()
   if (!WiFi.softAP(ssid, psk))
     Log(ERR, "WiFi::Adapter::AP::start-failed(ssid=\"%s\")", ssid);
 
+  // At the default 20 dBm some ESP32-S3 boards (poor antenna match) send
+  // beacons no device can decode: the AP starts, but nobody sees it. 8.5 dBm
+  // made it visible; the AP is only used for setup near the modem anyway.
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+
   // Without SSID and password the log was useless for connecting to a fresh
   // modem. The default password is public anyway; a configured one is not
   // printed because the log also reaches the web UI.
