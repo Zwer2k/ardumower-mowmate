@@ -443,6 +443,10 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
    case RequestDataType::loadMap: {
     String id = jsonData["id"] | "";
     bool discardCurrent = jsonData["discardCurrent"] | false;
+    // A map transfer to the browser holds the read lock and would make the load
+    // fail. Right after a reconnect one is almost always running.
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     bool readyToLoad = !discardCurrent || _source.discardMap();
     if (readyToLoad && _source.loadMap(id)) {
       _socketHandler->abortMapChunkSend();
@@ -463,6 +467,15 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
    case RequestDataType::saveMap: {
     String name = jsonData["name"] | "";
     double rotation = jsonData["rotation"] | 0.0;
+    // Only save the map the request was made for. After a reboot the modem
+    // loads its default map, and a stale editor must not overwrite that one.
+    const String requestedMapId = jsonData["mapId"] | "";
+    if (requestedMapId != _source.currentMapId()) {
+      Log(WARN, "%s saveMap: request for map %s rejected; current map is %s", _LOG_,
+          requestedMapId.c_str(), _source.currentMapId().c_str());
+      _socketHandler->sendMapList(NULL);
+      break;
+    }
     // After a save the backend may send an updated map (hash changes). Abort
     // any ongoing chunk transfer so the new map snapshot can be sent cleanly.
     _socketHandler->abortMapChunkSend();
@@ -1387,6 +1400,9 @@ void UiSocketHandler::startMapChunkSend(UiSocketItem* sendTo, bool force) {
   if (mapChunkSendState.active || (!force && (map.timestamp == 0 || map.timestamp == oldDataTimestamp[ResponseDataType::map]))) {
     return;
   }
+  // A transfer to all browsers also serves a deferred connect send. Without
+  // this, a map loaded right after a reconnect was transferred a second time.
+  if (!sendTo) _mapSendPendingUntil = 0;
   // reading-Flag auf der echten Map setzen: schützt _source vor gleichzeitigen setMap()-Aufrufen
   _source.beginMowerMapRead();
   // Snapshot einmalig speichern - verhindert Race Condition waehrend Chunk-Versand
@@ -1961,6 +1977,11 @@ void UiSocketHandler::processCalculateWaypoints() {
 
 void UiSocketHandler::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
   _source.setMap(map);
+}
+
+void UiSocketHandler::abortMapChunkSendForMapChange() {
+  if (_cmd.uploadMapToMowerActive()) return;
+  abortMapChunkSend();
 }
 
 void UiSocketHandler::abortMapChunkSend() {

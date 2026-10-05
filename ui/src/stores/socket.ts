@@ -36,7 +36,8 @@ import { MapPointType } from "../map/map-chunk-buffer";
 import { mowSettingsStore } from "../map/mow-settings";
 import { currentMapRotationStore, updateDrivenTrack } from "../map/service";
 import { mapWorkflowStore } from "../map/workflow/map-workflow-store";
-import { setMapDirty } from "../map/services/map-sync";
+import { isMapDirty, setMapDirty } from "../map/services/map-sync";
+import { toastStore } from "./toast";
 import type { MapWorkflowStore, MapWorkflowState } from "../map/workflow/map-workflow-store";
 
 let workflowModule: any = null;
@@ -126,6 +127,12 @@ if (typeof window !== "undefined") {
  *  mit dem Terminal, das sofort nach Empfang der Lines cleart). */
 export const motorPlotStore = writable<ConsoleLine[]>([]);
 export const mapMetaStore = writable<{ hash: string; crc: number; area: number; rotation: number } | null>(null);
+
+// Tells the map editor that the modem's current map changed underneath it,
+// e.g. because the modem rebooted mid-edit and came back with the default map.
+// "recovered" asks the editor to re-send its local edits; quiet when nothing was lost.
+export type EditMapEvent = { type: "recovered" | "lost"; mapId: string; quiet?: boolean; seq: number };
+export const editMapEventStore = writable<EditMapEvent | null>(null);
 
 export function clearMotorPlotStore() {
   motorPlotStore.set([]);
@@ -236,7 +243,22 @@ class SocketService {
   // changed again.
   private lastSetMap: { mapData: import("../model").MapSetData; syncId: number; mapId: string; attempts: number } | null = null;
   private setMapRetry: ReturnType<typeof setTimeout> | null = null;
-  private static readonly SET_MAP_MAX_RETRIES = 20;
+  // The modem rejects setMap while it streams the map to a browser, which after
+  // a reconnect can take well over the old 6 s. Give it a minute.
+  private static readonly SET_MAP_MAX_RETRIES = 200;
+  // Map with local edits the modem has not accepted yet. Until it has, a map
+  // list reporting that map as clean must not clear the editor's dirty flag.
+  private unsyncedMapId: string | null = null;
+  // The map the open editor belongs to. Pinned when editing starts, so edits
+  // are never written under a map id the backend switched to on its own.
+  private editActive = false;
+  private editMapId: string | null = null;
+  private editRecoveryId: string | null = null;
+  private editRecoveryAttempts = 0;
+  private static readonly EDIT_RECOVERY_MAX_ATTEMPTS = 5;
+  private editEventSeq = 0;
+  private firstMapListAfterConnect = false;
+  private pendingSaveMapId: string | null = null;
   private readonly boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
   constructor() {
@@ -320,6 +342,9 @@ class SocketService {
           // Neue Verbindung = möglicherweise neu gestarteter Modem mit
           // zurückgesetzten Transfer-IDs.
           resetMapTransferTracking();
+          this.firstMapListAfterConnect = true;
+          // A restore interrupted by this reconnect starts over with the next map list.
+          this.editRecoveryId = null;
 
           // Ohne force: das Modem antwortet aus dem Ergebnis seines letzten
           // Hintergrund-Checks, es geht dafür nicht ins Netz.
@@ -422,6 +447,10 @@ class SocketService {
             let workflowFinishLoadMap: { id: string; name: string; rotation: number } | null = null;
             let workflowLoadFailed = false;
             let workflowFinishDelete = false;
+            let workflowSaveRejected = false;
+            // Assigned inside the socketStore.update callback; the casts keep TS from narrowing them to null.
+            let editRecoveryLoadId = null as string | null;
+            let editMapEvent = null as { type: "recovered" | "lost"; mapId: string; quiet?: boolean } | null;
 
             socketStore.update((state) => {
               const newState = { ...state };
@@ -568,13 +597,18 @@ class SocketService {
                       if (this.lastSetMap.mapId === data.mapId && data.mapId === newState.currentMapId) {
                         this.scheduleSetMapRetry();
                       } else {
+                        // The modem switched maps; these edits no longer apply to the current one.
                         this.lastSetMap = null;
+                        this.unsyncedMapId = null;
                       }
                     }
                     break;
                   }
                   if (this.lastSetMap?.syncId === data.syncId) {
                     this.lastSetMap = null;
+                  }
+                  if (!this.lastSetMap && (!this.pendingUpload || this.pendingUpload.syncId === data.syncId)) {
+                    this.unsyncedMapId = null;
                   }
                   if (data.mapId !== newState.currentMapId) break;
                   const meta = {
@@ -609,13 +643,80 @@ class SocketService {
                   if (hasCurrentMap || !wasLoadingMap) {
                     newState.isLoadingMap = false;
                   }
+                  const afterConnect = this.firstMapListAfterConnect;
+                  this.firstMapListAfterConnect = false;
+                  // Read before the backend flag overwrites it below.
+                  const editorDirty = get(isMapDirty);
+                  if (this.editRecoveryId) {
+                    const recoveryId = this.editRecoveryId;
+                    if (hasCurrentMap && listData.currentId === recoveryId) {
+                      editMapEvent = { type: "recovered", mapId: recoveryId };
+                      this.editRecoveryId = null;
+                    } else if (hasCurrentMap && wasLoadingMap) {
+                      // The modem refused the load. Try again; never fall back to the
+                      // map it reports, the editor content does not belong to it.
+                      if (++this.editRecoveryAttempts < SocketService.EDIT_RECOVERY_MAX_ATTEMPTS) {
+                        editRecoveryLoadId = recoveryId;
+                        newState.currentMapId = recoveryId;
+                        newState.isLoadingMap = true;
+                        break;
+                      }
+                      this.editRecoveryId = null;
+                      this.editMapId = null;
+                      editMapEvent = { type: "lost", mapId: recoveryId };
+                    }
+                  } else if (this.editActive && hasCurrentMap) {
+                    const editId = this.editMapId;
+                    const currentId = listData.currentId || "";
+                    const savingNewMap = workflowState === "saving" && !!this.pendingSaveMapId?.startsWith("__t_");
+                    if (!editId) {
+                      if (afterConnect) {
+                        // The editor content belongs to no known map (e.g. a new map the
+                        // modem lost when it restarted); it must not become this one.
+                        editMapEvent = { type: "lost", mapId: currentId };
+                      } else {
+                        this.editMapId = currentId;
+                      }
+                    } else if (currentId !== editId) {
+                      // A load, save or intercept from before a reconnect says nothing:
+                      // the modem may have restarted with its default map since.
+                      if (!afterConnect && (wasLoadingMap || savingNewMap || workflowState === "intercepting")) {
+                        // Requested switch: a new map got its id on save, a load, an intercepted upload.
+                        this.editMapId = currentId;
+                      } else if (afterConnect && !editId.startsWith("__t_") && newState.maps.some((m) => m.id === editId)) {
+                        // The modem restarted mid-edit and loaded its default map. Load the
+                        // edited map again; the editor re-sends its changes once it is back.
+                        this.editRecoveryId = editId;
+                        this.editRecoveryAttempts = 0;
+                        editRecoveryLoadId = editId;
+                        if (workflowState === "saving") {
+                          // A save queued while the modem was down went nowhere.
+                          workflowSaveRejected = true;
+                          this.pendingSaveMapId = null;
+                        }
+                        newState.currentMapId = editId;
+                        newState.isLoadingMap = true;
+                        break;
+                      } else {
+                        this.editMapId = null;
+                        editMapEvent = { type: "lost", mapId: editId };
+                      }
+                    } else if (afterConnect && editorDirty) {
+                      // Same map after a reconnect. If the modem restarted, its unsaved draft
+                      // is gone and it reports the map as clean, while the editor still holds
+                      // the changes. Re-send them; harmless when the draft survived.
+                      const backendUnsaved = newState.maps.find((m) => m.id === currentId)?.unsaved || false;
+                      editMapEvent = { type: "recovered", mapId: currentId, quiet: backendUnsaved };
+                    }
+                  }
                   const currentMapEntry = newState.maps.find((m) => m.id === newState.currentMapId);
                   newState.currentMapUnsaved = currentMapEntry?.unsaved || false;
                   // Der Backend-Flag ist der maßgebliche dirty-Status. Er muss
                   // immer synchronisiert werden, auch beim initialen Browser-Reload
                   // oder nach einem finishLoadMap, damit ein unsaved Zustand erhalten
                   // bleibt.
-                  setMapDirty(newState.currentMapUnsaved);
+                  const unsyncedEdits = this.unsyncedMapId !== null && this.unsyncedMapId === newState.currentMapId;
+                  setMapDirty(newState.currentMapUnsaved || unsyncedEdits);
                   if (newState.currentMapId && (hasCurrentMap || !wasLoadingMap)) {
                     newState.isNewMap = false;
                     const map = newState.maps.find((m) => m.id === newState.currentMapId);
@@ -625,7 +726,14 @@ class SocketService {
                       // eingehende mapList den Snapshot überschreiben und den
                       // Dirty-Status ungewollt zurücksetzen.
                       if (workflowState === "saving") {
-                        workflowFinishSaveMap = { id: map.id, name: map.name, rotation: map.rotation };
+                        // The backend refuses a save for a map that is no longer current.
+                        const target = this.pendingSaveMapId;
+                        if (!target || target.startsWith("__t_") || target === map.id) {
+                          workflowFinishSaveMap = { id: map.id, name: map.name, rotation: map.rotation };
+                        } else {
+                          workflowSaveRejected = true;
+                        }
+                        this.pendingSaveMapId = null;
                       }
                       // Rename wird wie eine Bearbeitung behandelt: Name
                       // aktualisieren, aber Dirty-Status bleibt erhalten.
@@ -753,6 +861,23 @@ class SocketService {
             }
             if (workflowFinishDelete) {
               mwf.finishDelete();
+            }
+            if (workflowSaveRejected) {
+              mwf?.setError("The map was not saved: the modem switched to another map");
+              toastStore.set({ msg: "The map was not saved: the modem switched to another map", type: "error" });
+            }
+            if (editRecoveryLoadId) {
+              const id = editRecoveryLoadId;
+              if (this.editRecoveryAttempts === 0) {
+                this.sendLoadMap(id);
+              } else {
+                setTimeout(() => {
+                  if (this.editRecoveryId === id) this.sendLoadMap(id);
+                }, 1000);
+              }
+            }
+            if (editMapEvent) {
+              editMapEventStore.set({ ...editMapEvent, seq: ++this.editEventSeq });
             }
 
             // Map-relevante Nachrichten: nichts mehr automatisch
@@ -896,10 +1021,39 @@ class SocketService {
     this.sendMessage(req);
   }
 
+  setEditActive(active: boolean) {
+    if (active === this.editActive) return;
+    const state = get(socketStore);
+    const leftMapId = this.editMapId;
+    this.editActive = active;
+    this.editMapId = active ? (state.currentMapId || null) : null;
+    if (active) return;
+    this.editRecoveryId = null;
+    // The editor kept showing its own map while the modem moved on (restart,
+    // failed restore). Reload what the modem has, or the next edit session
+    // would start on foreign geometry and write it to the current map.
+    if (leftMapId && state.currentMapId && leftMapId !== state.currentMapId && !state.isLoadingMap) {
+      this.sendLoadMap(state.currentMapId);
+    }
+  }
+
+  isEditRecovering(): boolean {
+    return this.editRecoveryId !== null;
+  }
+
+  // Map edits and saves go to the map being edited, never to whatever map
+  // the backend currently reports.
+  private mapWriteTargetId(): string {
+    return (this.editActive && this.editMapId) || get(socketStore).currentMapId;
+  }
+
   sendMap(mapData: import("../model").MapSetData) {
+    // Nothing may be written while the edited map is being restored.
+    if (this.editRecoveryId) return;
     const syncId = this.nextMapSyncId++;
-    const mapId = get(socketStore).currentMapId;
+    const mapId = this.mapWriteTargetId();
     this.clearSetMapRetry();
+    this.unsyncedMapId = mapId;
     this.lastSetMap = { mapData, syncId, mapId, attempts: 0 };
     this.sendLastSetMap();
   }
@@ -918,6 +1072,7 @@ class SocketService {
     const last = this.lastSetMap;
     if (!last) return;
     if (last.attempts >= SocketService.SET_MAP_MAX_RETRIES) {
+      // unsyncedMapId stays set: the editor keeps its dirty flag, and Save re-sends the map.
       console.warn("[Socket] setMap rejected repeatedly, giving up (sync", last.syncId, ")");
       this.lastSetMap = null;
       return;
@@ -938,8 +1093,10 @@ class SocketService {
   }
 
   sendMapAndUpload(mapData: import("../model").MapSetData) {
+    if (this.editRecoveryId) return;
     const syncId = this.nextMapSyncId++;
-    const mapId = get(socketStore).currentMapId;
+    const mapId = this.mapWriteTargetId();
+    this.unsyncedMapId = mapId;
     this.pendingUpload = { mapData, syncId, mapId };
     this.sendPendingUploadMap();
   }
@@ -1042,6 +1199,7 @@ class SocketService {
     }
     // A pending editor sync belongs to the map being left.
     this.lastSetMap = null;
+    this.unsyncedMapId = null;
     this.clearSetMapRetry();
     // currentMapId sofort auf die Ziel-ID setzen, damit das Frontend während
     // des Ladens weiß, welche Karte geladen wird, und finishLoadMap korrekt
@@ -1064,9 +1222,11 @@ class SocketService {
     // Die Rotation wird beibehalten, da sie gerade gespeichert wird.
     socketStore.update((s) => ({ ...s, currentMapMeta: null, isLoadingMap: false }));
     mapMetaStore.set(null);
+    const mapId = this.mapWriteTargetId();
+    this.pendingSaveMapId = mapId;
     const req: RequestSocketMessage = {
       type: RequestDataType.saveMap,
-      data: { name, rotation },
+      data: { name, rotation, mapId },
     };
     this.sendMessage(req);
   }
@@ -1088,6 +1248,9 @@ class SocketService {
   }
 
   sendDiscardMap() {
+    this.lastSetMap = null;
+    this.clearSetMapRetry();
+    this.unsyncedMapId = null;
     const req: RequestSocketMessage = {
       type: RequestDataType.discardMap,
       data: {},
