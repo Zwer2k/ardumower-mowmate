@@ -32,6 +32,13 @@
   let selectedReleaseVersion = "";
   let downloadError: string | null = null;
   let downloading = false;
+  // Ein laufender Auftrag besitzt die Fortschrittsanzeige: Quelle und Typ
+  // werden beim Start festgehalten. Was danach an Auswahl passiert – auch
+  // reaktiv, etwa weil eine eintreffende Release-Liste die GitHub-Quelle
+  // verfügbar macht – darf die Anzeige nicht mehr umschalten.
+  let activeJob: { source: "github" | "file"; type: FirmwareUploadType } | null = null;
+  $: viewSource = activeJob?.source ?? source;
+  $: viewType = activeJob?.type ?? uploadType;
 
   // Nicht jeder Grund ist ein Erreichbarkeitsproblem – die Überschrift darf das
   // also nicht pauschal behaupten.
@@ -100,8 +107,11 @@
     ? [githubSourceOption, fileSourceOption]
     : [fileSourceOption];
   $: githubUnavailable = unavailableInfo($firmwareStatusStore.error);
-  // Quelle nie unter einem laufenden Upload wegziehen – daran hängt die Anzeige.
-  $: sourceSwitchable = $uploaderStatus < FirmwareUploadStatus.uploading;
+  // Quelle nie unter einem laufenden Auftrag wegziehen – daran hängt die
+  // Anzeige. Der Uploader-Status allein reicht dafür nicht: Zwischen
+  // Dateiauswahl und Upload-Start steht er auf fileSelected, und während der
+  // Mower flasht steht er längst auf success.
+  $: sourceSwitchable = activeJob === null;
   $: if (sourceSwitchable && !githubAvailable && source === "github") source = "file";
   $: if (sourceSwitchable && githubAvailable && !sourcePinned && uploadType === FirmwareUploadType.modem) {
     source = "github";
@@ -127,6 +137,7 @@
     fileSize = file.size;
 
     if (file !== null) {
+      activeJob = { source: "file", type: uploadType };
       uploader.upload(uploadType);
     }
   }
@@ -149,6 +160,7 @@
     if (!version || downloading) return;
 
     resetUploadState();
+    activeJob = { source: "github", type: FirmwareUploadType.modem };
     downloading = true;
     try {
       await uploader.installGithubRelease(version);
@@ -160,6 +172,7 @@
   }
 
   function resetUploadState() {
+    activeJob = null;
     uploader.file = null;
     fileSize = 0;
     flashProgress = null;
@@ -245,8 +258,8 @@
 
   function close() {
     const isSuccess =
-      ($uploaderStatus === FirmwareUploadStatus.success && uploadType === FirmwareUploadType.modem) ||
-      (flashStatus === FirmwareFlashStatus.success && uploadType === FirmwareUploadType.mower);
+      ($uploaderStatus === FirmwareUploadStatus.success && viewType === FirmwareUploadType.modem) ||
+      (flashStatus === FirmwareFlashStatus.success && viewType === FirmwareUploadType.mower);
 
     if (isSuccess) document.location.reload();
     resetUploadState();
@@ -258,13 +271,13 @@
   let githubFlashProgress: Readable<number> = uploader.githubFlashProgress;
   let githubBuffered: Readable<boolean> = uploader.githubBuffered;
 
-  $: if (source === "file" && uploadType === FirmwareUploadType.modem && $uploaderStatus === FirmwareUploadStatus.expectReboot) {
+  $: if (viewSource === "file" && viewType === FirmwareUploadType.modem && $uploaderStatus === FirmwareUploadStatus.expectReboot) {
     startFlashWatch("modem");
-  } else if (uploadType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success) {
+  } else if (viewType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success) {
     startFlashWatch("mower");
   }
 
-  $: if (uploadType === FirmwareUploadType.modem && $uploaderStatus === FirmwareUploadStatus.success) {
+  $: if (viewType === FirmwareUploadType.modem && $uploaderStatus === FirmwareUploadStatus.success) {
     flashProgress = 100;
     flashStatus = FirmwareFlashStatus.success;
     stopWatchdog();
@@ -273,7 +286,7 @@
   $: flashInProgress =
     $uploaderStatus === FirmwareUploadStatus.uploading ||
     $uploaderStatus === FirmwareUploadStatus.expectReboot ||
-    (uploadType === FirmwareUploadType.mower &&
+    (viewType === FirmwareUploadType.mower &&
       $uploaderStatus === FirmwareUploadStatus.success &&
       flashStatus !== FirmwareFlashStatus.success &&
       flashStatus !== FirmwareFlashStatus.error);
@@ -321,7 +334,7 @@
     {#if flashInProgress}
       <InlineNotification kind="warning" title="Do not interrupt power" hideCloseButton lowContrast />
     {/if}
-    {#if $uploaderStatus < FirmwareUploadStatus.fileSelected}
+    {#if !activeJob && $uploaderStatus < FirmwareUploadStatus.fileSelected}
       <div style="width: 100%; margin-bottom: 1rem; position: relative; z-index: 1000;">
         <Dropdown
           titleText="Select firmware type"
@@ -357,23 +370,23 @@
       {/if}
     {/if}
     <div style="width: 100%;">
-      {#if source === "file" && $uploaderStatus >= FirmwareUploadStatus.fileSelected}
+      {#if viewSource === "file" && $uploaderStatus >= FirmwareUploadStatus.fileSelected}
         <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
           <ProgressBar
             value={$uploaderProgress}
             max={100}
             status={
               $uploaderStatus == FirmwareUploadStatus.error ? 'error' :
-              (uploadType === FirmwareUploadType.modem && flashStatus === FirmwareFlashStatus.success) ? 'finished' :
-              (uploadType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success) ? 'finished' :
-              (uploadType === FirmwareUploadType.modem && $uploaderStatus === FirmwareUploadStatus.success) ? 'finished' :
+              (viewType === FirmwareUploadType.modem && flashStatus === FirmwareFlashStatus.success) ? 'finished' :
+              (viewType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success) ? 'finished' :
+              (viewType === FirmwareUploadType.modem && $uploaderStatus === FirmwareUploadStatus.success) ? 'finished' :
               undefined
             }
             helperText="Upload progress"
           />
         </div>
       {/if}
-      {#if source === "github" && $uploaderStatus >= FirmwareUploadStatus.uploading && $uploaderStatus < FirmwareUploadStatus.success}
+      {#if viewSource === "github" && $uploaderStatus >= FirmwareUploadStatus.uploading && $uploaderStatus < FirmwareUploadStatus.success}
         {#if $githubBuffered}
           <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
             <ProgressBar
@@ -408,7 +421,7 @@
           </div>
         {/if}
       {/if}
-      {#if flashProgress != null || (uploadType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success)}
+      {#if flashProgress != null || (viewType === FirmwareUploadType.mower && $uploaderStatus === FirmwareUploadStatus.success)}
         <div class="progress-bar-container" style="width: 100%; margin-bottom: 1rem;">
           <ProgressBar
             value={flashStatus === FirmwareFlashStatus.success ? 100 : (flashProgress != null ? Math.round(Math.min(Math.max(flashProgress, 0), 100)) : 0)}
@@ -419,7 +432,7 @@
         </div>
       {/if}
     </div>
-    {#if $uploaderStatus < FirmwareUploadStatus.uploading && source === "github"}
+    {#if !activeJob && source === "github"}
       {#if releaseOptions.length > 0}
         <div class="release-picker">
           <Dropdown
@@ -460,7 +473,7 @@
         <InlineNotification kind="error" title="Download failed" subtitle={downloadError} hideCloseButton lowContrast />
       {/if}
     {/if}
-    {#if source === "file" && $uploaderStatus < FirmwareUploadStatus.uploading}
+    {#if !activeJob && source === "file"}
       <p>Select the firmware update file on your computer.</p>
       <FileUploaderButton
         bind:ref
@@ -470,46 +483,46 @@
         labelText="Select..."
       />
     {/if}
-    {#if source === "file" && $uploaderStatus >= FirmwareUploadStatus.fileSelected}
+    {#if viewSource === "file" && $uploaderStatus >= FirmwareUploadStatus.fileSelected}
       <p>Size: {fileSize} bytes</p>
     {/if}
 
     {#if $uploaderStatus === FirmwareUploadStatus.uploading}
-      <p>{source === "github" ? "Downloading and installing the modem firmware..." : `Uploading the ${uploadType} firmware update...`}</p>
+      <p>{viewSource === "github" ? "Downloading and installing the modem firmware..." : `Uploading the ${viewType} firmware update...`}</p>
     {/if}
-    {#if $uploaderStatus === FirmwareUploadStatus.success && uploadType === FirmwareUploadType.mower && flashStatus !== FirmwareFlashStatus.success}
-      <p>The {uploadType} firmware has been uploaded successfully.</p>
-      <p>Flashing {uploadType} firmware in progress... {flashError ? `(${flashError})` : ''}</p>
+    {#if $uploaderStatus === FirmwareUploadStatus.success && viewType === FirmwareUploadType.mower && flashStatus !== FirmwareFlashStatus.success}
+      <p>The {viewType} firmware has been uploaded successfully.</p>
+      <p>Flashing {viewType} firmware in progress... {flashError ? `(${flashError})` : ''}</p>
     {/if}
     
-    {#if $uploaderStatus === FirmwareUploadStatus.expectReboot && uploadType === FirmwareUploadType.modem}
+    {#if $uploaderStatus === FirmwareUploadStatus.expectReboot && viewType === FirmwareUploadType.modem}
       <p>The modem firmware was downloaded, verified, and installed successfully.</p>
       <p>Waiting for the modem to restart...</p>
     {/if}
 
     {#if $uploaderStatus === FirmwareUploadStatus.error}
-      <p>The {uploadType} firmware update failed!</p>
+      <p>The {viewType} firmware update failed!</p>
       <p>The error message is <i>{uploader.error}</i></p>
     {/if}
 
     {#if flashStatus === FirmwareFlashStatus.error}
-      <p>The {uploadType} firmware flash failed!</p>
+      <p>The {viewType} firmware flash failed!</p>
       {#if flashError}
         <p>The error message is <i>{flashError}</i></p>
       {/if}
     {/if}
 
-    {#if ($uploaderStatus === FirmwareUploadStatus.success && uploadType === FirmwareUploadType.modem) || 
-         (flashStatus === FirmwareFlashStatus.success && uploadType === FirmwareUploadType.mower)}
-      <p>The {uploadType} firmware update has been installed successfully.</p>
+    {#if ($uploaderStatus === FirmwareUploadStatus.success && viewType === FirmwareUploadType.modem) || 
+         (flashStatus === FirmwareFlashStatus.success && viewType === FirmwareUploadType.mower)}
+      <p>The {viewType} firmware update has been installed successfully.</p>
     {/if}
   </ModalBody>
   <ModalFooter
     secondaryButtonText="Cancel"
     primaryButtonText="Close"
     primaryButtonDisabled={!(
-      ($uploaderStatus === FirmwareUploadStatus.success && uploadType === FirmwareUploadType.modem) || 
-      (flashStatus === FirmwareFlashStatus.success && uploadType === FirmwareUploadType.mower) ||
+      ($uploaderStatus === FirmwareUploadStatus.success && viewType === FirmwareUploadType.modem) || 
+      (flashStatus === FirmwareFlashStatus.success && viewType === FirmwareUploadType.mower) ||
       (flashStatus === FirmwareFlashStatus.error)
     )}
   />
