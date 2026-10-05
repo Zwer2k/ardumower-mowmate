@@ -241,6 +241,7 @@ export interface DesiredState {
   speed: number;
   mower_motor_enabled: boolean;
   finish_and_restart: boolean;
+  sonar_enabled?: boolean;
   op: number;
   fix_timeout: number;
 }

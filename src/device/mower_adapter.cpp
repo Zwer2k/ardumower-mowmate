@@ -1049,7 +1049,7 @@ bool MowerAdapter::finishAndRestartEnabled(bool enabled)
 // activate and deactivate sonar
 bool MowerAdapter::sonarEnabled(bool enabled)
 {
-  Log(DBG, "%sfinishAndRestartEnabled(%d)", _LOG_CMD_, enabled);
+  Log(DBG, "%ssonarEnabled(%d)", _LOG_CMD_, enabled);
   String command = "AT+C,-1,-1,-1,-1,-1,-1,-1," + String(enabled ? "1" : "0");
 
   return sendCommand(command);
@@ -1861,7 +1861,7 @@ void MowerAdapter::parseATCCommand(const char* line)
           // skipNextMowingPoint
           break;
         case 8:
-          // sonarEnabled
+          _desiredState.sonarEnabled = atoi(val) == 1;
           break;
         case 9:
           _desiredState.mowPwm = atoi(val);

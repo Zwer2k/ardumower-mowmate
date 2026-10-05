@@ -220,7 +220,7 @@
         </label>
         {#if hasSonar}
         <label class="toggle-label">
-            <input type="checkbox"
+            <input type="checkbox" checked={desiredState?.sonar_enabled ?? true}
                    onchange={(e) => send('sonarEnabled', { enabled: e.currentTarget.checked })} />
             Sonar
         </label>

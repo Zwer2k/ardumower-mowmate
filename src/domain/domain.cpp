@@ -77,6 +77,7 @@ const char * _t_desiredState_op = "op";
 const char * _t_desiredState_fixTimeout = "fix_timeout";
 const char * _t_desiredState_mowPwm = "mow_pwm";
 const char * _t_desiredState_mowHeight = "mow_height";
+const char * _t_desiredState_sonarEnabled = "sonar_enabled";
 const char * _t_motorRpm_left = "left";
 const char * _t_motorRpm_right = "right";
 const char * _t_motorRpm_mow = "mow";
@@ -233,6 +234,7 @@ void DesiredState::marshal(JsonObject o) const
   o[_t_desiredState_fixTimeout] = fixTimeout;
   o[_t_desiredState_mowPwm] = mowPwm;
   o[_t_desiredState_mowHeight] = mowHeight;
+  o[_t_desiredState_sonarEnabled] = sonarEnabled;
 }
 
 bool MotorRpm::operator==(const MotorRpm &other)
