@@ -53,6 +53,15 @@ jobs:
       - name: Build ESP32 firmware
         run: pio run -e esp32
 
+      - name: Locate boot_app0.bin
+        id: boot_app0
+        run: |
+          path=$(find ~/.platformio/packages \
+            -path '*framework-arduinoespressif32*/tools/partitions/boot_app0.bin' \
+            | sort | head -n1)
+          test -n "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
       - name: Collect ESP32 artifacts
         run: |
           mkdir -p artifacts/esp32
@@ -60,6 +69,7 @@ jobs:
           cp -v .pio/build/esp32/firmware.elf artifacts/esp32/
           cp -v .pio/build/esp32/partitions.bin artifacts/esp32/
           cp -v .pio/build/esp32/bootloader.bin artifacts/esp32/
+          cp -v "${{ steps.boot_app0.outputs.path }}" artifacts/esp32/
 
       - name: Build ESP32-S3 UI
         working-directory: ui
@@ -83,6 +93,7 @@ jobs:
           cp -v .pio/build/esp32-S3-N16-R8/firmware.elf artifacts/esp32-s3/
           cp -v .pio/build/esp32-S3-N16-R8/partitions.bin artifacts/esp32-s3/
           cp -v .pio/build/esp32-S3-N16-R8/bootloader.bin artifacts/esp32-s3/
+          cp -v "${{ steps.boot_app0.outputs.path }}" artifacts/esp32-s3/
 
       - uses: actions/upload-artifact@v7
         with:
@@ -200,3 +211,78 @@ jobs:
             artifacts/esp32/*.elf
             artifacts/esp32-s3/*.bin
             artifacts/esp32-s3/*.elf
+
+  pages:
+    # Publishes the browser-based firmware installer to GitHub Pages. The site
+    # is assembled from the published releases rather than from this run's
+    # artifacts, so both the stable and the nightly channel stay available no
+    # matter which event triggered the deployment.
+    needs: [build, release, nightly]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      needs.release.result != 'failure' &&
+      needs.nightly.result != 'failure' &&
+      (github.ref == 'refs/heads/main' ||
+       startsWith(github.ref, 'refs/tags/v') ||
+       github.event_name == 'schedule' ||
+       github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assemble web installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p site/stable site/nightly
+          cp -v web-flasher/index.html site/
+          touch site/.nojekyll
+
+          # Only the images the installer flashes; the .elf files and zips stay
+          # on the release page.
+          download() {
+            local tag="$1" dir="$2" platform part
+            for platform in esp32 esp32-s3; do
+              for part in bootloader partitions boot_app0 firmware; do
+                gh release download "$tag" --dir "$dir" --clobber \
+                  --pattern "$platform-$part.bin" \
+                  || echo "::warning::$tag has no $platform-$part.bin"
+              done
+            done
+          }
+
+          stable_tag=$(gh api "repos/$GH_REPO/releases/latest" -q .tag_name || true)
+          if [ -n "$stable_tag" ]; then
+            download "$stable_tag" site/stable
+            ci/bin/make-flasher-manifest.sh site/stable "$stable_tag"
+          else
+            echo "::warning::no stable release found"
+          fi
+
+          nightly_name=$(gh api "repos/$GH_REPO/releases/tags/nightly" -q .name || true)
+          if [ -n "$nightly_name" ]; then
+            download nightly site/nightly
+            ci/bin/make-flasher-manifest.sh site/nightly "$nightly_name"
+          else
+            echo "::warning::no nightly release found"
+          fi
+
+          find site -type f | sort
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v5

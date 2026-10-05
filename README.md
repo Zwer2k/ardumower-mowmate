@@ -216,6 +216,17 @@ See the [ESP32-S3 PCB 1.3 pinout](docs/screenshots/esp32-s3-pcb13-pinout.svg) fo
 
 Flashing the firmware onto the ESP32 for the first time requires some effort. Subsequent updates can be installed comfortably using the MowMate web interface.
 
+### Web installer (no tooling required)
+
+Open the [MowMate Web Installer](https://zwer2k.github.io/ardumower-mowmate/) in
+Chrome, Edge or Opera, connect the board over USB and press *Connect & install*.
+The board type is detected automatically, so the same button serves both the
+ESP32 and the ESP32-S3. Leave the *Erase device* checkbox unchecked to keep the
+maps, schedules and settings stored in SPIFFS. See
+[docs/web-flasher.md](docs/web-flasher.md) for how the installer is built and
+for the flash offsets to use with `esptool` or Espressif's Flash Download
+Tool.
+
 ### Pre-built binaries
 
 Download the latest release binary and installation files from the [releases page](https://github.com/Zwer2k/ardumower-mowmate/releases). Follow the flashing instructions included with the release package.

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MowMate Web Installer</title>
+<meta name="description" content="Flash MowMate firmware onto an ESP32 or ESP32-S3 straight from your browser.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --fg: #1b1f23;
+    --muted: #5c6670;
+    --line: #dfe3e8;
+    --accent: #2e7d32;
+    --accent-fg: #ffffff;
+    --warn-bg: #fff8e1;
+    --warn-line: #e6c86a;
+    --code-bg: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181c;
+      --card: #1d2126;
+      --fg: #e7eaee;
+      --muted: #9aa4af;
+      --line: #313740;
+      --accent: #4caf50;
+      --accent-fg: #0f1215;
+      --warn-bg: #2b2616;
+      --warn-line: #6b5a23;
+      --code-bg: #121519;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2.5rem 1rem 4rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { font-size: 1.9rem; margin: 0 0 .25rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; }
+  .lede { color: var(--muted); margin: 0 0 2rem; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1.5rem;
+  }
+  .channels { display: flex; gap: .5rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+  .channels button {
+    font: inherit;
+    padding: .45rem 1rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .channels button[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-fg);
+  }
+  .install { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  button.primary {
+    font: inherit;
+    font-weight: 600;
+    padding: .7rem 1.5rem;
+    border-radius: 8px;
+    border: 0;
+    background: var(--accent);
+    color: var(--accent-fg);
+    cursor: pointer;
+  }
+  #version { color: var(--muted); font-size: .9rem; }
+  .notice {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+    border-radius: 8px;
+    padding: .85rem 1rem;
+    margin-top: 1.25rem;
+    font-size: .92rem;
+  }
+  ol, ul { padding-left: 1.3rem; }
+  li { margin: .35rem 0; }
+  code {
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: .1rem .35rem;
+    font-size: .88em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: .9rem 1rem;
+    overflow-x: auto;
+    font-size: .85rem;
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--accent); }
+  footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; }
+  details { margin: .5rem 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>MowMate Web Installer</h1>
+  <p class="lede">
+    Flash the MowMate firmware onto your ArduMower modem board directly from this
+    page &mdash; no PlatformIO, no esptool, no driver juggling. Your board is
+    detected automatically, so the same button works for the ESP32 and the
+    ESP32-S3.
+  </p>
+
+  <div class="card">
+    <div class="channels" role="group" aria-label="Firmware channel">
+      <button type="button" data-channel="stable" aria-pressed="true">Stable</button>
+      <button type="button" data-channel="nightly" aria-pressed="false">Nightly</button>
+    </div>
+
+    <div class="install">
+      <esp-web-install-button id="installer">
+        <button slot="activate" class="primary">Connect &amp; install</button>
+        <span slot="unsupported">
+          Your browser cannot talk to serial devices. Use desktop Chrome, Edge
+          or Opera &mdash; Firefox and Safari do not implement Web Serial.
+        </span>
+        <span slot="not-allowed">
+          This page must be served over HTTPS to access the serial port.
+        </span>
+      </esp-web-install-button>
+      <span id="version"></span>
+    </div>
+
+    <p class="notice" id="channel-missing" hidden>
+      No firmware has been published for this channel yet.
+    </p>
+
+    <p class="notice">
+      The installer asks whether to erase the device first. Leave the
+      <em>Erase device</em> checkbox <strong>unchecked</strong> to keep the
+      <code>spiffs</code> partition &mdash; your saved maps, mowing schedules
+      and settings survive the update that way. Tick it only for a board you
+      want to start over from scratch.
+    </p>
+  </div>
+
+  <h2>Before you start</h2>
+  <ol>
+    <li>Connect the modem board to your computer with a USB data cable.</li>
+    <li>
+      An ESP32-S3 DevKit can be flashed through either of its USB sockets. If
+      one of them does not show up, try the other.
+    </li>
+    <li>
+      Close anything else holding the port &mdash; a serial monitor, the
+      PlatformIO terminal, or <code>screen</code>.
+    </li>
+    <li>
+      Press <em>Connect &amp; install</em> and pick the board's serial port from
+      the browser dialog.
+    </li>
+  </ol>
+  <p>
+    After flashing, MowMate starts an access point called
+    <code>ardumower-modem</code>. Join it and open
+    <a href="http://192.168.4.1/">192.168.4.1</a> to configure WiFi and the
+    mower connection.
+  </p>
+
+  <h2>Troubleshooting</h2>
+  <details>
+    <summary>The port does not appear, or the connection fails</summary>
+    <p>
+      Put the board into download mode by hand: hold <strong>BOOT</strong>
+      (GPIO0), tap <strong>RESET</strong>, then release BOOT, and try again.
+      Some boards also need their USB-serial driver installed
+      (CP210x or CH341).
+    </p>
+  </details>
+  <details>
+    <summary>Flashing fails part way through</summary>
+    <p>
+      A weak USB cable or an unpowered hub is the usual cause. Use a short
+      cable plugged straight into the computer. If the board is wired to the
+      mower, disconnect the Sunray serial lines while flashing.
+    </p>
+  </details>
+  <details>
+    <summary>I want to erase everything, including maps and settings</summary>
+    <p>
+      Tick <em>Erase device</em> in the dialog that appears after you press
+      <em>Connect &amp; install</em>. This clears the whole flash chip,
+      including the stored maps, schedules and WiFi credentials, and then
+      writes a fresh firmware.
+    </p>
+  </details>
+  <details>
+    <summary>I would rather flash from the command line</summary>
+    <p>
+      Download the <code>bootloader</code>, <code>partitions</code>,
+      <code>boot_app0</code> and <code>firmware</code> binaries from the
+      <a href="https://github.com/Zwer2k/ardumower-mowmate/releases">releases
+      page</a> and see <code>docs/web-flasher.md</code> for the matching flash
+      offsets.
+    </p>
+  </details>
+
+  <footer>
+    <a href="https://github.com/Zwer2k/ardumower-mowmate">MowMate on GitHub</a>
+    &middot; flashing powered by
+    <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a>
+  </footer>
+</main>
+
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<script>
+  const installer = document.getElementById("installer");
+  const versionEl = document.getElementById("version");
+  const missingEl = document.getElementById("channel-missing");
+  const buttons = document.querySelectorAll(".channels button");
+
+  async function selectChannel(channel) {
+    for (const button of buttons) {
+      button.setAttribute("aria-pressed", String(button.dataset.channel === channel));
+    }
+
+    const manifest = `${channel}/manifest.json`;
+    versionEl.textContent = "";
+    missingEl.hidden = true;
+
+    let info = null;
+    try {
+      const response = await fetch(manifest, { cache: "no-cache" });
+      if (response.ok) info = await response.json();
+    } catch (error) {
+      // Treated the same as a missing manifest below.
+    }
+
+    if (!info) {
+      installer.hidden = true;
+      missingEl.hidden = false;
+      return;
+    }
+
+    installer.hidden = false;
+    installer.manifest = manifest;
+    installer.setAttribute("manifest", manifest);
+    versionEl.textContent = `${info.name} ${info.version}`;
+  }
+
+  for (const button of buttons) {
+    button.addEventListener("click", () => selectChannel(button.dataset.channel));
+  }
+
+  selectChannel("stable");
+</script>
+</body>
+</html>
