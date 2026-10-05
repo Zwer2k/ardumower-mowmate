@@ -1792,7 +1792,22 @@ void MowerAdapter::parseATWCommand(const char* line)
 
   if (values.size() < 3) return; // Mindestens Index, x, y
 
-  int widx = (int)values[0];
+  // The index comes off the wire. A negative one wrote before the buffer, a huge
+  // one resized it until the heap ran out. Sunray counts points in a short, and
+  // a gap means lost blocks, not a reason to allocate the hole.
+  static const int kMaxWaypointIndex = 32767;
+  static const int kMaxIndexGap = 1000;
+  const float rawIdx = values[0];
+  if (!(rawIdx >= 0.0f && rawIdx <= (float)kMaxWaypointIndex)) {
+    Log(ERR, "%sparseATWCommand: ungültiger Index %s", _LOG_, line);
+    return;
+  }
+  int widx = (int)rawIdx;
+  const int lastIdx = widx + (int)((values.size() - 1) / 2) - 1;
+  if (lastIdx > kMaxWaypointIndex || widx > (int)tempWaypointsBuffer.size() + kMaxIndexGap) {
+    Log(ERR, "%sparseATWCommand: Index %d außerhalb des Bereichs (Buffer %d)", _LOG_, widx, (int)tempWaypointsBuffer.size());
+    return;
+  }
   size_t dataStart = 1;
 
   using namespace ArduMower::Domain::Robot;
