@@ -241,6 +241,9 @@ namespace ArduMower
         void uploadMapToMower();
         void processUploadToMower();
         void abortMapChunkSend();
+        // Aborts a map transfer to the browsers unless the map is uploaded to the
+        // mower. Both hold the same read lock; only the transfer may be dropped.
+        void abortMapChunkSendForMapChange();
         void sendWaypointsDirect(const std::vector<ArduMower::Domain::Robot::MapPoint> &waypoints, uint32_t timestamp);
         void pushDrivenTrackPoint(float x, float y, uint32_t timestamp);
         void sendDrivenTrack(UiSocketItem *sendTo = NULL);

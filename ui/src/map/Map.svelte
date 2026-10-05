@@ -10,7 +10,9 @@
   import MowerPosition from "./MowerPosition.svelte";
   import Obstacles from "./Obstacles.svelte";
   import { MapStore, cloneMap, buildMapSetData, calculatePresentation } from "./service";
-  import { socketStore, socketService } from "../stores/socket";
+  import { socketStore, socketService, editMapEventStore } from "../stores/socket";
+  import type { EditMapEvent } from "../stores/socket";
+  import { toastStore } from "../stores/toast";
   import { mowSettingsStore } from "./mow-settings";
   import { filterWaypointsByToggles } from "./core/waypoint-filter";
   import { openConfirm, openConfirmChoice } from "../stores/confirm-dialog";
@@ -391,6 +393,10 @@
   }
 
   function onSaveMap() {
+    if (socketService.isEditRecovering()) {
+      toastStore.set({ msg: "The map is still being restored after a modem restart, try again in a moment.", type: "error" });
+      return;
+    }
     if (mapSyncTimer) {
       clearTimeout(mapSyncTimer);
       mapSyncTimer = null;
@@ -1031,6 +1037,42 @@
     }
   } else if (edit) {
     wasEditing = true;
+  }
+  // Store updates made inside a reactive statement do not re-run the reactive
+  // statements Svelte already evaluated in that pass (canSave stayed false after
+  // a restore). Both side effects therefore run after the update.
+  // The microtask also keeps the closing sync above going to the edited map.
+  $: {
+    const active = edit;
+    queueMicrotask(() => socketService.setEditActive(active));
+  }
+
+  // Ignore an event that was already handled before this component mounted.
+  let lastEditMapEventSeq = get(editMapEventStore)?.seq ?? 0;
+  const unsubscribeEditMapEvent = editMapEventStore.subscribe((ev) => handleEditMapEvent(ev));
+  onDestroy(unsubscribeEditMapEvent);
+  function handleEditMapEvent(ev: EditMapEvent | null) {
+    if (!ev || ev.seq === lastEditMapEventSeq) return;
+    lastEditMapEventSeq = ev.seq;
+    if (ev.type === "recovered") {
+      if (!edit) return;
+      // The modem reloaded the map from flash; push the local edits back as a draft.
+      const mapData = buildMapSetData(get(MapStore).map, compassRotation);
+      lastSyncedMap = JSON.stringify(mapData);
+      isMapDirty.set(true);
+      socketService.sendMap(mapData);
+      if (!ev.quiet) {
+        toastStore.set({ msg: "The modem restarted while editing. Your changes were restored, save to keep them.", type: "success" });
+      }
+    } else {
+      stopEditForMapChange();
+      const id = $socketStore.currentMapId;
+      if (id) {
+        mapWorkflowStore.startLoadMap(id);
+        socketService.sendLoadMap(id);
+      }
+      toastStore.set({ msg: "The modem switched to another map while editing. Editing stopped, the changes were not saved.", type: "error" });
+    }
   }
 
   // ─── Goto state ────────────────────────────────────────────────────────────
