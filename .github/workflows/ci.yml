@@ -238,7 +238,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # A commit that carries a release tag is deployed by the tag's own run,
+      # once its release is uploaded. Deploying it from the main run as well
+      # raced that run and could overwrite the finished installer.
+      - name: Skip if a release tag run deploys this commit
+        id: tagged
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git fetch --quiet --depth=1 origin "+refs/tags/v*:refs/tags/v*"
+          if git tag --points-at HEAD | grep -q '^v'; then
+            echo "::notice::$(git tag --points-at HEAD | grep '^v' | head -n1) deploys this commit"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Assemble web installer
+        if: steps.tagged.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -260,12 +274,31 @@ jobs:
             done
           }
 
-          stable_tag=$(gh api "repos/$GH_REPO/releases/latest" -q .tag_name || true)
+          # The newest stable release whose installer images are all uploaded.
+          # Pushing main and a tag together starts two runs; the main run used
+          # to pick the new release before the tag run had uploaded its files
+          # and published an installer without a stable channel.
+          stable_tag=""
+          for tag in $(gh api "repos/$GH_REPO/releases?per_page=20" \
+              -q '.[] | select(.draft == false and .prerelease == false) | .tag_name'); do
+            assets=$(gh api "repos/$GH_REPO/releases/tags/$tag" -q '.assets[].name')
+            complete=true
+            for platform in esp32 esp32-s3; do
+              for part in bootloader partitions boot_app0 firmware; do
+                grep -qx "$platform-$part.bin" <<< "$assets" || complete=false
+              done
+            done
+            if $complete; then
+              stable_tag="$tag"
+              break
+            fi
+            echo "::notice::$tag is not complete yet, trying the previous release"
+          done
           if [ -n "$stable_tag" ]; then
             download "$stable_tag" site/stable
             ci/bin/make-flasher-manifest.sh site/stable "$stable_tag"
           else
-            echo "::warning::no stable release found"
+            echo "::warning::no complete stable release found"
           fi
 
           nightly_name=$(gh api "repos/$GH_REPO/releases/tags/nightly" -q .name || true)
@@ -278,11 +311,14 @@ jobs:
 
           find site -type f | sort
 
-      - uses: actions/configure-pages@v6
+      - if: steps.tagged.outputs.skip != 'true'
+        uses: actions/configure-pages@v6
 
-      - uses: actions/upload-pages-artifact@v5
+      - if: steps.tagged.outputs.skip != 'true'
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
       - id: deploy
+        if: steps.tagged.outputs.skip != 'true'
         uses: actions/deploy-pages@v5
