@@ -2,11 +2,15 @@
 // (Grad-Offsets um 0,0, umgerechnet mit 111111 m/Grad): rund 31 x 20 m,
 // 20 Exclusions. Auf dem ESP32-S3 stürzte die Berechnung mit dem Muster Rings
 // ab. Der Test prüft, dass jede Mustervariante eine Route liefert, und gibt
-// Laufzeit und Wegpunktzahl aus, damit Ausreißer auffallen.
+// Laufzeit und Wegpunktzahl aus, damit Ausreißer auffallen. Zusätzlich darf
+// kein Segment den Perimeter verlassen oder durch eine Exclusion führen
+// (route_check.h); bei Verstößen landet ein SVG in out/.
 #include <pathplanner.h>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include "route_check.h"
 
 using namespace ArduMower::Modem::PathPlannerCore;
 
@@ -40,7 +44,7 @@ static Map makeMap() {
 }
 int main() {
     const char *names[] = {"lines", "squares", "rings"};
-    const float widths[] = {0.12f, 0.18f, 0.25f, 0.30f};
+    const float widths[] = {0.12f, 0.14f, 0.18f, 0.25f, 0.30f};
     int failures = 0;
     for (int pattern = 0; pattern <= 2; pattern++) {
         for (float width : widths) {
@@ -59,11 +63,28 @@ int main() {
                     bool finite = true;
                     for (const auto &p : route)
                         if (!std::isfinite(p.X) || !std::isfinite(p.Y)) finite = false;
-                    bool ok = route.size() >= 2 && finite;
+                    Map original = makeMap();
+                    auto violations = route_check::check(original, route);
+                    bool ok = route.size() >= 2 && finite && violations.empty();
                     if (!ok) failures++;
-                    std::printf("%s %-7s width=%.2f dtb=%d laps=%d -> %5zu waypoints %6.0f ms\n",
+                    std::printf("%s %-7s width=%.2f dtb=%d laps=%d -> %5zu waypoints %6.0f ms %zu violation(s)\n",
                                 ok ? "ok  " : "FAIL", names[pattern], width, dtb, laps,
-                                route.size(), ms);
+                                route.size(), ms, violations.size());
+                    for (const auto &v : violations) {
+                        std::printf("       seg %5zu tags %u->%u len %6.2f m: %s depth %.2f m\n",
+                                    v.segment, v.tagFrom, v.tagTo, v.length,
+                                    v.outside ? "outside perimeter" : "through exclusion",
+                                    v.depth);
+                        if (!v.outside) std::printf("         (exclusion #%d)\n", v.exclusion);
+                    }
+                    if (!violations.empty()) {
+                        if (std::system("mkdir -p out") == 0) {
+                            char file[128];
+                            std::snprintf(file, sizeof(file), "out/cassandra_%s_w%.2f_d%d_l%d.svg",
+                                          names[pattern], width, dtb, laps);
+                            route_check::writeSvg(file, original, route, violations);
+                        }
+                    }
                 }
             }
         }

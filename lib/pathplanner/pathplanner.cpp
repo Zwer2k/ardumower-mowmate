@@ -164,25 +164,6 @@ std::vector<Polygon> offsetPolygonInward(const Polygon &poly, double dist) {
     return result;
 }
 
-static void nearestOnBoundary(const Point &p, const Polygon &poly,
-    size_t &edgeIdx, Point &proj)
-{
-    edgeIdx = 0;
-    proj = poly.empty() ? p : poly[0];
-    double bestDist = std::numeric_limits<double>::max();
-    for (size_t i = 0; i < poly.size(); i++) {
-        size_t j = (i + 1) % poly.size();
-        double dx = poly[j].X - poly[i].X, dy = poly[j].Y - poly[i].Y;
-        double len2 = dx*dx + dy*dy;
-        if (len2 < 0.001) continue;
-        double tt = std::max(0.0, std::min(1.0,
-            ((p.X - poly[i].X)*dx + (p.Y - poly[i].Y)*dy) / len2));
-        Point pp = {poly[i].X + tt*dx, poly[i].Y + tt*dy};
-        double d = distance(p, pp);
-        if (d < bestDist) { bestDist = d; edgeIdx = i; proj = pp; }
-    }
-}
-
 // Check if a point lies on (or very close to) any polygon edge.
 static bool pointOnBoundary(const Point &p, const Polygon &poly, double tolSq = 1e-6) {
     if (poly.size() < 2) return false;
@@ -235,239 +216,335 @@ static Point nearestPointOnPolygon(const Point &p, const Polygon &poly) {
     return best;
 }
 
+// ---------------------------------------------------------------------------
+// FreeSpaceRouter
+// ---------------------------------------------------------------------------
+
+static double signedArea(const Polygon &poly) { return polygonArea(poly); }
+
+FreeSpaceRouter::FreeSpaceRouter(const Polygon &container,
+    const std::vector<Polygon> &obstacles,
+    const std::vector<Polygon> &preferredRoutes)
+    : container_(container)
+{
+    auto boxOf = [](const Polygon &poly) {
+        Box b{std::numeric_limits<double>::max(), std::numeric_limits<double>::max(),
+              -std::numeric_limits<double>::max(), -std::numeric_limits<double>::max()};
+        for (const auto &p : poly) {
+            b.minX = std::min(b.minX, p.X); b.maxX = std::max(b.maxX, p.X);
+            b.minY = std::min(b.minY, p.Y); b.maxY = std::max(b.maxY, p.Y);
+        }
+        return b;
+    };
+    containerBox_ = boxOf(container_);
+    for (const auto &o : obstacles) {
+        if (o.size() < 3) continue;
+        obstacles_.push_back(o);
+        obstacleBoxes_.push_back(boxOf(o));
+    }
+
+    // Knoten: Ecken, an denen ein kürzester Weg abknicken kann. Beim Container
+    // sind das die nach innen gerichteten (konkaven) Ecken, bei Hindernissen die
+    // nach außen gerichteten (konvexen). Hindernisecken werden entlang der
+    // Winkelhalbierenden um CLEARANCE in den freien Raum geschoben, damit der
+    // Mäher nicht auf der Exclusion-Kante fährt. Containerecken bleiben auf dem
+    // Perimeter: Verbindungen laufen dort wie bisher auf dem Rand und nicht in
+    // dem Streifen, den "distance to border" frei halten soll.
+    auto addCorners = [&](const Polygon &poly, bool isObstacle) {
+        const size_t n = poly.size();
+        if (n < 3) return;
+        const double orient = signedArea(poly) >= 0 ? 1.0 : -1.0;
+        for (size_t i = 0; i < n; i++) {
+            const Point &u = poly[(i + n - 1) % n];
+            const Point &v = poly[i];
+            const Point &w = poly[(i + 1) % n];
+            if (distance(u, v) < 1e-6 || distance(v, w) < 1e-6) continue;
+            const double turn = crossProduct(u, v, w) * orient; // >0: konvex
+            const bool convex = turn > 1e-12;
+            const bool reflex = turn < -1e-12;
+            if (isObstacle ? !convex : !reflex) continue;
+            if (!isObstacle) {
+                if (pointFree(v)) addNode(v, &u, &w);
+                continue;
+            }
+            double ax = u.X - v.X, ay = u.Y - v.Y;
+            double bx = w.X - v.X, by = w.Y - v.Y;
+            const double la = std::sqrt(ax * ax + ay * ay), lb = std::sqrt(bx * bx + by * by);
+            ax /= la; ay /= la; bx /= lb; by /= lb;
+            double dx = ax + bx, dy = ay + by;
+            const double ld = std::sqrt(dx * dx + dy * dy);
+            if (ld < 1e-9) continue;
+            dx /= ld; dy /= ld;
+            // (dx,dy) zeigt in den Innenwinkel der Ecke. Bei konvexen
+            // Hindernisecken und konkaven Containerecken liegt der freie Raum
+            // auf der Gegenseite. Der Abstand wird so skaliert, dass die Kanten
+            // selbst CLEARANCE entfernt bleiben (begrenzt bei spitzen Winkeln).
+            const double sinHalf = std::abs(ax * dy - ay * dx);
+            const double d = CLEARANCE / std::max(sinHalf, 0.25);
+            Point node{v.X - dx * d, v.Y - dy * d};
+            if (pointFree(node)) addNode(node, &u, &w);
+        }
+    };
+    addCorners(container_, false);
+    for (const auto &o : obstacles_) addCorners(o, true);
+
+    // Suchdraht: Punkte als zusätzliche Knoten, Kanten entlang des Drahts
+    // werden mit halbem Gewicht bevorzugt.
+    for (const auto &routePoly : preferredRoutes) {
+        size_t prevIdx = std::numeric_limits<size_t>::max();
+        for (const auto &p : routePoly) {
+            if (!pointFree(p)) { prevIdx = std::numeric_limits<size_t>::max(); continue; }
+            addNode(p, nullptr, nullptr);
+            const size_t idx = nodes_.size() - 1;
+            if (prevIdx != std::numeric_limits<size_t>::max()) {
+                if (preferred_.size() < nodes_.size()) preferred_.resize(nodes_.size());
+                preferred_[prevIdx].push_back(idx);
+                preferred_[idx].push_back(prevIdx);
+            }
+            prevIdx = idx;
+        }
+    }
+    primaryCount_ = nodes_.size();
+    // Rückfallebene: alle Original-Ecken, die auf dem freien Rand liegen.
+    auto addRawCorners = [&](const Polygon &poly) {
+        const size_t n = poly.size();
+        for (size_t i = 0; i < n; i++)
+            if (pointFree(poly[i])) addNode(poly[i], &poly[(i + n - 1) % n], &poly[(i + 1) % n]);
+    };
+    addRawCorners(container_);
+    for (const auto &o : obstacles_) addRawCorners(o);
+    preferred_.resize(nodes_.size());
+    visibility_.assign(nodes_.size() * nodes_.size(), -1);
+}
+
+void FreeSpaceRouter::addNode(const Point &p, const Point *prev, const Point *next) {
+    nodes_.push_back(p);
+    cornerPrev_.push_back(prev ? *prev : p);
+    cornerNext_.push_back(next ? *next : p);
+    hasCorner_.push_back(prev && next ? 1 : 0);
+}
+
+// Tangentenregel: Ein kürzester Weg knickt an einer Ecke nur ab, wenn die
+// Linie zur Ecke das Polygon dort nur berührt, beide Nachbarecken also auf
+// derselben Seite der Linie liegen. Kanten, die in das Polygon hineinschneiden
+// würden, werden ohne teure Freiheitsprüfung verworfen.
+bool FreeSpaceRouter::tangentAt(size_t node, const Point &other) const {
+    if (!hasCorner_[node]) return true;
+    const Point &p = nodes_[node];
+    // Sinus des Winkels zwischen Linie und Nachbarkante; fast kollineare
+    // Nachbarn (|sin| < 1e-3) gelten als Berührung, sonst kippt das Vorzeichen
+    // bei Startpunkten auf der Verlängerung einer Kante durch Rundung.
+    auto side = [&](const Point &q) {
+        const double norm = distance(other, p) * distance(q, p);
+        if (norm < 1e-12) return 0.0;
+        const double s = crossProduct(other, p, q) / norm;
+        return std::abs(s) < 1e-3 ? 0.0 : s;
+    };
+    return side(cornerPrev_[node]) * side(cornerNext_[node]) >= 0.0;
+}
+
+bool FreeSpaceRouter::pointFree(const Point &p) const {
+    const double tolSq = BOUNDARY_TOL * BOUNDARY_TOL;
+    if (!pointInPolygon(p, container_) && !pointOnBoundary(p, container_, tolSq)) return false;
+    for (size_t i = 0; i < obstacles_.size(); i++) {
+        const Box &b = obstacleBoxes_[i];
+        if (p.X < b.minX || p.X > b.maxX || p.Y < b.minY || p.Y > b.maxY) continue;
+        if (pointInPolygon(p, obstacles_[i]) && !pointOnBoundary(p, obstacles_[i], tolSq))
+            return false;
+    }
+    return true;
+}
+
+bool FreeSpaceRouter::crossesProperly(const Point &a, const Point &b, const Polygon &poly) const {
+    // Echte Kreuzung: Endpunkte jeweils strikt auf verschiedenen Seiten.
+    // Berühren einer Ecke oder Laufen auf einer Kante zählt nicht.
+    const double eps = 1e-9;
+    for (size_t i = 0; i < poly.size(); i++) {
+        const Point &c = poly[i];
+        const Point &d = poly[(i + 1) % poly.size()];
+        const double o1 = crossProduct(a, b, c), o2 = crossProduct(a, b, d);
+        if (!((o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps))) continue;
+        const double o3 = crossProduct(c, d, a), o4 = crossProduct(c, d, b);
+        if ((o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps)) return true;
+    }
+    return false;
+}
+
+// Parameter t (0..1 entlang a->b) aller Berührungen und Schnitte der Strecke
+// mit den Kanten von poly, inklusive Durchgang durch Ecken und kollinearer
+// Überlappung. Zwischen zwei aufeinanderfolgenden Parametern liegt die Strecke
+// vollständig innerhalb oder außerhalb von poly.
+static void collectTouchParams(const Point &a, const Point &b, const Polygon &poly,
+    std::vector<double> &ts)
+{
+    const double rx = b.X - a.X, ry = b.Y - a.Y;
+    const double len2 = rx * rx + ry * ry;
+    if (len2 < 1e-18) return;
+    const double eps = 1e-9;
+    for (size_t i = 0; i < poly.size(); i++) {
+        const Point &c = poly[i];
+        const Point &d = poly[(i + 1) % poly.size()];
+        const double sx = d.X - c.X, sy = d.Y - c.Y;
+        const double qx = c.X - a.X, qy = c.Y - a.Y;
+        const double denom = rx * sy - ry * sx;
+        if (std::abs(denom) < 1e-12) {
+            // Parallel: nur bei kollinearer Lage relevant.
+            if (std::abs(qx * ry - qy * rx) > 1e-9 * std::sqrt(len2)) continue;
+            for (const Point *e : {&c, &d}) {
+                const double t = ((e->X - a.X) * rx + (e->Y - a.Y) * ry) / len2;
+                if (t > -eps && t < 1 + eps) ts.push_back(std::min(1.0, std::max(0.0, t)));
+            }
+            continue;
+        }
+        const double t = (qx * sy - qy * sx) / denom;
+        const double u = (qx * ry - qy * rx) / denom;
+        if (t > -eps && t < 1 + eps && u > -eps && u < 1 + eps)
+            ts.push_back(std::min(1.0, std::max(0.0, t)));
+    }
+}
+
+bool FreeSpaceRouter::segmentFree(const Point &a, const Point &b) const {
+    const double minX = std::min(a.X, b.X), maxX = std::max(a.X, b.X);
+    const double minY = std::min(a.Y, b.Y), maxY = std::max(a.Y, b.Y);
+    if (crossesProperly(a, b, container_)) return false;
+    std::vector<size_t> near;
+    for (size_t i = 0; i < obstacles_.size(); i++) {
+        const Box &o = obstacleBoxes_[i];
+        if (maxX < o.minX || minX > o.maxX || maxY < o.minY || minY > o.maxY) continue;
+        if (crossesProperly(a, b, obstacles_[i])) return false;
+        near.push_back(i);
+    }
+    // Ohne echte Kreuzung kann die Strecke den freien Raum nur dort verlassen,
+    // wo sie eine Ecke oder Kante berührt (z. B. Sehne durch zwei Ecken eines
+    // Hindernisses). Zwischen je zwei Berührungen ist der Zustand konstant, also
+    // genügt dort ein Test in der Mitte.
+    std::vector<double> ts{0.0, 1.0};
+    collectTouchParams(a, b, container_, ts);
+    for (size_t i : near) collectTouchParams(a, b, obstacles_[i], ts);
+    std::sort(ts.begin(), ts.end());
+    const double tolSq = BOUNDARY_TOL * BOUNDARY_TOL;
+    for (size_t k = 0; k + 1 < ts.size(); k++) {
+        if (ts[k + 1] - ts[k] < 1e-9) continue;
+        const Point p = lerp(a, b, (ts[k] + ts[k + 1]) / 2);
+        if (!pointInPolygon(p, container_) && !pointOnBoundary(p, container_, tolSq)) return false;
+        for (size_t i : near)
+            if (pointInPolygon(p, obstacles_[i]) && !pointOnBoundary(p, obstacles_[i], tolSq))
+                return false;
+    }
+    return true;
+}
+
+bool FreeSpaceRouter::nodeVisible(size_t a, size_t b) const {
+    const size_t n = nodes_.size();
+    signed char &v = visibility_[a * n + b];
+    if (v < 0) {
+        v = segmentFree(nodes_[a], nodes_[b]) ? 1 : 0;
+        visibility_[b * n + a] = v;
+    }
+    return v == 1;
+}
+
+bool FreeSpaceRouter::findRoute(const Point &from, const Point &to, Polygon &path, bool quick) const {
+    if (segmentFree(from, to)) { path = {from, to}; return true; }
+    // Schnell zuerst (versetzte Ecken, nur Tangenten). Knickpunkte, die keine
+    // Polygonecke sind (sich berührende Exclusions), braucht die volle Suche.
+    if (search(from, to, primaryCount_, true, path)) return true;
+    if (quick) return false;
+    if (search(from, to, primaryCount_, false, path)) return true;
+    return nodes_.size() > primaryCount_ && search(from, to, nodes_.size(), false, path);
+}
+
+Polygon FreeSpaceRouter::route(const Point &from, const Point &to) const {
+    Polygon path;
+    if (findRoute(from, to, path)) return path;
+    PP_LOG(0, "%sFreeSpaceRouter: no path (%.2f,%.2f)->(%.2f,%.2f)", _LOG_,
+        from.X, from.Y, to.X, to.Y);
+    return {from, to};
+}
+
+Polygon ConnectorRouting::route(const Point &from, const Point &to) const {
+    Polygon path;
+    for (const FreeSpaceRouter *area : areas) {
+        if (!area->pointFree(from) || !area->pointFree(to)) continue;
+        // Nur die schnelle Suche: Ist die Mähfläche zwischen den Punkten
+        // unterbrochen, würde die vollständige Suche erst nach allen Kanten
+        // aufgeben. Der Perimeter-Router findet den Weg dann direkt.
+        if (area->findRoute(from, to, path, true)) return path;
+    }
+    if (perimeter) return perimeter->route(from, to);
+    return {from, to};
+}
+
+bool FreeSpaceRouter::search(const Point &from, const Point &to, size_t nodeCount,
+    bool tangentOnly, Polygon &path) const {
+    // A* über den Sichtbarkeitsgraphen der ersten nodeCount Knoten;
+    // Index n = from, n + 1 = to.
+    const size_t n = nodeCount;
+    const size_t src = n, dst = n + 1;
+    auto pos = [&](size_t i) -> const Point & {
+        return i == src ? from : (i == dst ? to : nodes_[i]);
+    };
+    std::vector<double> g(n + 2, std::numeric_limits<double>::max());
+    std::vector<int> prev(n + 2, -1);
+    std::vector<char> closed(n + 2, 0);
+    std::vector<signed char> toVisible(n, -1);
+    using Item = std::pair<double, size_t>;
+    std::priority_queue<Item, std::vector<Item>, std::greater<Item>> open;
+    g[src] = 0.0;
+    open.push({distance(from, to), src});
+
+    while (!open.empty()) {
+        const size_t u = open.top().second;
+        open.pop();
+        if (closed[u]) continue;
+        closed[u] = 1;
+        if (u == dst) break;
+        const Point &pu = pos(u);
+
+        auto relax = [&](size_t v, double w) {
+            const double cand = g[u] + w;
+            if (cand < g[v] - 1e-12) {
+                g[v] = cand;
+                prev[v] = (int)u;
+                open.push({cand + distance(pos(v), to), v});
+            }
+        };
+
+        if (u != src) {
+            signed char &tv = toVisible[u];
+            if (tv < 0) tv = segmentFree(pu, to) ? 1 : 0;
+            if (tv == 1) relax(dst, distance(pu, to));
+        }
+        for (size_t v = 0; v < n; v++) {
+            if (closed[v] || v == u) continue;
+            // Tangentenregel nur zwischen zwei Eckknoten: Start- und Zielpunkte
+            // liegen oft direkt auf einer Kante neben der Ecke, dort ist die
+            // Regel zu streng.
+            if (tangentOnly && u != src &&
+                (!tangentAt(v, pu) || !tangentAt(u, nodes_[v]))) continue;
+            const bool visible = u == src ? segmentFree(from, nodes_[v]) : nodeVisible(u, v);
+            if (!visible) continue;
+            double w = distance(pu, nodes_[v]);
+            if (u != src && std::find(preferred_[u].begin(), preferred_[u].end(), v) != preferred_[u].end())
+                w *= 0.5;
+            relax(v, w);
+        }
+    }
+
+    if (prev[dst] < 0) return false;
+    path.clear();
+    for (int u = (int)dst; u >= 0; u = prev[u]) path.push_back(pos((size_t)u));
+    std::reverse(path.begin(), path.end());
+    return true;
+}
+
 Polygon walkBoundaryWithHoles(const Point &from, const Point &to,
     const Polygon &outerBoundary,
     const std::vector<Polygon> &holes,
     const std::vector<Polygon> &preferredRoutes)
 {
-    // Primary route: graph-based Dijkstra over all boundaries (outer + holes).
-    // If that fails to connect the two points, fall back to a simple outer-
-    // boundary walk, which is always hole-free.
-    std::vector<Polygon> boundaries;
-    boundaries.push_back(outerBoundary);
-    for (const auto &h : holes) {
-        if (h.size() >= 3) boundaries.push_back(h);
-    }
-    const size_t preferredStart = boundaries.size();
-    for (const auto &route : preferredRoutes) {
-        if (route.size() < 2) continue;
-        bool safe = true;
-        for (size_t i = 0; i + 1 < route.size() && safe; i++) {
-            for (int sample = 0; sample <= 4; sample++) {
-                Point p = lerp(route[i], route[i + 1], sample / 4.0);
-                if (!pointInPolygon(p, outerBoundary) && !pointOnBoundary(p, outerBoundary)) {
-                    safe = false;
-                    break;
-                }
-                for (const auto &hole : holes) {
-                    if (pointInPolygon(p, hole) || pointOnBoundary(p, hole)) {
-                        safe = false;
-                        break;
-                    }
-                }
-                if (!safe) break;
-            }
-        }
-        if (safe) boundaries.push_back(route);
-    }
-
-    struct Node { Point p; };
-    std::vector<Node> nodes;
-    std::vector<std::vector<std::pair<size_t, double>>> adj;
-    std::vector<size_t> polyStart;
-
-    for (const auto &poly : boundaries) {
-        polyStart.push_back(nodes.size());
-        for (size_t i = 0; i < poly.size(); i++) {
-            nodes.push_back({poly[i]});
-            adj.emplace_back();
-        }
-    }
-
-    for (size_t b = 0; b < boundaries.size(); b++) {
-        const auto &poly = boundaries[b];
-        size_t start = polyStart[b];
-        for (size_t i = 0; i < poly.size(); i++) {
-            size_t j = (i + 1) % poly.size();
-            double d = distance(nodes[start + i].p, nodes[start + j].p);
-            if (b >= preferredStart) d *= 0.5;
-            adj[start + i].push_back({start + j, d});
-            adj[start + j].push_back({start + i, d});
-        }
-    }
-
-    auto project = [&](const Point &p, size_t &polyIdx, size_t &edgeIdx, Point &proj, double &bestDist) {
-        polyIdx = std::numeric_limits<size_t>::max();
-        edgeIdx = 0;
-        proj = p;
-        bestDist = std::numeric_limits<double>::max();
-        for (size_t b = 0; b < boundaries.size(); b++) {
-            const auto &poly = boundaries[b];
-            for (size_t i = 0; i < poly.size(); i++) {
-                size_t j = (i + 1) % poly.size();
-                double dx = poly[j].X - poly[i].X;
-                double dy = poly[j].Y - poly[i].Y;
-                double len2 = dx * dx + dy * dy;
-                if (len2 < 0.001) continue;
-                double t = std::max(0.0, std::min(1.0, ((p.X - poly[i].X) * dx + (p.Y - poly[i].Y) * dy) / len2));
-                Point pp = {poly[i].X + t * dx, poly[i].Y + t * dy};
-                double dd = distance(p, pp);
-                if (dd < bestDist) {
-                    bestDist = dd;
-                    polyIdx = b;
-                    edgeIdx = i;
-                    proj = pp;
-                }
-            }
-        }
-    };
-
-    size_t fromPoly, fromEdge, toPoly, toEdge;
-    Point fromProj, toProj;
-    double fromDist, toDist;
-    project(from, fromPoly, fromEdge, fromProj, fromDist);
-    project(to, toPoly, toEdge, toProj, toDist);
-
-    if (fromPoly == std::numeric_limits<size_t>::max() || toPoly == std::numeric_limits<size_t>::max()) {
-        return {fromProj, toProj};
-    }
-
-    size_t fromNode = nodes.size();
-    nodes.push_back({fromProj});
-    adj.emplace_back();
-    size_t toNode = nodes.size();
-    nodes.push_back({toProj});
-    adj.emplace_back();
-
-    auto connectToEdge = [&](size_t node, size_t polyIdx, size_t edgeIdx) {
-        size_t start = polyStart[polyIdx];
-        const auto &poly = boundaries[polyIdx];
-        size_t i = edgeIdx;
-        size_t j = (edgeIdx + 1) % poly.size();
-        double d1 = distance(nodes[node].p, nodes[start + i].p);
-        double d2 = distance(nodes[node].p, nodes[start + j].p);
-        adj[node].push_back({start + i, d1});
-        adj[start + i].push_back({node, d1});
-        adj[node].push_back({start + j, d2});
-        adj[start + j].push_back({node, d2});
-    };
-    connectToEdge(fromNode, fromPoly, fromEdge);
-    connectToEdge(toNode, toPoly, toEdge);
-
-    std::vector<double> dist(nodes.size(), std::numeric_limits<double>::max());
-    std::vector<int> prev(nodes.size(), -1);
-    dist[fromNode] = 0.0;
-    using PQItem = std::pair<double, size_t>;
-    std::priority_queue<PQItem, std::vector<PQItem>, std::greater<PQItem>> pq;
-    pq.push({0.0, fromNode});
-    while (!pq.empty()) {
-        auto [d, u] = pq.top(); pq.pop();
-        if (d > dist[u] + 1e-9) continue;
-        if (u == toNode) break;
-        for (const auto &[v, w] : adj[u]) {
-            if (dist[u] + w < dist[v] - 1e-9) {
-                dist[v] = dist[u] + w;
-                prev[v] = (int)u;
-                pq.push({dist[v], v});
-            }
-        }
-    }
-
-    Polygon result;
-    if (prev[toNode] != -1) {
-        std::vector<size_t> path;
-        for (int u = (int)toNode; u != -1; u = prev[u]) path.push_back((size_t)u);
-        std::reverse(path.begin(), path.end());
-        for (size_t idx : path) {
-            if (result.empty() || distance(result.back(), nodes[idx].p) > 0.001)
-                result.push_back(nodes[idx].p);
-        }
-        return result;
-    }
-
-    // Fallback: walk along the outer boundary between the two projections.
-    Point fromOuter = nearestPointOnPolygon(from, outerBoundary);
-    Point toOuter = nearestPointOnPolygon(to, outerBoundary);
-
-    size_t iFrom = nearestPointIndex(fromOuter, outerBoundary);
-    size_t iTo = nearestPointIndex(toOuter, outerBoundary);
-    size_t n = outerBoundary.size();
-
-    if (iFrom == iTo || distance(fromOuter, toOuter) < 0.001) {
-        return {fromOuter, toOuter};
-    }
-
-    auto buildPath = [&](size_t startPt, size_t endPt) -> Polygon {
-        Polygon path;
-        path.push_back(fromOuter);
-        for (size_t k = startPt; ; k = (k + 1) % n) {
-            path.push_back(outerBoundary[k]);
-            if (k == endPt) break;
-            if (path.size() > n + 3) break;
-        }
-        path.push_back(toOuter);
-        return path;
-    };
-
-    Polygon cwPath = buildPath((iFrom + 1) % n, iTo);
-    Polygon ccwPath = buildPath((iTo + 1) % n, iFrom);
-
-    double cwLen = 0, ccwLen = 0;
-    for (size_t i = 1; i < cwPath.size(); i++) cwLen += distance(cwPath[i-1], cwPath[i]);
-    for (size_t i = 1; i < ccwPath.size(); i++) ccwLen += distance(ccwPath[i-1], ccwPath[i]);
-
-    return cwLen < ccwLen ? cwPath : ccwPath;
-}
-
-static Polygon walkPerimeter(const Polygon &peri, const Point &from, const Point &to) {
-    Polygon result;
-    if (peri.size() < 3) { result.push_back(to); return result; }
-    size_t n = peri.size();
-
-    size_t iFrom, iTo;
-    Point projFrom, projTo;
-    nearestOnBoundary(from, peri, iFrom, projFrom);
-    nearestOnBoundary(to, peri, iTo, projTo);
-
-    result.push_back(projFrom);
-
-    if (iFrom == iTo || distance(projFrom, projTo) < 0.001) {
-        result.push_back(projTo);
-        return result;
-    }
-
-    auto pathLen = [](const Polygon &p) {
-        double d = 0;
-        for (size_t i = 1; i < p.size(); i++) d += distance(p[i-1], p[i]);
-        return d;
-    };
-
-    auto buildPath = [&](size_t startPt, size_t endPt) -> Polygon {
-        Polygon path;
-        path.push_back(projFrom);
-        if (startPt != endPt) {
-            for (size_t k = startPt; ; k = (k + 1) % n) {
-                path.push_back(peri[k]);
-                if (k == endPt) break;
-                if (path.size() > n + 3) break;
-            }
-        }
-        path.push_back(projTo);
-        return path;
-    };
-
-    std::vector<Polygon> candidates;
-    candidates.push_back(buildPath((iFrom + 1) % n, iTo));
-    candidates.push_back(buildPath((iFrom + 1) % n, (iTo + 1) % n));
-    candidates.push_back(buildPath(iFrom, iTo));
-    candidates.push_back(buildPath(iFrom, (iTo + 1) % n));
-
-    double bestLen = std::numeric_limits<double>::max();
-    for (const auto &c : candidates) {
-        double len = pathLen(c);
-        if (len < bestLen) { bestLen = len; result = c; }
-    }
-    return result;
+    FreeSpaceRouter router(outerBoundary, holes, preferredRoutes);
+    return router.route(from, to);
 }
 
 static Point projectToBoundary(const Point &p, const Polygon &poly) {
@@ -529,33 +606,24 @@ static Polygon pruneOutside(const Polygon &waypoints, const Polygon &area) {
 // that was already traversed earlier, forcing the mower to turn 180 degrees.
 // A point is only dropped when the resulting shortcut stays inside the
 // perimeter, so we never cut across concave corners or exclusion holes.
-static Polygon simplifyRoute(const Polygon &route, const Polygon &perimeter,
+static Polygon simplifyRoute(const Polygon &route, const FreeSpaceRouter &router,
     double epsilon = 0.02) {
     if (route.size() < 3) return route;
 
-    // Helper: check whether the straight segment from->to stays inside the
-    // perimeter (or on its boundary).  We sample a few points along the
-    // segment and accept the shortcut only when every sample is inside.
+    // A shortcut is only accepted when it stays inside the perimeter and
+    // outside every exclusion.
     auto segmentInside = [&](const Point &from, const Point &to) {
-        double segLen = distance(from, to);
-        if (segLen < 1e-6) return true;
-        int samples = std::max(3, (int)(segLen / 0.05));
-        if (samples > 20) samples = 20;
-        for (int k = 0; k <= samples; k++) {
-            double t = (double)k / samples;
-            Point p{from.X + (to.X - from.X) * t, from.Y + (to.Y - from.Y) * t};
-            if (!pointInPolygon(p, perimeter) && !pointOnBoundary(p, perimeter, 1e-6))
-                return false;
-        }
-        return true;
+        return router.segmentFree(from, to);
     };
 
     Polygon out;
     out.reserve(route.size());
     for (size_t i = 0; i < route.size(); i++) {
-        // Skip near-duplicate consecutive points.
+        // Skip near-duplicate consecutive points, unless the point is part of
+        // a detour and the bypass to the next point would cut a corner.
         if (!out.empty() && distance(out.back(), route[i]) < epsilon &&
-            out.back().tag != RouteTagBorder && route[i].tag != RouteTagBorder)
+            out.back().tag != RouteTagBorder && route[i].tag != RouteTagBorder &&
+            (i + 1 >= route.size() || segmentInside(out.back(), route[i + 1])))
             continue;
         // Skip a point when it lies almost on the straight line between its
         // neighbours (collinear within epsilon).  This removes intermediate
@@ -626,9 +694,11 @@ static Polygon simplifyRoute(const Polygon &route, const Polygon &perimeter,
                     if (distToLine < epsilon) {
                         // C is on segment A-B.  Drop B and continue from A
                         // directly to C, but only when the shortcut stays
-                        // inside the perimeter.
+                        // inside the perimeter. C itself must stay: without
+                        // it the next point would be joined to A unchecked.
                         if (segmentInside(a, out[i])) {
                             cleaned.pop_back();
+                            cleaned.push_back(out[i]);
                             continue;
                         }
                     }
@@ -648,7 +718,8 @@ static bool segmentExitsPerimeter(const Point &from, const Point &to, const Poly
 // creates 45° corners that increase ring gaps, so the notch is kept as-is.
 
 Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow,
-    const std::vector<Polygon> &holes, double width, const Point &startNear)
+    const std::vector<Polygon> &holes, double width, const Point &startNear,
+    const ConnectorRouting *routing)
 {
     (void)perimeter;
     PP_LOG(0, "%scalculateRingsPattern width=%.3f holes=%d", _LOG_, width, (int)holes.size());
@@ -805,7 +876,7 @@ Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow
     }
 
     Polygon route;
-    connectPolysUsingPathFinding(route, rings, perimeter, {areaToMow}, holes, true);
+    connectPolysUsingPathFinding(route, rings, perimeter, {areaToMow}, holes, true, {}, routing);
 
     PP_LOG(0, "%scalculateRingsPattern done: %d points", _LOG_, route.size());
     return route;
@@ -846,7 +917,8 @@ std::vector<std::vector<Polygon>> computeBorderLapBoundaries(const Polygon &peri
 }
 
 Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &holes,
-    int laps, bool ccw, const Point &startNear, double width)
+    int laps, bool ccw, const Point &startNear, double width,
+    const FreeSpaceRouter *router)
 {
     PP_LOG(0, "%saddBorderLaps laps=%d ccw=%d width=%.3f", _LOG_, laps, ccw, width);
     if (laps <= 0 || perimeter.size() < 3) return {};
@@ -880,9 +952,28 @@ Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &hole
             if (!ordered.empty() && distance(ordered.back(), ordered[0]) > 0.01)
                 ordered.push_back(ordered[0]);
 
-            for (const auto &p : ordered)
-                if (route.empty() || distance(route.back(), p) > 0.01)
-                    route.push_back(p);
+            // Übergang von der vorherigen Runde: direkt nur, wenn die Linie im
+            // freien Raum bleibt, sonst um Exclusions und Buchten herum.
+            if (router && !route.empty() && !ordered.empty() &&
+                distance(route.back(), ordered[0]) > 0.01) {
+                Polygon conn = router->route(route.back(), ordered[0]);
+                for (size_t k = 1; k + 1 < conn.size(); k++) {
+                    if (distance(route.back(), conn[k]) <= 0.01) continue;
+                    // Umweg innerhalb der Randrunden gehört zur Kategorie Rand
+                    // (wie Umwege innerhalb eines Musters).
+                    Point connector = conn[k];
+                    connector.tag = RouteTagBorder;
+                    route.push_back(connector);
+                }
+            }
+
+            for (const auto &p : ordered) {
+                if (route.empty() || distance(route.back(), p) > 0.01) {
+                    Point lapPoint = p;
+                    lapPoint.tag = RouteTagBorder;
+                    route.push_back(lapPoint);
+                }
+            }
 
             if (!route.empty()) near = route.back();
         }
@@ -1093,7 +1184,8 @@ static double pathTotalLength(const std::vector<Polygon> &paths) {
 void connectPolysUsingPathFinding(Polygon &waypoints, const std::vector<Polygon> &polys,
     const Polygon &perimeter, const std::vector<Polygon> &areasToMow,
     const std::vector<Polygon> &holes, bool ringsMode,
-    const std::vector<Polygon> &preferredRoutes) {
+    const std::vector<Polygon> &preferredRoutes,
+    const ConnectorRouting *routing) {
     waypoints.clear();
 
     // Track ring closing edges that must be inserted after all connectors
@@ -1161,7 +1253,8 @@ void connectPolysUsingPathFinding(Polygon &waypoints, const std::vector<Polygon>
                     }
                 }
                 if (exitsPerimeter || leavesMowArea || crossesHole) {
-                    Polygon conn = walkBoundaryWithHoles(from, to, perimeter, holes, preferredRoutes);
+                    Polygon conn = routing ? routing->route(from, to)
+                        : walkBoundaryWithHoles(from, to, perimeter, holes, preferredRoutes);
                     for (size_t k = 0; k < conn.size(); k++) {
                         if (distance(waypoints.back(), conn[k]) <= 0.01) continue;
                         Point connector = conn[k];
@@ -1267,6 +1360,7 @@ MowableAreas computeMowableAreas(const Polygon &perimeter, const std::vector<Pol
 }
 
 Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
+
     PP_LOG(0, "%scalculateWaypoints pattern=%d width=%.3f angle=%d distToBorder=%d borderLaps=%d",
         _LOG_, settings.pattern, settings.width, settings.angle,
         settings.distanceToBorder, settings.borderLaps);
@@ -1304,6 +1398,21 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
     const std::vector<Polygon> preferredRoutes = map.searchWire.size() >= 2
         ? std::vector<Polygon>{map.searchWire} : std::vector<Polygon>{};
 
+    // Ein Router für alle Verbindungen dieser Berechnung: bleibt im Perimeter
+    // und außerhalb der (originalen) Exclusions.
+    std::vector<Polygon> exclusionObstacles;
+    for (const auto &ex : map.exclusions)
+        if (ex.size() >= 3) exclusionObstacles.push_back(ex);
+    const FreeSpaceRouter router(perimeter, exclusionObstacles, preferredRoutes);
+    // Verbindungen innerhalb des Mähmusters bleiben bevorzugt in der Mähfläche
+    // (Randabstand) und außerhalb der aufgeweiteten Exclusion-Löcher.
+    std::vector<FreeSpaceRouter> areaRouters;
+    areaRouters.reserve(areasToMow.size());
+    for (const auto &area : areasToMow) areaRouters.emplace_back(area, holes, preferredRoutes);
+    ConnectorRouting routing;
+    routing.perimeter = &router;
+    for (const auto &r : areaRouters) routing.areas.push_back(&r);
+
     if (settings.borderLaps > 0 && settings.mowBorderCcw) {
         std::vector<Polygon> borderHoles;
         if (settings.mowExclusionBorder) {
@@ -1311,8 +1420,8 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
                 if (ex.size() >= 3) borderHoles.push_back(ex);
             }
         }
-        Polygon borderLaps = addBorderLaps(perimeter, borderHoles, settings.borderLaps, true, startNear, settings.width);
-        for (auto &point : borderLaps) point.tag = RouteTagBorder;
+        Polygon borderLaps = addBorderLaps(perimeter, borderHoles, settings.borderLaps, true, startNear,
+            settings.width, &router);
         route = borderLaps;
         if (!route.empty()) startNear = route.back();
     }
@@ -1322,7 +1431,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
 
         if (settings.pattern == 2) {
             for (const auto &area : areasToMow) {
-                Polygon ar = calculateRingsPattern(perimeter, area, holes, settings.width, startNear);
+                Polygon ar = calculateRingsPattern(perimeter, area, holes, settings.width, startNear, &routing);
                 for (auto &point : ar) point.tag = RouteTagArea;
                 if (!ar.empty()) allSegments.push_back(ar);
             }
@@ -1387,7 +1496,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
                     sortSolutionPolygonsByDistance(passSegments, startNear);
                     Polygon passRoute;
                     connectPolysUsingPathFinding(passRoute, passSegments, perimeter, areasToMow, holes, false,
-                        preferredRoutes);
+                        preferredRoutes, &routing);
                     passRoute = pruneOutside(passRoute, areasToMow);
                     if (!passRoute.empty()) allSegments.push_back(passRoute);
                 }
@@ -1398,11 +1507,11 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
             sortSolutionPolygonsByDistance(allSegments, startNear);
             Polygon pattern;
             connectPolysUsingPathFinding(pattern, allSegments, perimeter, areasToMow, holes, false,
-                preferredRoutes);
+                preferredRoutes, &routing);
             pattern = pruneOutside(pattern, areasToMow);
 
             if (!route.empty() && !pattern.empty()) {
-                Polygon conn = walkBoundaryWithHoles(route.back(), pattern[0], perimeter, holes);
+                Polygon conn = router.route(route.back(), pattern[0]);
                 for (size_t k = 0; k < conn.size(); k++) {
                     if (distance(route.back(), conn[k]) <= 0.01) continue;
                     Point connector = conn[k];
@@ -1422,10 +1531,10 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
                 if (ex.size() >= 3) borderHoles.push_back(ex);
             }
         }
-        Polygon borderLaps = addBorderLaps(perimeter, borderHoles, settings.borderLaps, false, startNear, settings.width);
-        for (auto &point : borderLaps) point.tag = RouteTagBorder;
+        Polygon borderLaps = addBorderLaps(perimeter, borderHoles, settings.borderLaps, false, startNear,
+            settings.width, &router);
         if (!route.empty() && !borderLaps.empty()) {
-            Polygon conn = walkPerimeter(perimeter, route.back(), borderLaps[0]);
+            Polygon conn = router.route(route.back(), borderLaps[0]);
             for (size_t k = 0; k < conn.size(); k++) {
                 if (distance(route.back(), conn[k]) <= 0.01) continue;
                 Point connector = conn[k];
@@ -1438,10 +1547,10 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
 
     route = pruneOutside(route, perimeter);
 
-    // Final safety pass: ensure no route segment leaves the perimeter.
-    // This can happen for connector segments produced by different pattern
-    // stages (border laps, rings, zigzag) when the direct line cuts across a
-    // concave part of the perimeter or across exclusion holes.
+    // Final safety pass: ensure no route segment leaves the perimeter or runs
+    // through an exclusion. This can happen for connector segments produced by
+    // different pattern stages (border laps, rings, zigzag) when the direct
+    // line cuts across a concave part of the perimeter or across exclusions.
     Polygon safeRoute;
     for (size_t i = 0; i < route.size(); i++) {
         if (i == 0) {
@@ -1452,8 +1561,8 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
         const Point &to = route[i];
         if (distance(from, to) < 0.001 && from.tag == to.tag) continue;
 
-        if (segmentExitsPerimeter(from, to, perimeter)) {
-            Polygon conn = walkBoundaryWithHoles(from, to, perimeter, holes, preferredRoutes);
+        if (!router.segmentFree(from, to)) {
+            Polygon conn = router.route(from, to);
             for (const auto &p : conn) {
                 if (safeRoute.empty() || distance(safeRoute.back(), p) > 0.01) {
                     Point detour = p;
@@ -1474,7 +1583,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
 
     // Remove redundant points and backtracking so perimeter edges are not
     // traversed multiple times and no 180-degree turns remain on the border.
-    route = simplifyRoute(route, perimeter, settings.simplifyEpsilon);
+    route = simplifyRoute(route, router, settings.simplifyEpsilon);
 
     PP_LOG(0, "%scalculateWaypoints done: %d waypoints", _LOG_, route.size());
     return route;
