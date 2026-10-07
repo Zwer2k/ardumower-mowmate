@@ -7,6 +7,8 @@
 #endif
 #include "json.h"
 #include "log.h"
+#include "boot_diag.h"
+#include "mem_policy.h"
 #include "logToUi.h"
 #include "terminal.h"
 
@@ -113,9 +115,9 @@ static bool isPingRequest(const char *data, size_t len) {
 // nodes.  Queuing many messages when heap is low causes frame corruption
 // (observed as "Invalid frame header" / 0x81 prefix bytes inside payloads).
 static bool broadcastHeapOk(size_t payloadLen) {
-  const size_t minHeap = payloadLen * 2 + 8192;
-  if (ESP.getFreeHeap() < minHeap) {
-    Log(WARN, "%s broadcast heap too low (%u free) for %u byte payload, skipping", _LOG_, ESP.getFreeHeap(), (unsigned)payloadLen);
+  if (!ArduMower::Modem::MemPolicy::bufferFits(payloadLen, 8192)) {
+    Log(WARN, "%s broadcast heap too low (%u free, psram %u) for %u byte payload, skipping", _LOG_,
+        ESP.getFreeHeap(), ESP.getMaxAllocPsram(), (unsigned)payloadLen);
     return false;
   }
   return true;
@@ -788,9 +790,9 @@ UiSocketItem* UiSocketHandler::findClient(uint32_t clientId) {
 bool UiSocketHandler::sendTextToId(uint32_t clientId, const char* data, size_t len) {
   size_t textLen = len;
   if (textLen > 512) {
-    size_t minFree = textLen * 2 + 4096;
-    if (ESP.getFreeHeap() < minFree) {
-      Log(WARN, "%s sendTextToId heap too low (%u free) for %u byte payload, skipping", _LOG_, ESP.getFreeHeap(), (unsigned)textLen);
+    if (!ArduMower::Modem::MemPolicy::bufferFits(textLen, 4096)) {
+      Log(WARN, "%s sendTextToId heap too low (%u free, psram %u) for %u byte payload, skipping", _LOG_,
+          ESP.getFreeHeap(), ESP.getMaxAllocPsram(), (unsigned)textLen);
       return false;
     }
   }
@@ -1948,11 +1950,29 @@ void UiSocketHandler::processCalculateWaypoints() {
   // veralteten Bericht zur neuen Route angezeigt bekommt.
   _routeReport = ArduMower::Modem::PathPlanner::RouteReport();
   const float mowSpeed = _source.desiredState().speed;
+
+  // Speicher, Stack und Laufzeit protokollieren und die Phase im RTC-RAM
+  // merken: stürzt der ESP in der Berechnung ab, steht das nach dem Neustart
+  // im Log (BootDiag).
+  char phase[96];
+  snprintf(phase, sizeof(phase), "calculate pattern=%d width=%.2f excl=%u int=%u/%u",
+           settings.pattern, settings.width, (unsigned)map.exclusions.size(),
+           (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+  ArduMower::Modem::BootDiag::setPhase(phase);
+  Log(INFO, "%s processCalculateWaypoints: start heap=%u max=%u psram=%u psramMax=%u stackFree=%u",
+      _LOG_, ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram(), ESP.getMaxAllocPsram(),
+      (unsigned)uxTaskGetStackHighWaterMark(NULL));
+  const uint32_t calcStart = millis();
+
   decltype(ArduMower::Modem::PathPlanner::calculateWaypoints(map, settings, &state)) waypoints;
   try {
+    // Der Planer erzeugt zehntausende kleine Blöcke; ohne diesen Scope füllen
+    // sie den internen RAM (siehe mem_policy.h).
+    ArduMower::Modem::MemPolicy::HeavyAllocScope heavyAlloc;
     waypoints = ArduMower::Modem::PathPlanner::calculateWaypoints(
         map, settings, &state, &_routeReport, mowSpeed);
   } catch (...) {
+    ArduMower::Modem::BootDiag::setPhase(nullptr);
     Log(ERR, "%s processCalculateWaypoints: exception during calculation", _LOG_);
     _routeReport = ArduMower::Modem::PathPlanner::RouteReport();
     sendProgress("calculate", 100, "Failed");
@@ -1960,6 +1980,20 @@ void UiSocketHandler::processCalculateWaypoints() {
     _calculateWaypointsRunning = false;
     return;
   }
+  Log(INFO, "%s processCalculateWaypoints: planner done in %lu ms, %u waypoints, heap=%u max=%u min=%u psram=%u stackFree=%u",
+      _LOG_, (unsigned long)(millis() - calcStart), (unsigned)waypoints.size(),
+      ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getMinFreeHeap(), ESP.getFreePsram(),
+      (unsigned)uxTaskGetStackHighWaterMark(NULL));
+  {
+    char event[128];
+    snprintf(event, sizeof(event), "calc up=%lus pattern=%d wp=%u %lums heap=%u max=%u min=%u",
+             (unsigned long)(millis() / 1000), settings.pattern, (unsigned)waypoints.size(),
+             (unsigned long)(millis() - calcStart), ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+             ESP.getMinFreeHeap());
+    ArduMower::Modem::BootDiag::setLastEvent(event);
+  }
+  snprintf(phase, sizeof(phase), "calculate publish %u waypoints", (unsigned)waypoints.size());
+  ArduMower::Modem::BootDiag::setPhase(phase);
   for (const auto &wp : waypoints)
     map.waypoints.push_back(wp);
 #endif
@@ -1972,6 +2006,7 @@ void UiSocketHandler::processCalculateWaypoints() {
   sendRouteReport();
   sendProgress("calculate", 100, "Complete");
   sendData(ResponseDataType::mowerState, NULL, true);
+  ArduMower::Modem::BootDiag::setPhase(nullptr);
   _calculateWaypointsRunning = false;
 }
 
@@ -2535,9 +2570,9 @@ bool UiSocketHandler::isClientReceivingChunk(uint32_t clientId) const {
 bool UiSocketHandler::sendMapChunkText(uint32_t clientId, const String& text) {
   size_t textLen = text.length();
   if (textLen > 512) {
-    size_t minFree = textLen * 2 + 4096;
-    if (ESP.getFreeHeap() < minFree) {
-      Log(WARN, "%s sendMapChunkText heap too low (%u free) for %u byte payload, skipping", _LOG_, ESP.getFreeHeap(), (unsigned)textLen);
+    if (!ArduMower::Modem::MemPolicy::bufferFits(textLen, 4096)) {
+      Log(WARN, "%s sendMapChunkText heap too low (%u free, psram %u) for %u byte payload, skipping", _LOG_,
+          ESP.getFreeHeap(), ESP.getMaxAllocPsram(), (unsigned)textLen);
       return false;
     }
   }
