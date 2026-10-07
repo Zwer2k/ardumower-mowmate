@@ -14,6 +14,18 @@
   export let selectedExclusionIndex: number | null = null;
   export let onCompassDown: (e: PointerEvent) => void;
   export let mouseMapPos: { x: number; y: number } | null = null;
+
+  // Ab dieser Anzahl bekommt die Exclusion-Liste eine feste Höhe mit Scrollbalken.
+  const EXCLUSION_SCROLL_THRESHOLD = 10;
+
+  // Scrollt die ausgewählte Exclusion in der Liste sichtbar.
+  function revealWhen(node: HTMLElement, active: boolean) {
+    const reveal = (on: boolean) => {
+      if (on) node.scrollIntoView({ block: "nearest" });
+    };
+    reveal(active);
+    return { update: reveal };
+  }
 </script>
 
   <div class="map-top-right" role="group" aria-label="Map overlay controls" on:wheel|stopPropagation>
@@ -32,20 +44,26 @@
     </div>
   {/if}
   <div class="map-point-counts">
+    <div><strong>Total:</strong> {totalPoints}</div>
     <div><strong>Area:</strong> {(socketState.currentMapMeta?.area ?? 0).toFixed(1)} m²</div>
     <div><strong>Perimeter:</strong> {perimeterPoints}</div>
-    {#each exclusionPoints as ep, i}
-      <div class:active={selectedExclusionIndex === i}><strong>Excl #{i}:</strong> {ep}</div>
-    {/each}
     <div><strong>Dock:</strong> {dockpointsPoints}</div>
     <div><strong>Way:</strong> {waypointsPoints}</div>
-    <div><strong>Total:</strong> {totalPoints}</div>
     {#if needsUpload && onUploadMap}
       <button class="sync-btn sync-warn" on:click={onUploadMap} title="Upload this map to the mower">
         ⚠ not synced — upload
       </button>
     {:else}
       <div class:sync-ok={!needsUpload} class:sync-warn={needsUpload}>{needsUpload ? '⚠' : '✓'} {needsUpload ? 'not synced' : 'synced'}</div>
+    {/if}
+    {#if exclusionPoints.length > 0}
+      <div class="exclusion-list" class:scroll={exclusionPoints.length >= EXCLUSION_SCROLL_THRESHOLD}>
+        {#each exclusionPoints as ep, i}
+          <div class:active={selectedExclusionIndex === i} use:revealWhen={selectedExclusionIndex === i}>
+            <strong>Excl #{i}:</strong> {ep}
+          </div>
+        {/each}
+      </div>
     {/if}
   </div>
   <MowAreaToggles />
@@ -92,6 +110,18 @@
     min-width: 120px;
     text-align: right;
     box-sizing: border-box;
+  }
+  .exclusion-list {
+    margin-top: 0.25rem;
+    padding-top: 0.25rem;
+    border-top: 1px solid #e0e0e0;
+  }
+  .exclusion-list.scroll {
+    /* 9 Zeilen sichtbar, der Rest wird gescrollt */
+    max-height: calc(9 * 1.4em);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 0.25rem;
   }
   .map-point-counts .active {
     background: #fff9c4;
