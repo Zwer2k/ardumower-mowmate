@@ -14,6 +14,8 @@
 #endif
 
 #include "api.h"
+#include "boot_diag.h"
+#include "mem_policy.h"
 #include "ble_adapter.h"
 #include "console.h"
 #include "esp_os.h"
@@ -118,6 +120,8 @@ void setup() {
     Serial2.begin(115200, SERIAL_8N1); // ESP32
   #endif
 
+  ArduMower::Modem::MemPolicy::begin();
+  ArduMower::Modem::BootDiag::begin();
   api.begin(&bleAdapter);
   settings.begin();
   scheduleManager.begin();
@@ -191,10 +195,11 @@ void setup() {
     last = now;
     wl_status_t ws = WiFi.status();
     int rssi = WiFi.RSSI();
-    Log(INFO, "heartbeat: up=%lus heap=%u min=%u max=%u wifi=%d rssi=%d ws=%zu http_queue=%zu http_reqs=%u",
-        now / 1000, ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(),
+    Log(INFO, "heartbeat: up=%lus heap=%u min=%u max=%u psram=%u wifi=%d rssi=%d ws=%zu http_queue=%zu http_reqs=%u last_reset=%s",
+        now / 1000, ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram(),
         (int)ws, rssi, socketHandler.clientCount(),
-        httpAdapter.queueSize(), httpAdapter.requestCount());
+        httpAdapter.queueSize(), httpAdapter.requestCount(),
+        ArduMower::Modem::BootDiag::lastResetSummary());
   });
 
   looptime.add("wifi_health", [&]() {
@@ -257,12 +262,35 @@ void setup() {
     uint32_t freeHeap = ESP.getFreeHeap();
     uint32_t maxAlloc = ESP.getMaxAllocHeap();
 
-    // Heap zu fragmentiert – kein sinnvoller Betrieb mehr möglich
+    // Heap zu fragmentiert – kein sinnvoller Betrieb mehr möglich. Kurze
+    // Einbrüche (z. B. während eine große Karte in Stücken an den Browser geht)
+    // erholen sich von selbst; neu gestartet wird erst, wenn der Zustand
+    // FRAG_RESTART_MS lang anhält.
+    static const uint32_t FRAG_RESTART_MS = 10000;
+    static uint32_t fragSince = 0;
+    static uint32_t fragMinMax = 0;
     if (maxAlloc < 2048) {
-      Log(ERR, "wifi_health: heap fragmentiert (max=%u, free=%u) – restart", maxAlloc, freeHeap);
-      delay(100);
-      ESP.restart();
-      return;
+      if (fragSince == 0) {
+        fragSince = now ? now : 1;
+        fragMinMax = maxAlloc;
+        Log(WARN, "wifi_health: heap fragmentiert (max=%u, free=%u, min=%u) - beobachte",
+            maxAlloc, freeHeap, ESP.getMinFreeHeap());
+      }
+      if (maxAlloc < fragMinMax) fragMinMax = maxAlloc;
+      if (now - fragSince >= FRAG_RESTART_MS) {
+        char reason[64];
+        snprintf(reason, sizeof(reason), "heap-fragmented max=%u free=%u min=%u up=%lus",
+                 maxAlloc, freeHeap, ESP.getMinFreeHeap(), (unsigned long)(now / 1000));
+        Log(ERR, "wifi_health: %s - restart", reason);
+        ArduMower::Modem::BootDiag::setRestartReason(reason);
+        delay(100);
+        ESP.restart();
+        return;
+      }
+    } else if (fragSince != 0) {
+      Log(INFO, "wifi_health: heap erholt nach %lu ms (tiefster max=%u, jetzt max=%u free=%u)",
+          (unsigned long)(now - fragSince), fragMinMax, maxAlloc, freeHeap);
+      fragSince = 0;
     }
 
     if (!staMode) {
@@ -274,6 +302,7 @@ void setup() {
       if (now - lastRecovery < 30000) return;
       if (freeHeap < 16384) {
         Log(ERR, "wifi_health: heap critically low (%u), reboot instead of recovery", freeHeap);
+        ArduMower::Modem::BootDiag::setRestartReason("heap-low-wifi-down");
         delay(100);
         ESP.restart();
         return;
@@ -294,6 +323,7 @@ void setup() {
     {
       if (freeHeap < 20480) {
         Log(ERR, "wifi_health: no WS clients for 5min, heap=%u – restarting", freeHeap);
+        ArduMower::Modem::BootDiag::setRestartReason("no-ws-clients-heap-low");
         delay(100);
         ESP.restart();
         return;

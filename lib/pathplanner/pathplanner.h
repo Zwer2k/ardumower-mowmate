@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <functional>
 
 namespace ArduMower {
 namespace Modem {
@@ -61,6 +62,99 @@ struct State {
     Position position;
 };
 
+// Fortschritt der Berechnung in Prozent (0..100). Wird nur bei Änderung des
+// Prozentwerts aufgerufen.
+using ProgressCallback = std::function<void(int percent)>;
+
+// Bildet einen Teilbereich der Gesamtberechnung ab: report(0..1) innerhalb
+// eines Abschnitts wird auf dessen Prozentspanne umgerechnet. sub() teilt einen
+// Abschnitt weiter auf, damit tiefe Schleifen den Fortschritt melden können.
+class Progress {
+public:
+    Progress() = default;
+    Progress(const ProgressCallback *callback, int *last) : callback_(callback), last_(last) {}
+    Progress sub(double from, double to) const {
+        Progress p(*this);
+        p.lo_ = lo_ + (hi_ - lo_) * from;
+        p.hi_ = lo_ + (hi_ - lo_) * to;
+        return p;
+    }
+    void report(double fraction) const {
+        if (!callback_ || !*callback_ || !last_) return;
+        if (fraction < 0) fraction = 0;
+        if (fraction > 1) fraction = 1;
+        const int pct = (int)((lo_ + (hi_ - lo_) * fraction) * 100.0);
+        if (pct <= *last_) return;
+        *last_ = pct;
+        (*callback_)(pct);
+    }
+private:
+    const ProgressCallback *callback_ = nullptr;
+    int *last_ = nullptr;
+    double lo_ = 0.0, hi_ = 1.0;
+};
+
+// Kürzeste Wege durch den freien Raum: innerhalb des Containers (Perimeter)
+// und außerhalb aller Hindernisse (Exclusions). Knoten sind die konkaven Ecken
+// des Containers und die konvexen Ecken der Hindernisse, jeweils um CLEARANCE
+// in den freien Raum versetzt; Kanten sind alle geraden Verbindungen, die den
+// freien Raum nicht verlassen (Sichtbarkeitsgraph). Die Sichtbarkeit zwischen
+// Knoten wird erst bei Bedarf berechnet und über mehrere Anfragen gecacht,
+// daher eine Instanz pro Berechnung wiederverwenden.
+class FreeSpaceRouter {
+public:
+    static constexpr double CLEARANCE = 0.03;   // Abstand der Knoten zum Rand (m)
+    static constexpr double BOUNDARY_TOL = 0.002; // Punkte auf dem Rand gelten als frei (m)
+
+    FreeSpaceRouter(const std::vector<Point> &container,
+        const std::vector<std::vector<Point>> &obstacles,
+        const std::vector<std::vector<Point>> &preferredRoutes = {});
+
+    bool pointFree(const Point &p) const;
+    bool segmentFree(const Point &a, const Point &b) const;
+    // Weg von from nach to (beide enthalten). Ist die direkte Linie frei, ist das
+    // {from, to}; findet sich kein Weg, ebenfalls {from, to}.
+    std::vector<Point> route(const Point &from, const Point &to) const;
+    // Wie route(), meldet aber, ob ein freier Weg gefunden wurde. quick nutzt
+    // nur die schnelle Suche; scheitert sie, ist trotzdem ein Weg möglich.
+    bool findRoute(const Point &from, const Point &to, std::vector<Point> &path,
+        bool quick = false) const;
+
+private:
+    struct Box { double minX, minY, maxX, maxY; };
+    std::vector<Point> container_;
+    std::vector<std::vector<Point>> obstacles_;
+    Box containerBox_;
+    std::vector<Box> obstacleBoxes_;
+    std::vector<Point> nodes_;
+    // Nachbarecken der Polygonecke, aus der ein Knoten stammt (für die
+    // Tangentenregel); hasCorner_ = 0 für Knoten ohne Ecke (Suchdraht).
+    std::vector<Point> cornerPrev_, cornerNext_;
+    std::vector<char> hasCorner_;
+    // nodes_[0, primaryCount_) sind die versetzten Ecken; danach folgen die
+    // Original-Ecken auf dem Rand. Sie werden nur genutzt, wenn die erste Suche
+    // scheitert (enge Durchgänge, in denen versetzte Ecken im Nachbarhindernis
+    // landen).
+    size_t primaryCount_ = 0;
+    std::vector<std::vector<size_t>> preferred_;   // bevorzugte Kanten (Suchdraht)
+    mutable std::vector<signed char> visibility_;  // -1 unbekannt, 0/1
+
+    bool nodeVisible(size_t a, size_t b) const;
+    bool tangentAt(size_t node, const Point &other) const;
+    void addNode(const Point &p, const Point *prev, const Point *next);
+    bool search(const Point &from, const Point &to, size_t nodeCount, bool tangentOnly,
+        std::vector<Point> &path) const;
+    bool crossesProperly(const Point &a, const Point &b, const std::vector<Point> &poly) const;
+};
+
+// Verbindungen innerhalb eines Mähmusters: zuerst innerhalb der Mähfläche
+// (hält den Randabstand ein), sonst innerhalb des ganzen Perimeters.
+struct ConnectorRouting {
+    const FreeSpaceRouter *perimeter = nullptr;
+    std::vector<const FreeSpaceRouter *> areas;
+    std::vector<Point> route(const Point &from, const Point &to) const;
+};
+
 // Core geometry helpers
 double distance(const Point &a, const Point &b);
 double crossProduct(const Point &a, const Point &b, const Point &c);
@@ -101,25 +195,31 @@ std::vector<std::vector<Polygon>> computeBorderLapBoundaries(const Polygon &peri
     const std::vector<Polygon> &holes, int laps, double width);
 
 Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow,
-    const std::vector<Polygon> &holes, double width, const Point &startNear);
+    const std::vector<Polygon> &holes, double width, const Point &startNear,
+    const ConnectorRouting *routing = nullptr, const Progress *progress = nullptr);
+// router (optional) verbindet die einzelnen Runden kollisionsfrei; ohne router
+// werden sie direkt aneinandergehängt.
 Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &holes,
-    int laps, bool ccw, const Point &startNear, double width);
+    int laps, bool ccw, const Point &startNear, double width,
+    const FreeSpaceRouter *router = nullptr);
 
 void sortSolutionPolygonsByDistance(std::vector<Polygon> &solution, const Point &startPt);
 void connectPolysUsingPathFinding(Polygon &waypoints, const std::vector<Polygon> &polys,
     const Polygon &perimeter, const std::vector<Polygon> &areasToMow,
     const std::vector<Polygon> &holes = {}, bool ringsMode = false,
-    const std::vector<Polygon> &preferredRoutes = {});
+    const std::vector<Polygon> &preferredRoutes = {},
+    const ConnectorRouting *routing = nullptr, const Progress *progress = nullptr);
 std::vector<Polygon> clipSegmentsAgainstHoles(const std::vector<Polygon> &segments,
     const std::vector<Polygon> &holes);
-// Sichere Verbindung zweier Punkte entlang der Perimetergrenze (unter
-// Berücksichtigung von Exclusion-Löchern). Wird für die Neuberechnung von
-// Verbindungslinien bei Toggle-Wechseln benötigt.
+// Sichere Verbindung zweier Punkte innerhalb des Perimeters und außerhalb der
+// Exclusion-Löcher (kürzester Weg, siehe FreeSpaceRouter). Wird für die
+// Neuberechnung von Verbindungslinien bei Toggle-Wechseln benötigt.
 Polygon walkBoundaryWithHoles(const Point &from, const Point &to,
     const Polygon &outerBoundary, const std::vector<Polygon> &holes,
     const std::vector<Polygon> &preferredRoutes = {});
 
-Polygon calculateWaypoints(Map &map, Settings &settings, const State *state = nullptr);
+Polygon calculateWaypoints(Map &map, Settings &settings, const State *state = nullptr,
+    const ProgressCallback &progress = {});
 
 } // namespace PathPlannerCore
 } // namespace Modem

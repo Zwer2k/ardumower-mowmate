@@ -196,7 +196,8 @@ Polygon calculateWaypoints(ArduMower::Domain::Robot::MowerMap &map,
     ArduMower::Domain::Robot::MowSettings &settings,
     const ArduMower::Domain::Robot::State::State *state,
     RouteReport *report,
-    float mowSpeed)
+    float mowSpeed,
+    const std::function<void(int percent)> &progress)
 {
     Log(INFO, "%scalculateWaypoints: width=%.2f angle=%d distToBorder=%.2f borderLaps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
         _LOG_, settings.width, settings.angle, settings.distanceToBorder, settings.borderLaps,
@@ -207,7 +208,7 @@ Polygon calculateWaypoints(ArduMower::Domain::Robot::MowerMap &map,
     PPC::Settings ps = toPlannerSettings(settings);
     const PPC::State pstate = toPlannerState(state);
 
-    PPC::Polygon route = PPC::calculateWaypoints(pm, ps, state ? &pstate : nullptr);
+    PPC::Polygon route = PPC::calculateWaypoints(pm, ps, state ? &pstate : nullptr, progress);
     Log(INFO, "%scalculateWaypoints: core produced %d waypoints", _LOG_, route.size());
 
     Polygon full;
