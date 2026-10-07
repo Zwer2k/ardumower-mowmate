@@ -1,5 +1,6 @@
 #pragma once
 #ifdef ENABLE_MAP
+#include <functional>
 #include <vector>
 #include "mower_map.h"
 #include "domain.h"
@@ -43,12 +44,14 @@ struct RouteReport {
 };
 
 // Berechnet die Route. Ist report gesetzt, wird zusätzlich die Routenprüfung
-// ausgeführt; mowSpeed geht nur in die Zeitschätzung ein.
+// ausgeführt; mowSpeed geht nur in die Zeitschätzung ein. progress erhält den
+// Fortschritt der Planung in Prozent (nur bei Änderung).
 Polygon calculateWaypoints(ArduMower::Domain::Robot::MowerMap &map,
     ArduMower::Domain::Robot::MowSettings &settings,
     const ArduMower::Domain::Robot::State::State *state = nullptr,
     RouteReport *report = nullptr,
-    float mowSpeed = 0.3f);
+    float mowSpeed = 0.3f,
+    const std::function<void(int percent)> &progress = {});
 
 // Filtert eine bereits berechnete Route anhand der Runtime-Toggles.
 Polygon filterRouteByToggles(const Polygon &route,

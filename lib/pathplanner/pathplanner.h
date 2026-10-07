@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <functional>
 
 namespace ArduMower {
 namespace Modem {
@@ -59,6 +60,38 @@ struct Position {
 struct State {
     int job;
     Position position;
+};
+
+// Fortschritt der Berechnung in Prozent (0..100). Wird nur bei Änderung des
+// Prozentwerts aufgerufen.
+using ProgressCallback = std::function<void(int percent)>;
+
+// Bildet einen Teilbereich der Gesamtberechnung ab: report(0..1) innerhalb
+// eines Abschnitts wird auf dessen Prozentspanne umgerechnet. sub() teilt einen
+// Abschnitt weiter auf, damit tiefe Schleifen den Fortschritt melden können.
+class Progress {
+public:
+    Progress() = default;
+    Progress(const ProgressCallback *callback, int *last) : callback_(callback), last_(last) {}
+    Progress sub(double from, double to) const {
+        Progress p(*this);
+        p.lo_ = lo_ + (hi_ - lo_) * from;
+        p.hi_ = lo_ + (hi_ - lo_) * to;
+        return p;
+    }
+    void report(double fraction) const {
+        if (!callback_ || !*callback_ || !last_) return;
+        if (fraction < 0) fraction = 0;
+        if (fraction > 1) fraction = 1;
+        const int pct = (int)((lo_ + (hi_ - lo_) * fraction) * 100.0);
+        if (pct <= *last_) return;
+        *last_ = pct;
+        (*callback_)(pct);
+    }
+private:
+    const ProgressCallback *callback_ = nullptr;
+    int *last_ = nullptr;
+    double lo_ = 0.0, hi_ = 1.0;
 };
 
 // Kürzeste Wege durch den freien Raum: innerhalb des Containers (Perimeter)
@@ -163,7 +196,7 @@ std::vector<std::vector<Polygon>> computeBorderLapBoundaries(const Polygon &peri
 
 Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow,
     const std::vector<Polygon> &holes, double width, const Point &startNear,
-    const ConnectorRouting *routing = nullptr);
+    const ConnectorRouting *routing = nullptr, const Progress *progress = nullptr);
 // router (optional) verbindet die einzelnen Runden kollisionsfrei; ohne router
 // werden sie direkt aneinandergehängt.
 Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &holes,
@@ -175,7 +208,7 @@ void connectPolysUsingPathFinding(Polygon &waypoints, const std::vector<Polygon>
     const Polygon &perimeter, const std::vector<Polygon> &areasToMow,
     const std::vector<Polygon> &holes = {}, bool ringsMode = false,
     const std::vector<Polygon> &preferredRoutes = {},
-    const ConnectorRouting *routing = nullptr);
+    const ConnectorRouting *routing = nullptr, const Progress *progress = nullptr);
 std::vector<Polygon> clipSegmentsAgainstHoles(const std::vector<Polygon> &segments,
     const std::vector<Polygon> &holes);
 // Sichere Verbindung zweier Punkte innerhalb des Perimeters und außerhalb der
@@ -185,7 +218,8 @@ Polygon walkBoundaryWithHoles(const Point &from, const Point &to,
     const Polygon &outerBoundary, const std::vector<Polygon> &holes,
     const std::vector<Polygon> &preferredRoutes = {});
 
-Polygon calculateWaypoints(Map &map, Settings &settings, const State *state = nullptr);
+Polygon calculateWaypoints(Map &map, Settings &settings, const State *state = nullptr,
+    const ProgressCallback &progress = {});
 
 } // namespace PathPlannerCore
 } // namespace Modem

@@ -719,7 +719,7 @@ static bool segmentExitsPerimeter(const Point &from, const Point &to, const Poly
 
 Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow,
     const std::vector<Polygon> &holes, double width, const Point &startNear,
-    const ConnectorRouting *routing)
+    const ConnectorRouting *routing, const Progress *progress)
 {
     (void)perimeter;
     PP_LOG(0, "%scalculateRingsPattern width=%.3f holes=%d", _LOG_, width, (int)holes.size());
@@ -734,6 +734,16 @@ Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow
     // rings overlap slightly and no unmowed gaps appear when rings are
     // smoothed or clipped by exclusions.
     const double step = width * Tune::ringSpacingFactor;
+    // Fortschritt: Ringe erzeugen (gemessen ~1/4 der Zeit), dann verbinden.
+    // Die Zahl der Ringe ist vorab unbekannt; 2*Fläche/Umfang schätzt den
+    // größten Versatz (exakt für Kreis und Quadrat).
+    const Progress ringsProgress = progress ? progress->sub(0.0, 0.25) : Progress();
+    const Progress connectProgress = progress ? progress->sub(0.25, 1.0) : Progress();
+    double outline = 0.0;
+    for (size_t i = 0; i < areaToMow.size(); i++)
+        outline += distance(areaToMow[i], areaToMow[(i + 1) % areaToMow.size()]);
+    const double estimatedLevels = outline > 0
+        ? std::max(1.0, 2.0 * std::abs(polygonArea(areaToMow)) / outline / step) : 1.0;
     std::vector<Polygon> rings;
     double offset = 0.0;
     bool first = true;
@@ -849,6 +859,7 @@ Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow
         if (!anyValid) break;
         offset += step;
         ringLevel++;
+        ringsProgress.report(std::min(0.95, ringLevel / estimatedLevels));
     }
 
     if (rings.empty()) return {};
@@ -876,7 +887,9 @@ Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow
     }
 
     Polygon route;
-    connectPolysUsingPathFinding(route, rings, perimeter, {areaToMow}, holes, true, {}, routing);
+    ringsProgress.report(1.0);
+    connectPolysUsingPathFinding(route, rings, perimeter, {areaToMow}, holes, true, {}, routing,
+        progress ? &connectProgress : nullptr);
 
     PP_LOG(0, "%scalculateRingsPattern done: %d points", _LOG_, route.size());
     return route;
@@ -1185,7 +1198,7 @@ void connectPolysUsingPathFinding(Polygon &waypoints, const std::vector<Polygon>
     const Polygon &perimeter, const std::vector<Polygon> &areasToMow,
     const std::vector<Polygon> &holes, bool ringsMode,
     const std::vector<Polygon> &preferredRoutes,
-    const ConnectorRouting *routing) {
+    const ConnectorRouting *routing, const Progress *progress) {
     waypoints.clear();
 
     // Track ring closing edges that must be inserted after all connectors
@@ -1195,6 +1208,7 @@ void connectPolysUsingPathFinding(Polygon &waypoints, const std::vector<Polygon>
     std::vector<Closure> closures;
 
     for (size_t i = 0; i < polys.size(); i++) {
+        if (progress) progress->report((double)i / polys.size());
         const auto &poly = polys[i];
         if (poly.empty()) continue;
 
@@ -1359,7 +1373,15 @@ MowableAreas computeMowableAreas(const Polygon &perimeter, const std::vector<Pol
     return result;
 }
 
-Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
+Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
+    const ProgressCallback &progressCallback) {
+    // Prozentspannen der Abschnitte (gemessen: das Muster braucht ~90 % der Zeit).
+    int lastPercent = -1;
+    const Progress progress(&progressCallback, &lastPercent);
+    const Progress patternProgress = progress.sub(0.03, 0.85);
+    const Progress borderProgress = progress.sub(0.85, 0.92);
+    const Progress safetyProgress = progress.sub(0.92, 0.99);
+    progress.report(0.0);
 
     PP_LOG(0, "%scalculateWaypoints pattern=%d width=%.3f angle=%d distToBorder=%d borderLaps=%d",
         _LOG_, settings.pattern, settings.width, settings.angle,
@@ -1430,14 +1452,26 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
         std::vector<Polygon> allSegments;
 
         if (settings.pattern == 2) {
+            // Fortschritt je Fläche nach Flächenanteil.
+            double totalArea = 0.0, doneArea = 0.0;
+            for (const auto &area : areasToMow) totalArea += std::abs(polygonArea(area));
             for (const auto &area : areasToMow) {
-                Polygon ar = calculateRingsPattern(perimeter, area, holes, settings.width, startNear, &routing);
+                const double share = totalArea > 0 ? std::abs(polygonArea(area)) / totalArea : 1.0;
+                const Progress areaProgress = patternProgress.sub(doneArea, doneArea + share);
+                doneArea += share;
+                Polygon ar = calculateRingsPattern(perimeter, area, holes, settings.width, startNear, &routing,
+                    &areaProgress);
                 for (auto &point : ar) point.tag = RouteTagArea;
                 if (!ar.empty()) allSegments.push_back(ar);
             }
         } else {
             int passes = (settings.pattern == 1) ? 2 : 1;
             for (int pass = 0; pass < passes; pass++) {
+                // Je Durchgang: Schneiden (schnell), dann Verbinden.
+                const Progress passProgress = patternProgress.sub((double)pass / passes,
+                    (double)(pass + 1) / passes);
+                const Progress passConnect = passProgress.sub(0.1, 1.0);
+                passProgress.report(0.0);
                 double angleDeg = settings.angle + (pass == 1 ? 90.0 : 0.0);
 
                 auto rotatedAreas = rotatePolygons(areasToMow, -angleDeg);
@@ -1495,8 +1529,9 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
                         for (auto &point : segment) point.tag = RouteTagArea;
                     sortSolutionPolygonsByDistance(passSegments, startNear);
                     Polygon passRoute;
+                    passProgress.report(0.1);
                     connectPolysUsingPathFinding(passRoute, passSegments, perimeter, areasToMow, holes, false,
-                        preferredRoutes, &routing);
+                        preferredRoutes, &routing, &passConnect);
                     passRoute = pruneOutside(passRoute, areasToMow);
                     if (!passRoute.empty()) allSegments.push_back(passRoute);
                 }
@@ -1524,6 +1559,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
         }
     }
 
+    patternProgress.report(1.0);
     if (settings.borderLaps > 0 && !settings.mowBorderCcw) {
         std::vector<Polygon> borderHoles;
         if (settings.mowExclusionBorder) {
@@ -1545,6 +1581,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
         route.insert(route.end(), borderLaps.begin(), borderLaps.end());
     }
 
+    borderProgress.report(1.0);
     route = pruneOutside(route, perimeter);
 
     // Final safety pass: ensure no route segment leaves the perimeter or runs
@@ -1553,6 +1590,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
     // line cuts across a concave part of the perimeter or across exclusions.
     Polygon safeRoute;
     for (size_t i = 0; i < route.size(); i++) {
+        if ((i & 63) == 0) safetyProgress.report((double)i / route.size());
         if (i == 0) {
             safeRoute.push_back(route[i]);
             continue;
@@ -1585,6 +1623,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state) {
     // traversed multiple times and no 180-degree turns remain on the border.
     route = simplifyRoute(route, router, settings.simplifyEpsilon);
 
+    progress.report(1.0);
     PP_LOG(0, "%scalculateWaypoints done: %d waypoints", _LOG_, route.size());
     return route;
 }

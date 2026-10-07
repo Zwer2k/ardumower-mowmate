@@ -1969,8 +1969,24 @@ void UiSocketHandler::processCalculateWaypoints() {
     // Der Planer erzeugt zehntausende kleine Blöcke; ohne diesen Scope füllen
     // sie den internen RAM (siehe mem_policy.h).
     ArduMower::Modem::MemPolicy::HeavyAllocScope heavyAlloc;
+    // Fortschritt an den Browser: höchstens alle 300 ms, Planung = 0..95 %,
+    // die letzten Prozent gehören dem Verteilen der Route (100 beendet die
+    // Anzeige). Gesendet wird aus loop(); AsyncTCP überträgt auf dem anderen
+    // Kern, während die Berechnung weiterläuft.
+    uint32_t lastProgressMs = 0;
+    int lastProgressPct = -1;
+    auto onProgress = [&](int percent) {
+      const int pct = percent * 95 / 100;
+      const uint32_t now = millis();
+      if (pct <= lastProgressPct || now - lastProgressMs < 300) return;
+      lastProgressMs = now;
+      lastProgressPct = pct;
+      sendProgress("calculate", pct, "Calculating waypoints...");
+      sendData(ResponseDataType::mowerState, NULL, true);
+      yield();
+    };
     waypoints = ArduMower::Modem::PathPlanner::calculateWaypoints(
-        map, settings, &state, &_routeReport, mowSpeed);
+        map, settings, &state, &_routeReport, mowSpeed, onProgress);
   } catch (...) {
     ArduMower::Modem::BootDiag::setPhase(nullptr);
     Log(ERR, "%s processCalculateWaypoints: exception during calculation", _LOG_);
@@ -1994,6 +2010,8 @@ void UiSocketHandler::processCalculateWaypoints() {
   }
   snprintf(phase, sizeof(phase), "calculate publish %u waypoints", (unsigned)waypoints.size());
   ArduMower::Modem::BootDiag::setPhase(phase);
+  sendProgress("calculate", 96, "Sending route...");
+  sendData(ResponseDataType::mowerState, NULL, true);
   for (const auto &wp : waypoints)
     map.waypoints.push_back(wp);
 #endif
