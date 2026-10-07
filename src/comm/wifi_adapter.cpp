@@ -180,6 +180,8 @@ void Adapter::loopSta()
     disconnectedSince = 0;
     auto ip = WiFi.localIP().toString();
     Log(INFO, "WiFi::Adapter::STA::IP(%s)", ip.c_str());
+    Log(INFO, "WiFi::Adapter::STA::link(rssi=%d channel=%d sleep=%s)", WiFi.RSSI(), (int)WiFi.channel(),
+        WiFi.getSleep() ? "on" : "off");
     trySyncTime();
   }
   else
@@ -296,6 +298,11 @@ void Adapter::beginSta()
   _staTimeoutStart = millis();
   WiFi.setHostname(_settings.general.name.c_str());
   WiFi.mode(WIFI_STA);
+  // Der WLAN-Stromsparmodus weckt das Funkteil nur zu den Beacons des Routers:
+  // 30-600 ms Antwortzeit, bei 5,7 KB TCP-Fenster also nur wenige KB/s. Bei
+  // aktivem Bluetooth verlangt das ESP-IDF den Stromsparmodus (sonst Abbruch
+  // beim Start), daher nur ohne BLE abschalten.
+  WiFi.setSleep(_settings.bluetooth.enabled);
 
   if (_settings.wifi.sta_ip_mode == 1 && 
       _settings.wifi.sta_ip != "" && 
