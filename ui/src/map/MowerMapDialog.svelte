@@ -7,6 +7,7 @@
   } from "carbon-components-svelte";
   import IconCopy from "carbon-icons-svelte/lib/Copy.svelte";
   import IconDocumentDownload from "carbon-icons-svelte/lib/DocumentDownload.svelte";
+  import IconDocumentImport from "carbon-icons-svelte/lib/DocumentImport.svelte";
   import {
     exportMowerMap,
     importMowerMap,
@@ -17,7 +18,7 @@
     importGeoJson,
     isGeoJsonFeatureCollection,
   } from "./core/map-formats";
-  import type { MapFormat } from "./core/map-formats";
+  import type { GeoJsonReference, MapFormat } from "./core/map-formats";
   import type { Map } from "../model";
   import { SaveSuccess } from "../stores/success";
   import type { MowSettingsData } from "../model";
@@ -40,6 +41,8 @@
   let jsonText = "";
   let importError = "";
   let exportError = "";
+  let fileInput: HTMLInputElement;
+  let fileName = "";
 
   $: if (open) {
     mode = "export";
@@ -47,19 +50,32 @@
     jsonText = exportMowerMap(map, { rotation });
     importError = "";
     exportError = "";
+    fileName = "";
+  }
+
+  /**
+   * Referenz fuer die CaSSAndRA-Umrechnung:
+   * - relative: immer (0,0), die ausgeblendeten lon/lat-Werte werden ignoriert
+   *   (wie die Firmware, die im Relative-Modus AT+P mit 0/0 sendet)
+   * - absolute: konfigurierte lon/lat, undefined wenn nicht gesetzt
+   */
+  function geoJsonReference(): GeoJsonReference | undefined {
+    const position = get(BackendSettings)?.position;
+    if (position?.mode !== "absolute") return { lon: 0, lat: 0 };
+    const configured = Number.isFinite(position.lon) && Number.isFinite(position.lat) &&
+      (position.lon !== 0 || position.lat !== 0);
+    return configured ? { lon: position.lon, lat: position.lat } : undefined;
   }
 
   function doExport(): string {
     if (format === "geojson") {
-      const position = get(BackendSettings)?.position;
-      const hasReference = position && Number.isFinite(position.lon) && Number.isFinite(position.lat) &&
-        (position.lon !== 0 || position.lat !== 0);
-      if (!hasReference) {
+      const reference = geoJsonReference();
+      if (!reference) {
         exportError = "Configure the reference longitude/latitude in Position settings before exporting CaSSAndRA GeoJSON.";
         return "";
       }
       exportError = "";
-      return exportGeoJson(map, { lon: position.lon, lat: position.lat });
+      return exportGeoJson(map, reference);
     }
     exportError = "";
     return exportMowerMap(map, { rotation });
@@ -73,6 +89,22 @@
       jsonText = doExport();
     } else {
       jsonText = "";
+      fileName = "";
+    }
+  }
+
+  async function handleFileSelected(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    try {
+      jsonText = await file.text();
+      fileName = file.name;
+      importError = "";
+      format = isGeoJsonFeatureCollection(jsonText.trim()) ? "geojson" : "mower";
+    } catch (e) {
+      importError = `Could not read file ${file.name}.`;
     }
   }
 
@@ -132,19 +164,20 @@
   function handleImport() {
     const trimmed = jsonText.trim();
     if (!trimmed) {
-      importError = "Paste JSON first.";
+      importError = "Select a file or paste JSON first.";
       return;
     }
 
     if (format === "geojson" || isGeoJsonFeatureCollection(trimmed)) {
-      const position = get(BackendSettings)?.position;
-      const hasReference = position && Number.isFinite(position.lon) && Number.isFinite(position.lat) &&
-        (position.lon !== 0 || position.lat !== 0);
-      const result = importGeoJson(trimmed, hasReference ? { lon: position.lon, lat: position.lat } : undefined);
+      const absolute = get(BackendSettings)?.position?.mode === "absolute";
+      const reference = geoJsonReference();
+      const result = importGeoJson(trimmed, reference);
       if (!result) {
-        importError = hasReference
-          ? `Failed to import CaSSAndRA GeoJSON. Check Position reference longitude/latitude (${position.lon}, ${position.lat}).`
-          : "Failed to import CaSSAndRA GeoJSON. Configure the reference longitude/latitude in Position settings first.";
+        importError = !absolute
+          ? "Failed to import CaSSAndRA GeoJSON. The file contains absolute WGS84 coordinates: switch Position mode to Absolute and set the reference longitude/latitude."
+          : reference
+            ? `Failed to import CaSSAndRA GeoJSON. Check Position reference longitude/latitude (${reference.lon}, ${reference.lat}).`
+            : "Failed to import CaSSAndRA GeoJSON. Configure the reference longitude/latitude in Position settings first.";
         return;
       }
       onImport(result.map, result.rotation, new Date().toISOString(), "CaSSAndRA GeoJSON");
@@ -226,6 +259,24 @@
     </div>
   {/if}
 
+  {#if mode === "import"}
+    <div class="export-actions">
+      <input
+        bind:this={fileInput}
+        type="file"
+        accept=".json,.geojson,application/json,application/geo+json"
+        on:change={handleFileSelected}
+        hidden
+      />
+      <Button kind="secondary" size="small" on:click={() => fileInput.click()} icon={IconDocumentImport}>
+        Choose file…
+      </Button>
+      {#if fileName}
+        <span class="file-name">{fileName}</span>
+      {/if}
+    </div>
+  {/if}
+
   {#if exportError}
     <InlineNotification
       kind="error"
@@ -245,7 +296,7 @@
   {/if}
 
   <TextArea
-    labelText={mode === "export" ? "Mower map JSON" : "Paste Mower map JSON"}
+    labelText={mode === "export" ? "Mower map JSON" : "Paste map JSON or choose a file"}
     placeholder={mode === "import" ? '{ "perimeter": [{"x":0,"y":0}, ...] }' : ""}
     bind:value={jsonText}
     rows={14}
@@ -266,7 +317,14 @@
   }
   .export-actions {
     display: flex;
+    align-items: center;
     gap: 0.5rem;
     margin-bottom: 1rem;
+  }
+  .file-name {
+    font-size: 0.875rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

@@ -23,10 +23,38 @@ interface GeoJsonFeatureCollection {
 }
 
 const MAX_REFERENCE_OFFSET_METERS = 10000;
+const METERS_PER_DEGREE = 111111;
+const ZERO_REFERENCE: GeoJsonReference = { lon: 0, lat: 0 };
 
 export interface GeoJsonReference {
   lon: number;
   lat: number;
+}
+
+function isCassandraFeature(feature: GeoJsonFeature): boolean {
+  const declaredType = feature.properties?.type?.trim().toLowerCase() ?? "";
+  const name = feature.properties?.name?.trim().toLowerCase() ?? "";
+  return declaredType === "" && name !== "";
+}
+
+/**
+ * CaSSAndRA exportiert mit rovercfg.lat/lon = 0, solange dort keine Referenz
+ * konfiguriert ist. Die "WGS84"-Werte sind dann nur Grad-Offsets um (0,0) und
+ * muessen mit Nullreferenz umgerechnet werden statt mit der eigenen Position.
+ */
+function usesZeroReference(features: GeoJsonFeature[]): boolean {
+  const maxDegrees = MAX_REFERENCE_OFFSET_METERS / METERS_PER_DEGREE;
+  let found = false;
+  for (const feature of features) {
+    if (!isCassandraFeature(feature) || !Array.isArray(feature.geometry?.coordinates)) continue;
+    const coords = (feature.geometry!.coordinates as unknown[]).flat(2) as unknown[];
+    for (const value of coords) {
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      if (Math.abs(value) > maxDegrees) return false;
+      found = true;
+    }
+  }
+  return found;
 }
 
 function toPoint(arr: number[]): Point {
@@ -34,14 +62,14 @@ function toPoint(arr: number[]): Point {
 }
 
 function absoluteToRelative(arr: number[], reference: GeoJsonReference): Point {
-  const metersPerDegree = 111111;
+  const metersPerDegree = METERS_PER_DEGREE;
   const x = (arr[0] - reference.lon) * metersPerDegree * Math.cos(reference.lat * Math.PI / 180);
   const y = (arr[1] - reference.lat) * metersPerDegree;
   return { x: x === 0 ? 0 : x, y: y === 0 ? 0 : -y };
 }
 
 function relativeToAbsolute(point: Point, reference: GeoJsonReference): number[] {
-  const metersPerDegree = 111111;
+  const metersPerDegree = METERS_PER_DEGREE;
   const lon = point.x / (metersPerDegree * Math.cos(reference.lat * Math.PI / 180)) + reference.lon;
   const lat = -point.y / metersPerDegree + reference.lat;
   return [lon, lat];
@@ -82,6 +110,7 @@ export function importGeoJson(
   if (!Array.isArray(fc.features)) return null;
   const map = emptyMap();
   let rotation = 0;
+  const effectiveReference = usesZeroReference(fc.features) ? ZERO_REFERENCE : reference;
 
   for (const feature of fc.features) {
     const geom = feature.geometry;
@@ -89,10 +118,10 @@ export function importGeoJson(
     const declaredType = feature.properties?.type?.trim().toLowerCase() ?? "";
     const name = feature.properties?.name?.trim().toLowerCase() ?? "";
     const type = (declaredType || name).replace(/[\s-]+/g, "_");
-    const cassandraCoordinates = declaredType === "" && name !== "";
-    if (cassandraCoordinates && !reference) return null;
+    const cassandraCoordinates = isCassandraFeature(feature);
+    if (cassandraCoordinates && !effectiveReference) return null;
     const convertPoint = cassandraCoordinates
-      ? (point: number[]) => absoluteToRelative(point, reference!)
+      ? (point: number[]) => absoluteToRelative(point, effectiveReference!)
       : toPoint;
 
     if (geom.type === "Polygon") {
@@ -140,8 +169,7 @@ export function importGeoJson(
 }
 
 export function exportGeoJson(map: Map, reference: GeoJsonReference): string {
-  if (!Number.isFinite(reference.lon) || !Number.isFinite(reference.lat) ||
-      (reference.lon === 0 && reference.lat === 0)) {
+  if (!Number.isFinite(reference.lon) || !Number.isFinite(reference.lat)) {
     throw new Error("A valid Position reference is required for CaSSAndRA GeoJSON export.");
   }
 
