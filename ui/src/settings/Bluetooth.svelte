@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ChangeEventValue, Settings } from "../model";
+  import { InlineNotification } from "carbon-components-svelte";
   import CheckboxSetting from "../widget/CheckboxSetting.svelte";
   import TextSetting from "../widget/TextSetting.svelte";
 import BluetoothClean from "./BluetoothClean.svelte";
@@ -16,8 +17,16 @@ import BluetoothClean from "./BluetoothClean.svelte";
 </script>
 
 <Group title="Bluetooth" {settings} {original}>
+  <InlineNotification
+    kind="info"
+    lowContrast
+    hideCloseButton
+    title="Bluetooth slows down WiFi."
+    subtitle="Bluetooth and WiFi share one radio. While Bluetooth is on, the modem has to keep WiFi in power-save mode: the web UI, map transfers and firmware uploads get much slower (measured about 190 ms instead of 30 ms response time, 6-9 KB/s instead of 300-570 KB/s). Turn Bluetooth off unless you use the Bluetooth app."
+  />
   <CheckboxSetting
     label="Control and monitor your ArduMower with Bluetooth"
+    helpText="Only needed for the Bluetooth app."
     key="bluetooth.enabled"
     bind:value={settings.enabled}
     bind:original={original.enabled}

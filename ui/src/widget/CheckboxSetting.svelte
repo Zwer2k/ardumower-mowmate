@@ -11,6 +11,7 @@ import type { ChangeEventValue } from "../model";
   export let key: string;
   export let value: boolean;
   export let original: boolean;
+  export let helpText: string = "";
   
   let dispatch = createEventDispatcher<{ change: ChangeEventValue }>();
 
@@ -39,7 +40,12 @@ import type { ChangeEventValue } from "../model";
 </script>
 
 <main>
-  <Toggle labelText={labelMod} bind:toggled={value} disabled={$Busy} on:change="{(e) => change(e, value)}" />
+  <div class="toggle">
+    <Toggle labelText={labelMod} bind:toggled={value} disabled={$Busy} on:change="{(e) => change(e, value)}" />
+    {#if helpText}
+      <div class="bx--form__helper-text">{helpText}</div>
+    {/if}
+  </div>
   {#if dirty}
     <Button
       on:click={revert}
