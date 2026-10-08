@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "json.h"
 #include <ArduinoJson.h>
+#include <SPIFFS.h>
 
 using namespace ArduMower::Modem::Http;
 
@@ -119,6 +120,16 @@ void UiAdapter::handleApiGetModemInfo(AsyncWebServerRequest *request)
   AsyncJsonResponse *response = new AsyncJsonResponse();
   JsonObject root = response->getRoot();
   ArduMower::Modem::Settings::Properties.marshal(root);
+  // Speicherbelegung für die Einstellungsseite. SPIFFS hält Karten und
+  // Einstellungen; RAM/PSRAM zeigen Lecks wie den früheren Upload-Puffer.
+  JsonObject memory = root["memory"].to<JsonObject>();
+  memory["fs_total"] = SPIFFS.totalBytes();
+  memory["fs_used"] = SPIFFS.usedBytes();
+  memory["heap_total"] = ESP.getHeapSize();
+  memory["heap_free"] = ESP.getFreeHeap();
+  memory["heap_min_free"] = ESP.getMinFreeHeap();
+  memory["psram_total"] = ESP.getPsramSize();
+  memory["psram_free"] = ESP.getFreePsram();
   response->setLength();
   request->send(response);
 }

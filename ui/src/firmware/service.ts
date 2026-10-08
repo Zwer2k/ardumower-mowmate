@@ -1,4 +1,5 @@
 import { type Readable, writable } from "svelte/store"
+import type { MemoryInfo } from "../model"
 
 export enum FirmwareUploadStatus {
   clear = 0,
@@ -292,4 +293,5 @@ export interface ApiModemInfoResponse {
   uptime: number
   terminal_available?: boolean;
   firmware_target: "esp32" | "esp32-s3";
+  memory?: MemoryInfo;
 }

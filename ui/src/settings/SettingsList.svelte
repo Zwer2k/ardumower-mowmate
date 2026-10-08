@@ -10,6 +10,7 @@
   import PositionSettings from "./Position.svelte";
   import MowerSettings from "./Mower.svelte";
   import Firmware from "./Firmware.svelte";
+  import Storage from "./Storage.svelte";
   import { FrontendSettings as settings } from "../stores/frontend";
   import { BackendSettings as original } from "../stores/backend";
   import { InfoStore as info } from "../stores/info";
@@ -71,6 +72,7 @@
       />
     {/if}
     <Firmware />
+    <Storage />
   </div>
 {/if}
   <!-- <pre>

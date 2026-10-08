@@ -100,6 +100,17 @@ export interface Info {
   uptime: number;
   bt_mac: string;
   firmware_target: "esp32" | "esp32-s3";
+  memory?: MemoryInfo;
+}
+
+export interface MemoryInfo {
+  fs_total: number;
+  fs_used: number;
+  heap_total: number;
+  heap_free: number;
+  heap_min_free: number;
+  psram_total: number;
+  psram_free: number;
 }
 
 export interface Status {
