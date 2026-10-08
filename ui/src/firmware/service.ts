@@ -186,7 +186,13 @@ const uploadRequest = (file: File): FormData => {
   return result
 }
 
-const makeRebootAwaiter = async (timeout: number = 30000): Promise<() => Promise<void>> => {
+// Auf dem ESP32-S3 wird die Firmware erst vollständig ins PSRAM geladen und
+// danach geflasht; Flashen plus Neustart dauern oft länger als 30 s. Mit 30 s
+// wurde die Anzeige rot, obwohl das Modem danach mit der neuen Firmware
+// startete. Dieselbe Grenze wie die Flash-Überwachung im Dialog (5 min).
+export const REBOOT_TIMEOUT_MS = 5 * 60 * 1000;
+
+const makeRebootAwaiter = async (timeout: number = REBOOT_TIMEOUT_MS): Promise<() => Promise<void>> => {
   const before = await getModemInfo()
 
   const isAfter = (i: ApiModemInfoResponse): boolean => i.uptime < before.uptime
