@@ -482,7 +482,13 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     // any ongoing chunk transfer so the new map snapshot can be sent cleanly.
     _socketHandler->abortMapChunkSend();
     yield();
-    if (_source.saveMap(name, rotation).length() > 0) {
+    _socketHandler->sendProgress("save", 0, "Saving map...");
+    _socketHandler->sendData(ResponseDataType::mowerState, NULL, true);
+    const bool saved = _source.saveMap(name, rotation,
+        _socketHandler->progressReporter("save", "Saving map...", 99)).length() > 0;
+    _socketHandler->sendProgress("save", 100, saved ? "Map saved" : "Saving failed");
+    _socketHandler->sendData(ResponseDataType::mowerState, NULL, true);
+    if (saved) {
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -1334,15 +1340,17 @@ void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
       bool dockedCharging = (state.job == 2);
       bool recentlyRestarted = (state.timestamp > 0 && state.timestamp < 30000);
       bool noPosition = (state.position.x == 0.0f && state.position.y == 0.0f);
-      auto map = _source.mowerMap();
-      bool overrideActive = (dockedCharging || (recentlyRestarted && noPosition)) && map.dockpoints.size() > 0;
+      // Nur die Dockpunkte holen: eine Kopie der ganzen Karte (tausende
+      // Wegpunkte) kostete bei jeder Statusnachricht spürbar Zeit.
+      const auto dockpoints = _source.dockpoints();
+      bool overrideActive = (dockedCharging || (recentlyRestarted && noPosition)) && dockpoints.size() > 0;
       if (overrideActive) {
-        const auto &home = map.dockpoints.back();
+        const auto &home = dockpoints.back();
         state.position.x = home.X;
         state.position.y = home.Y;
         // Orientierung aus der Dock-Linie ableiten (Vektor vom vorletzten zum letzten Punkt)
-        if (map.dockpoints.size() >= 2) {
-          const auto &prev = map.dockpoints[map.dockpoints.size() - 2];
+        if (dockpoints.size() >= 2) {
+          const auto &prev = dockpoints[dockpoints.size() - 2];
           state.position.delta = atan2(home.Y - prev.Y, home.X - prev.X);
         }
         // Nur beim Übergang in den Override-Zustand loggen, nicht dauernd währenddessen
@@ -1830,6 +1838,26 @@ void UiSocketHandler::sendProgress(String operation, int progress, String messag
   _progressMsg = message;
 }
 
+std::function<void(int percent)> UiSocketHandler::progressReporter(const char *operation,
+                                                                   const char *message, int maxPercent) {
+  // Gesendet wird aus loop(); AsyncTCP überträgt auf dem anderen Kern, während
+  // die Operation weiterläuft. 100 % beendet die Anzeige, daher maxPercent < 100
+  // für Operationen mit Nacharbeit.
+  struct Throttle { uint32_t lastMs = 0; int lastPct = -1; };
+  auto throttle = std::make_shared<Throttle>();
+  const String op(operation), msg(message);
+  return [this, throttle, op, msg, maxPercent](int percent) {
+    const int pct = percent * maxPercent / 100;
+    const uint32_t now = millis();
+    if (pct <= throttle->lastPct || now - throttle->lastMs < 300) return;
+    throttle->lastMs = now;
+    throttle->lastPct = pct;
+    sendProgress(op, pct, msg);
+    sendData(ResponseDataType::mowerState, NULL, true);
+    yield();
+  };
+}
+
 void UiSocketHandler::uploadMapToMower() {
   if (_uploadToMowerPending) {
     Log(INFO, "%s uploadMapToMower: upload already in progress", _LOG_);
@@ -1969,22 +1997,8 @@ void UiSocketHandler::processCalculateWaypoints() {
     // Der Planer erzeugt zehntausende kleine Blöcke; ohne diesen Scope füllen
     // sie den internen RAM (siehe mem_policy.h).
     ArduMower::Modem::MemPolicy::HeavyAllocScope heavyAlloc;
-    // Fortschritt an den Browser: höchstens alle 300 ms, Planung = 0..95 %,
-    // die letzten Prozent gehören dem Verteilen der Route (100 beendet die
-    // Anzeige). Gesendet wird aus loop(); AsyncTCP überträgt auf dem anderen
-    // Kern, während die Berechnung weiterläuft.
-    uint32_t lastProgressMs = 0;
-    int lastProgressPct = -1;
-    auto onProgress = [&](int percent) {
-      const int pct = percent * 95 / 100;
-      const uint32_t now = millis();
-      if (pct <= lastProgressPct || now - lastProgressMs < 300) return;
-      lastProgressMs = now;
-      lastProgressPct = pct;
-      sendProgress("calculate", pct, "Calculating waypoints...");
-      sendData(ResponseDataType::mowerState, NULL, true);
-      yield();
-    };
+    // Planung = 0..95 %, die letzten Prozent gehören dem Verteilen der Route.
+    auto onProgress = progressReporter("calculate", "Calculating waypoints...", 95);
     waypoints = ArduMower::Modem::PathPlanner::calculateWaypoints(
         map, settings, &state, &_routeReport, mowSpeed, onProgress);
   } catch (...) {

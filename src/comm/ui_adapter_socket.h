@@ -222,6 +222,11 @@ namespace ArduMower
         void joystickMove(float linear, float angular);
         void navigateTo(float x, float y);
         void sendProgress(String operation, int progress, String message = "");
+        // Liefert einen Callback für lange Operationen in loop(): meldet
+        // percent (0..100, skaliert auf 0..maxPercent) höchstens alle 300 ms
+        // per mowerState an den Browser.
+        std::function<void(int percent)> progressReporter(const char *operation, const char *message,
+                                                          int maxPercent = 100);
         void requestStats();
         void requestStatsNow();
         void cmdStart();
