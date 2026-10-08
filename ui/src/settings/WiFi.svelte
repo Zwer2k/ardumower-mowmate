@@ -15,6 +15,18 @@
     { label: "Off / setup only", value: "off" },
   ];
 
+  const txPowers: Option<"auto" | "19.5" | "15" | "11" | "8.5">[] = [
+    { label: "Automatic", value: "auto" },
+    { label: "19.5 dBm (maximum)", value: "19.5" },
+    { label: "15 dBm", value: "15" },
+    { label: "11 dBm", value: "11" },
+    { label: "8.5 dBm", value: "8.5" },
+  ];
+
+  // Ältere Firmware sendet das Feld nicht.
+  $: if (settings.sta_tx_power === undefined) settings.sta_tx_power = "auto";
+  $: if (original.sta_tx_power === undefined) original.sta_tx_power = "auto";
+
   const ipModes: Option<"dhcp" | "static">[] = [
     { label: "DHCP", value: "dhcp" },
     { label: "Static IP", value: "static" },
@@ -45,6 +57,14 @@
       kind="password"
       bind:value={settings.sta_psk}
       bind:original={original.sta_psk}
+    />
+    <SelectSetting
+      label="Transmit power"
+      key="wifi.sta_tx_power"
+      bind:value={settings.sta_tx_power}
+      bind:original={original.sta_tx_power}
+      options={txPowers}
+      helpText="Automatic uses full power and lowers it only when logging in keeps failing despite good signal. Boards with a poorly matched on-board antenna often transmit distorted at full power: the router receives them only at low rates with many retries, and uploads stall. Try 11 or 8.5 dBm then. Lower power also shortens the range; boards with an external antenna should stay on Automatic."
     />
     <SelectSetting
       label="IP Mode"

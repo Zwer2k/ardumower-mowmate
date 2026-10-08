@@ -76,7 +76,7 @@ namespace ArduMower
         constexpr static const char *default_ap_ssid = "ArduMower Modem";
         constexpr static const char *default_ap_psk = "ArduMower Modem";
 
-        WiFi() : mode(0), ap_ssid(default_ap_ssid), ap_psk(default_ap_psk), sta_ip_mode(0) {}
+        WiFi() : mode(0), ap_ssid(default_ap_ssid), ap_psk(default_ap_psk), sta_ip_mode(0), sta_tx_power(0) {}
 
         int mode; // 0=off 1=sta 2=ap
         String sta_ssid;
@@ -88,6 +88,9 @@ namespace ArduMower
         String sta_gateway;
         String sta_subnet;
         String sta_dns;
+        // Sendeleistung im STA-Betrieb in 0,25 dBm (wie wifi_power_t):
+        // 0 = automatisch, sonst 78 (19,5), 60 (15), 44 (11) oder 34 (8,5 dBm).
+        int sta_tx_power;
 
         bool valid(String & invalid) const;
 

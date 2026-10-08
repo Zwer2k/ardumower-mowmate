@@ -18,13 +18,17 @@ static const uint32_t offStopTimeout = 5 * 60 * 1000;
 // Sendeleistung im STA-Betrieb. Manche ESP32-S3-Boards (schlechte
 // Antennenanpassung) senden bei voller Leistung so verzerrt, dass der Router
 // die Anmeldung nicht versteht: endlos "Reason: 2 - AUTH_EXPIRE", keine IP.
-// Scheitert die Anmeldung wiederholt, wird die Leistung stufenweise gesenkt.
+// Scheitert die Anmeldung wiederholt bei gutem Empfang, wird die Leistung
+// stufenweise gesenkt. Bei schwachem Empfang (Mäher weit vom Access Point)
+// liegt es an der Entfernung; dort würde weniger Leistung schaden.
 // Die Stufe, mit der die Verbindung zustande kam, wird im NVS gespeichert, damit
 // das Board beim nächsten Start sofort mit ihr verbindet.
 static const wifi_power_t staTxLevels[] = {WIFI_POWER_19_5dBm, WIFI_POWER_15dBm, WIFI_POWER_11dBm, WIFI_POWER_8_5dBm};
 static const char *const staTxNames[] = {"19.5", "15", "11", "8.5"};
 static const size_t staTxLevelCount = sizeof(staTxLevels) / sizeof(staTxLevels[0]);
 static const int staAuthFailuresPerStep = 3;
+// Nur Fehlschläge bei mindestens dieser Signalstärke deuten auf das Board.
+static const int8_t staAuthFailureMinRssi = -70;
 // Nach einem Fehlschlag versucht das Framework nicht immer erneut (z. B. nach
 // "39 - TIMEOUT"); ohne Ereignis in dieser Zeit wird selbst neu verbunden.
 static const uint32_t staRetryAfterMs = 5000;
@@ -35,6 +39,7 @@ static uint32_t staLastRetry = 0;
 // Vom WiFi-Event-Task geschrieben, in loop() gelesen.
 static volatile int staAuthFailures = 0;
 static volatile uint8_t staLastReason = 0;
+static volatile int8_t staLastRssi = 0;
 static volatile uint32_t staLastDisconnect = 0;
 
 static const char *const prefsNamespace = "wifi";
@@ -177,9 +182,11 @@ void Adapter::begin()
       Log(INFO, "WiFi::Adapter::STA::tx power %s dBm (saved)", staTxNames[staTxLevel]);
     WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
       const uint8_t reason = info.wifi_sta_disconnected.reason;
+      const int8_t rssi = info.wifi_sta_disconnected.rssi;
       staLastReason = reason;
+      staLastRssi = rssi;
       staLastDisconnect = millis();
-      if (isAuthFailure(reason))
+      if (isAuthFailure(reason) && rssi < 0 && rssi >= staAuthFailureMinRssi)
         staAuthFailures = staAuthFailures + 1;
     }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   }
@@ -226,20 +233,40 @@ void Adapter::loopSta()
   const bool connected = WiFi.isConnected();
 
   // Sendeleistung erst setzen, wenn der STA-Teil läuft; vorher lehnt das
-  // Framework ab ("Neither AP or STA has been started").
-  if (!staTxApplied && (WiFi.getStatusBits() & STA_STARTED_BIT))
+  // Framework ab ("Neither AP or STA has been started"). Ein fest
+  // eingestellter Wert hat Vorrang und wird bei Änderung sofort übernommen.
+  const int fixedTxPower = _settings.wifi.sta_tx_power;
+  static int appliedFixedTxPower = 0;
+  if (WiFi.getStatusBits() & STA_STARTED_BIT)
   {
-    WiFi.setTxPower(staTxLevels[staTxLevel]);
-    staTxApplied = true;
+    if (fixedTxPower != 0 && (!staTxApplied || fixedTxPower != appliedFixedTxPower))
+    {
+      WiFi.setTxPower((wifi_power_t)fixedTxPower);
+      Log(INFO, "WiFi::Adapter::STA::tx power %.1f dBm (setting)", fixedTxPower / 4.0);
+      appliedFixedTxPower = fixedTxPower;
+      staTxApplied = true;
+    }
+    else if (fixedTxPower == 0 && (!staTxApplied || appliedFixedTxPower != 0))
+    {
+      WiFi.setTxPower(staTxLevels[staTxLevel]);
+      appliedFixedTxPower = 0;
+      staTxApplied = true;
+    }
   }
 
-  if (!connected && staAuthFailures >= staAuthFailuresPerStep && staTxLevel + 1 < staTxLevelCount)
+  // Automatische Absenkung nur ohne fest eingestellte Sendeleistung.
+  if (fixedTxPower != 0)
+    staAuthFailures = 0;
+
+  if (!connected && staAuthFailures >= staAuthFailuresPerStep)
   {
     staAuthFailures = 0;
-    staTxLevel++;
+    // Auch die niedrigste Stufe scheitert: zurück auf volle Leistung, statt
+    // dauerhaft auf einer Stufe hängen zu bleiben, die nicht hilft.
+    staTxLevel = staTxLevel + 1 < staTxLevelCount ? staTxLevel + 1 : 0;
     WiFi.setTxPower(staTxLevels[staTxLevel]);
-    Log(WARN, "WiFi::Adapter::STA::auth-failing(reason=%u) -> tx power %s dBm",
-        (unsigned)staLastReason, staTxNames[staTxLevel]);
+    Log(WARN, "WiFi::Adapter::STA::auth-failing(reason=%u rssi=%d) -> tx power %s dBm",
+        (unsigned)staLastReason, (int)staLastRssi, staTxNames[staTxLevel]);
   }
 
   const uint32_t lastDisconnect = staLastDisconnect;
@@ -288,15 +315,17 @@ void Adapter::loopSta()
     disconnectedSince = 0;
     staAuthFailures = 0;
     staLastDisconnect = 0;
-    saveTxLevel();
+    if (_settings.wifi.sta_tx_power == 0)
+      saveTxLevel();
     // Stromsparmodus erst nach erfolgreicher Verbindung abschalten (nur ohne
     // Bluetooth, siehe beginSta), damit er bei der Anmeldung keine Rolle spielt.
     if (!_settings.bluetooth.enabled)
       WiFi.setSleep(false);
     auto ip = WiFi.localIP().toString();
     Log(INFO, "WiFi::Adapter::STA::IP(%s)", ip.c_str());
-    Log(INFO, "WiFi::Adapter::STA::link(rssi=%d channel=%d tx=%s dBm sleep=%s)", WiFi.RSSI(), (int)WiFi.channel(),
-        staTxNames[staTxLevel], WiFi.getSleep() ? "on" : "off");
+    Log(INFO, "WiFi::Adapter::STA::link(rssi=%d channel=%d tx=%.1f dBm%s sleep=%s)", WiFi.RSSI(), (int)WiFi.channel(),
+        (_settings.wifi.sta_tx_power != 0 ? _settings.wifi.sta_tx_power : (int)staTxLevels[staTxLevel]) / 4.0,
+        _settings.wifi.sta_tx_power != 0 ? " fixed" : "", WiFi.getSleep() ? "on" : "off");
     trySyncTime();
   }
   else
