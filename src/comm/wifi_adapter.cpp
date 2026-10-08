@@ -3,6 +3,7 @@
 #include "schedule.h"
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <Preferences.h>
 #include <inttypes.h>
 #include <time.h>
 #include <sys/time.h>
@@ -13,6 +14,71 @@ using namespace ArduMower::Modem::Wifi;
 
 static const uint32_t staAbortTimeout = 1 * 60 * 1000;
 static const uint32_t offStopTimeout = 5 * 60 * 1000;
+
+// Sendeleistung im STA-Betrieb. Manche ESP32-S3-Boards (schlechte
+// Antennenanpassung) senden bei voller Leistung so verzerrt, dass der Router
+// die Anmeldung nicht versteht: endlos "Reason: 2 - AUTH_EXPIRE", keine IP.
+// Scheitert die Anmeldung wiederholt, wird die Leistung stufenweise gesenkt.
+// Die Stufe, mit der die Verbindung zustande kam, wird im NVS gespeichert, damit
+// das Board beim nächsten Start sofort mit ihr verbindet.
+static const wifi_power_t staTxLevels[] = {WIFI_POWER_19_5dBm, WIFI_POWER_15dBm, WIFI_POWER_11dBm, WIFI_POWER_8_5dBm};
+static const char *const staTxNames[] = {"19.5", "15", "11", "8.5"};
+static const size_t staTxLevelCount = sizeof(staTxLevels) / sizeof(staTxLevels[0]);
+static const int staAuthFailuresPerStep = 3;
+// Nach einem Fehlschlag versucht das Framework nicht immer erneut (z. B. nach
+// "39 - TIMEOUT"); ohne Ereignis in dieser Zeit wird selbst neu verbunden.
+static const uint32_t staRetryAfterMs = 5000;
+static size_t staTxLevel = 0;
+static size_t staTxLevelSaved = 0;
+static bool staTxApplied = false;
+static uint32_t staLastRetry = 0;
+// Vom WiFi-Event-Task geschrieben, in loop() gelesen.
+static volatile int staAuthFailures = 0;
+static volatile uint8_t staLastReason = 0;
+static volatile uint32_t staLastDisconnect = 0;
+
+static const char *const prefsNamespace = "wifi";
+static const char *const prefsTxLevel = "txlvl";
+
+static void loadTxLevel()
+{
+  Preferences prefs;
+  if (!prefs.begin(prefsNamespace, true))
+    return;
+  const uint8_t level = prefs.getUChar(prefsTxLevel, 0);
+  prefs.end();
+  staTxLevel = staTxLevelSaved = level < staTxLevelCount ? level : 0;
+}
+
+static void saveTxLevel()
+{
+  if (staTxLevel == staTxLevelSaved)
+    return;
+  Preferences prefs;
+  if (!prefs.begin(prefsNamespace, false))
+    return;
+  prefs.putUChar(prefsTxLevel, (uint8_t)staTxLevel);
+  prefs.end();
+  staTxLevelSaved = staTxLevel;
+}
+
+static bool isAuthFailure(uint8_t reason)
+{
+  switch (reason)
+  {
+  case WIFI_REASON_AUTH_EXPIRE:
+  case WIFI_REASON_ASSOC_EXPIRE:
+  case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+  case WIFI_REASON_AUTH_FAIL:
+  case WIFI_REASON_ASSOC_FAIL:
+  case WIFI_REASON_HANDSHAKE_TIMEOUT:
+  case WIFI_REASON_CONNECTION_FAIL:
+  case WIFI_REASON_TIMEOUT:
+    return true;
+  default:
+    return false;
+  }
+}
 
 static uint64_t ntpToUnixMicros(uint8_t buf[48])
 {
@@ -102,6 +168,22 @@ void Adapter::begin()
 {
   _mode = mode();
 
+  static bool eventRegistered = false;
+  if (!eventRegistered)
+  {
+    eventRegistered = true;
+    loadTxLevel();
+    if (staTxLevel > 0)
+      Log(INFO, "WiFi::Adapter::STA::tx power %s dBm (saved)", staTxNames[staTxLevel]);
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+      const uint8_t reason = info.wifi_sta_disconnected.reason;
+      staLastReason = reason;
+      staLastDisconnect = millis();
+      if (isAuthFailure(reason))
+        staAuthFailures = staAuthFailures + 1;
+    }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  }
+
   switch (_mode)
   {
   case Mode::STA:
@@ -143,6 +225,32 @@ void Adapter::loopSta()
   static uint32_t disconnectedSince = 0;
   const bool connected = WiFi.isConnected();
 
+  // Sendeleistung erst setzen, wenn der STA-Teil läuft; vorher lehnt das
+  // Framework ab ("Neither AP or STA has been started").
+  if (!staTxApplied && (WiFi.getStatusBits() & STA_STARTED_BIT))
+  {
+    WiFi.setTxPower(staTxLevels[staTxLevel]);
+    staTxApplied = true;
+  }
+
+  if (!connected && staAuthFailures >= staAuthFailuresPerStep && staTxLevel + 1 < staTxLevelCount)
+  {
+    staAuthFailures = 0;
+    staTxLevel++;
+    WiFi.setTxPower(staTxLevels[staTxLevel]);
+    Log(WARN, "WiFi::Adapter::STA::auth-failing(reason=%u) -> tx power %s dBm",
+        (unsigned)staLastReason, staTxNames[staTxLevel]);
+  }
+
+  const uint32_t lastDisconnect = staLastDisconnect;
+  if (!connected && lastDisconnect != 0 && millis() - lastDisconnect > staRetryAfterMs &&
+      millis() - staLastRetry > staRetryAfterMs)
+  {
+    staLastRetry = millis();
+    Log(INFO, "WiFi::Adapter::STA::retry(last reason=%u)", (unsigned)staLastReason);
+    WiFi.reconnect();
+  }
+
   if (!wasEverConnected && !connected && millis() - _staTimeoutStart > staAbortTimeout)
   {
     Log(INFO, "WiFi::Adapter::loopSta::no-connection");
@@ -178,10 +286,17 @@ void Adapter::loopSta()
   {
     wasEverConnected = true;
     disconnectedSince = 0;
+    staAuthFailures = 0;
+    staLastDisconnect = 0;
+    saveTxLevel();
+    // Stromsparmodus erst nach erfolgreicher Verbindung abschalten (nur ohne
+    // Bluetooth, siehe beginSta), damit er bei der Anmeldung keine Rolle spielt.
+    if (!_settings.bluetooth.enabled)
+      WiFi.setSleep(false);
     auto ip = WiFi.localIP().toString();
     Log(INFO, "WiFi::Adapter::STA::IP(%s)", ip.c_str());
-    Log(INFO, "WiFi::Adapter::STA::link(rssi=%d channel=%d sleep=%s)", WiFi.RSSI(), (int)WiFi.channel(),
-        WiFi.getSleep() ? "on" : "off");
+    Log(INFO, "WiFi::Adapter::STA::link(rssi=%d channel=%d tx=%s dBm sleep=%s)", WiFi.RSSI(), (int)WiFi.channel(),
+        staTxNames[staTxLevel], WiFi.getSleep() ? "on" : "off");
     trySyncTime();
   }
   else
@@ -301,8 +416,11 @@ void Adapter::beginSta()
   // Der WLAN-Stromsparmodus weckt das Funkteil nur zu den Beacons des Routers:
   // 30-600 ms Antwortzeit, bei 5,7 KB TCP-Fenster also nur wenige KB/s. Bei
   // aktivem Bluetooth verlangt das ESP-IDF den Stromsparmodus (sonst Abbruch
-  // beim Start), daher nur ohne BLE abschalten.
-  WiFi.setSleep(_settings.bluetooth.enabled);
+  // beim Start), daher wird er nur ohne BLE abgeschaltet, und erst sobald die
+  // Verbindung steht (loopSta). Bis dahin gilt der Standard.
+  WiFi.setSleep(true);
+  staTxApplied = false; // in loopSta, sobald der STA-Teil gestartet ist
+  staAuthFailures = 0;
 
   if (_settings.wifi.sta_ip_mode == 1 && 
       _settings.wifi.sta_ip != "" && 
