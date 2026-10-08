@@ -21,6 +21,7 @@ namespace
 
   RTC_NOINIT_ATTR Persisted persisted;
   char summary[360] = "unknown";
+  const char *reasonName = "unknown";
 
   const char *resetReasonName(esp_reset_reason_t r)
   {
@@ -57,6 +58,7 @@ namespace ArduMower
       void begin()
       {
         const esp_reset_reason_t reason = esp_reset_reason();
+        reasonName = resetReasonName(reason);
         const bool valid = persisted.magic == MAGIC && reason != ESP_RST_POWERON;
         if (valid)
         {
@@ -115,6 +117,11 @@ namespace ArduMower
       {
         persisted.magic = MAGIC;
         copy(persisted.lastEvent, sizeof(persisted.lastEvent), event);
+      }
+
+      const char *lastResetReason()
+      {
+        return reasonName;
       }
 
       const char *lastResetSummary()

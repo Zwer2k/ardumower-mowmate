@@ -28,8 +28,11 @@ namespace ArduMower
       // Wegpunkt-Berechnung), um es mit einem späteren Neustart zu verknüpfen.
       void setLastEvent(const char *event);
 
-      // Zusammenfassung des letzten Resets, z. B. für den Heartbeat.
+      // Zusammenfassung des letzten Resets (Grund, Neustart-Ursache, Phase).
       const char *lastResetSummary();
+      // Nur der Reset-Grund (z. B. "software", "panic"), kurz genug für den
+      // Heartbeat, dessen Logzeile auf 128 Zeichen begrenzt ist.
+      const char *lastResetReason();
     }
   }
 }
