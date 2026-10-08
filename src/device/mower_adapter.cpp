@@ -312,7 +312,8 @@ bool MowerAdapter::copyMap(const String &name) {
   return true;
 }
 
-String MowerAdapter::saveMap(const String &name, double rotation) {
+String MowerAdapter::saveMap(const String &name, double rotation,
+                             const std::function<void(int percent)> &progress) {
   if (_map.isReading()) {
     Log(WARN, "%ssaveMap: Map-Lesevorgang läuft, speichern abgelehnt", _LOG_);
     return "";
@@ -332,7 +333,7 @@ String MowerAdapter::saveMap(const String &name, double rotation) {
     Log(WARN, "%ssaveMap: Name '%s' ist bereits vergeben, speichern abgelehnt", _LOG_, effectiveName.c_str());
     return "";
   }
-  String id = _mapManager.save(_map, saveName, saveId, rotation);
+  String id = _mapManager.save(_map, saveName, saveId, rotation, progress);
   if (id.length() > 0) {
     if (_currentMapId.startsWith("__t_")) {
       removeTransientMap(_currentMapId);

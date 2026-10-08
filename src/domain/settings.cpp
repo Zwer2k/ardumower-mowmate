@@ -80,6 +80,27 @@ const char * _t_sta_ip = "sta_ip";
 const char * _t_sta_gateway = "sta_gateway";
 const char * _t_sta_subnet = "sta_subnet";
 const char * _t_sta_dns = "sta_dns";
+const char * _t_sta_tx_power = "sta_tx_power";
+const char * _t_auto = "auto";
+
+// JSON-Wert <-> Sendeleistung in 0,25 dBm (0 = automatisch)
+static const struct { const char *name; int quarterDbm; } staTxPowerOptions[] = {
+  {"auto", 0}, {"19.5", 78}, {"15", 60}, {"11", 44}, {"8.5", 34},
+};
+
+static const char *staTxPowerName(int quarterDbm)
+{
+  for (const auto &o : staTxPowerOptions)
+    if (o.quarterDbm == quarterDbm) return o.name;
+  return _t_auto;
+}
+
+static bool staTxPowerFromName(const String &name, int &quarterDbm)
+{
+  for (const auto &o : staTxPowerOptions)
+    if (name == o.name) { quarterDbm = o.quarterDbm; return true; }
+  return false;
+}
 const char * _t_dhcp = "dhcp";
 const char * _t_static = "static";
 const char * _t_has_ap_psk = "has_ap_psk";
@@ -586,6 +607,7 @@ void WiFi::marshal(JsonObject o) const
   o[_t_ap_ssid] = ap_ssid;
   o[_t_ap_psk] = ap_psk;
   o[_t_sta_ip_mode] = sta_ip_mode == 1 ? _t_static : _t_dhcp;
+  o[_t_sta_tx_power] = staTxPowerName(sta_tx_power);
   if (sta_ip_mode == 1)
   {
     o[_t_sta_ip] = sta_ip;
@@ -618,6 +640,9 @@ bool WiFi::unmarshal(JsonObject o)
     if (o[_t_sta_ip_mode] == _t_static)
       sta_ip_mode = 1;
   }
+  sta_tx_power = 0;
+  if (o[_t_sta_tx_power].is<JsonVariant>())
+    staTxPowerFromName(o[_t_sta_tx_power].as<String>(), sta_tx_power);
   if (o[_t_sta_ip].is<JsonVariant>())
     sta_ip = o[_t_sta_ip].as<String>();
   if (o[_t_sta_gateway].is<JsonVariant>())

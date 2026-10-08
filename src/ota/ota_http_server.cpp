@@ -965,6 +965,23 @@ void HttpServer::handleBody(AsyncWebServerRequest *request, uint8_t *data, size_
     continueUpdate(request, index, data, len, (index + len) == total);
 }
 
+// Bricht der Browser den Upload ab, gibt ESPAsyncWebServer _tempObject mit
+// free() frei, ohne Destruktor: Der 3-MB-PSRAM-Puffer der Modem-Firmware blieb
+// belegt, nach zwei Abbrüchen bekam kein Upload mehr einen Puffer. Die Sitzung
+// wird deshalb beim Verbindungsende selbst gelöscht, sofern respond() sie nicht
+// schon übernommen hat (dann ist _tempObject NULL).
+static void releaseSessionOnDisconnect(AsyncWebServerRequest *request)
+{
+  request->onDisconnect([request]() {
+    auto *session = (Http::UploadSession *)request->_tempObject;
+    if (!session)
+      return;
+    request->_tempObject = NULL;
+    Log(WARN, "Ota::Http::UploadSession::aborted – released");
+    delete session;
+  });
+}
+
 void HttpServer::beginModemUpdate(AsyncWebServerRequest *request, size_t index, uint8_t *data, size_t len, bool final)
 {
   if (!auth(request))
@@ -972,6 +989,7 @@ void HttpServer::beginModemUpdate(AsyncWebServerRequest *request, size_t index, 
 
   auto session = new Http::ModemUploadSession(this);
   request->_tempObject = session;
+  releaseSessionOnDisconnect(request);
   session->handle(index, data, len, final);
 }
 
@@ -982,6 +1000,7 @@ void HttpServer::beginMowerUpdate(AsyncWebServerRequest *request, String filenam
 
   auto session = new Http::MowerUploadSession(this, filename, _mowerUpdater);
   request->_tempObject = session;
+  releaseSessionOnDisconnect(request);
   session->handle(index, data, len, final);
 }
 
@@ -1031,6 +1050,10 @@ Http::ModemUploadSession::ModemUploadSession(HttpServer *_s)
 
 Http::ModemUploadSession::~ModemUploadSession()
 {
+  // Abgebrochener Upload im Streaming-Modus: das begonnene Update verwerfen,
+  // sonst lehnt Update.begin() jeden weiteren Versuch ab.
+  if (_streaming && result == Result::STARTED)
+    Update.abort();
   if (_dramBuf) free(_dramBuf);
   if (_buffer) free(_buffer);
 }
@@ -1328,6 +1351,8 @@ void Http::MowerUploadSession::respond(AsyncWebServerRequest *request)
   res->setLength();
   request->send(res);
   request->_tempObject = NULL;
+  // Die Sitzung wurde bisher nie gelöscht; danach wird sie nicht mehr gebraucht.
+  delete this;
 }
 
 void Http::MowerUploadSession::handle(size_t index, uint8_t *data, size_t len, bool final)

@@ -105,6 +105,9 @@ const texts: { language: { [language: string]: any } } = {
           sta_ip_mode: {
             label: "IP Mode"
           },
+          sta_tx_power: {
+            label: "Transmit power"
+          },
           sta_ip: {
             label: "IP Address",
             helpText: "Static IP address of the modem",

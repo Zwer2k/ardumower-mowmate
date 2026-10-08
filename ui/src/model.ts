@@ -17,6 +17,7 @@ export namespace Settings {
     sta_psk: string;
     has_sta_psk: boolean;
     sta_ip_mode: "dhcp" | "static";
+    sta_tx_power?: "auto" | "19.5" | "15" | "11" | "8.5";
     sta_ip: string;
     sta_gateway: string;
     sta_subnet: string;
@@ -99,6 +100,17 @@ export interface Info {
   uptime: number;
   bt_mac: string;
   firmware_target: "esp32" | "esp32-s3";
+  memory?: MemoryInfo;
+}
+
+export interface MemoryInfo {
+  fs_total: number;
+  fs_used: number;
+  heap_total: number;
+  heap_free: number;
+  heap_min_free: number;
+  psram_total: number;
+  psram_free: number;
 }
 
 export interface Status {

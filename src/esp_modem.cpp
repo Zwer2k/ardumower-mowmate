@@ -199,7 +199,7 @@ void setup() {
         now / 1000, ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram(),
         (int)ws, rssi, socketHandler.clientCount(),
         httpAdapter.queueSize(), httpAdapter.requestCount(),
-        ArduMower::Modem::BootDiag::lastResetSummary());
+        ArduMower::Modem::BootDiag::lastResetReason());
   });
 
   looptime.add("wifi_health", [&]() {

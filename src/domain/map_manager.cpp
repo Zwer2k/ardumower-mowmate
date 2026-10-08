@@ -194,8 +194,11 @@ namespace ArduMower {
             return meta->crc;
         }
 
-        String MapManager::save(const ArduMower::Domain::Robot::MowerMap &map, const String &name, const String &currentId, double rotation) {
+        String MapManager::save(const ArduMower::Domain::Robot::MowerMap &map, const String &name, const String &currentId, double rotation,
+                                const std::function<void(int percent)> &progress) {
             if (!_initialized && !begin()) return "";
+            auto report = [&](int percent) { if (progress) progress(percent); };
+            report(0);
 
             if (!isMapValid(map)) {
                 Log(WARN, "%s save: Karte ist ungültig, speichern abgelehnt", _LOG_);
@@ -287,8 +290,12 @@ namespace ArduMower {
                 return "";
             }
 
-            // Map-Datei schreiben
-            if (!ArduMower::Util::writeJsonAtomic(SPIFFS, fileName, mapDoc)) {
+            // Map-Datei schreiben (10..90 %, nach geschriebenen Bytes)
+            report(10);
+            const ArduMower::Util::WriteProgress writeProgress = [&](size_t written, size_t total) {
+                if (total > 0) report(10 + (int)(80.0 * written / total));
+            };
+            if (!ArduMower::Util::writeJsonAtomic(SPIFFS, fileName, mapDoc, writeProgress)) {
                 Log(ERR, "%s save: Datei %s konnte nicht geschrieben werden", _LOG_, fileName.c_str());
                 return "";
             }
@@ -304,7 +311,9 @@ namespace ArduMower {
                 _index.activeId = meta->id;
               }
             }
+            report(92);
             saveIndex();
+            report(100);
 
             return meta ? meta->id : "";
         }

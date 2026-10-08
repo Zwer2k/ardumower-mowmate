@@ -202,6 +202,7 @@ namespace ArduMower
       virtual ArduMower::Domain::Robot::Obstacles obstacles() { return _obstacles; }
       virtual ArduMower::Domain::Robot::Obstacles *obstaclesP() { return &_obstacles; }
       virtual ArduMower::Domain::Robot::MowerMap mowerMap() { return _map; }
+      virtual std::vector<ArduMower::Domain::Robot::MapPoint> dockpoints() override { return _map.dockpoints; }
       virtual void beginMowerMapRead() override { _map.beginRead(); }
       virtual void endMowerMapRead() override { _map.endRead(); }
       virtual bool isMowerMapReading() override { return _map.isReading(); }
@@ -219,7 +220,8 @@ namespace ArduMower
       virtual void clearMapListDirty() override;
       virtual bool createMap(const String &name) override;
       virtual bool copyMap(const String &name) override;
-      virtual String saveMap(const String &name, double rotation = 0.0) override;
+      virtual String saveMap(const String &name, double rotation = 0.0,
+                             const std::function<void(int percent)> &progress = {}) override;
       virtual bool loadMap(const String &id) override;
       virtual bool renameMap(const String &id, const String &name) override;
       virtual bool deleteMap(const String &id) override;

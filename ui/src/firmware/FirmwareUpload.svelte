@@ -12,7 +12,7 @@
   } from "carbon-components-svelte";
   import type { Readable } from "svelte/store";
   import { onDestroy } from "svelte";
-  import { FirmwareFlashStatus, FirmwareUploader, FirmwareUploadStatus, FirmwareUploadType } from "./service";
+  import { FirmwareFlashStatus, FirmwareUploader, FirmwareUploadStatus, FirmwareUploadType, REBOOT_TIMEOUT_MS } from "./service";
   import {
     firmwareStatusStore,
     flashProgressStore,
@@ -196,7 +196,7 @@
   let flashWatchSource: "modem" | "mower" | null = null;
   let lastFlashTimestamp = 0;
 
-  const FLASH_WATCHDOG_MS = 5 * 60 * 1000; // 5 minutes max for a flash
+  const FLASH_WATCHDOG_MS = REBOOT_TIMEOUT_MS; // 5 minutes max for a flash
 
   function stopWatchdog() {
     if (watchdogTimer) {

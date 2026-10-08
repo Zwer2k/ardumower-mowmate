@@ -190,8 +190,11 @@ void BleAdapter::startAdvertising()
   advertising->addServiceUUID(SERVICE_UUID);
   advertising->enableScanResponse(true);
 
-  advertising->setMinInterval(0x06);
-  advertising->setMaxInterval(0x12);
+  // Bluetooth und WLAN teilen sich ein Funkteil. Die früheren 0x06..0x12
+  // (3,75..11,25 ms, unter dem BLE-Minimum von 20 ms) belegten es fast
+  // dauernd. 500..1000 ms reichen, damit die App das Modem in 1-2 s findet.
+  advertising->setMinInterval(0x320); // 500 ms (Einheit 0,625 ms)
+  advertising->setMaxInterval(0x640); // 1000 ms
 
   BLEDevice::startAdvertising();
 
@@ -210,10 +213,13 @@ void BleAdapter::reset()
   expectNotify = 0;
 }
 
-#define BLE_MIN_INTERVAL 2
-#define BLE_MAX_INTERVAL 10
+// Verbindungsparameter mit verbundener App. Die früheren 2..10 (2,5..12,5 ms,
+// unter dem BLE-Minimum von 7,5 ms) ließen dem WLAN kaum Funkzeit. Für kurze
+// AT-Kommandos genügen 30..60 ms.
+#define BLE_MIN_INTERVAL 24  // 30 ms (Einheit 1,25 ms)
+#define BLE_MAX_INTERVAL 48  // 60 ms
 #define BLE_LATENCY 0
-#define BLE_TIMEOUT 30
+#define BLE_TIMEOUT 400      // 4 s (Einheit 10 ms)
 void BleAdapter::onConnect(NimBLEServer *server, NimBLEConnInfo& connInfo)
 {
   reset();

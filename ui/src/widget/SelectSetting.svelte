@@ -14,6 +14,7 @@ import type { ChangeEventValue } from "../model";
   export let original: any;
   export let options: Option<any>[];
   export let disabled: boolean = false;
+  export let helpText: string = "";
 
   let dispatch = createEventDispatcher<{ change: ChangeEventValue }>();
 
@@ -38,6 +39,7 @@ import type { ChangeEventValue } from "../model";
 <main>
   <Select
     labelText={labelMod}
+    helperText={helpText}
     bind:selected={value}
     disabled={disabled || $Busy}
     on:change="{(e) => change(e, value)}"
