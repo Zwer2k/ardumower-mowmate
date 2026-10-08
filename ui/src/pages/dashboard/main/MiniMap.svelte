@@ -8,6 +8,7 @@
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import Obstacles from '../../../map/Obstacles.svelte';
+    import MapLoadingOverlay from '../../../map/MapLoadingOverlay.svelte';
 
     export let mowPointIndex: number = -1;
 
@@ -363,6 +364,7 @@
     {:else}
         <div class="no-map">No map loaded</div>
     {/if}
+    <MapLoadingOverlay />
 </div>
 
 <style lang="scss">

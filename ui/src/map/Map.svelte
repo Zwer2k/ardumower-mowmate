@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { TextInput, Dropdown, Row, Grid, Loading, ProgressBar } from "carbon-components-svelte";
+  import { TextInput, Dropdown, Row, Grid } from "carbon-components-svelte";
   import { onMount, tick } from "svelte";
   import Canvas from "./Canvas.svelte";
   import Exclusion from "./Exclusion.svelte";
@@ -59,7 +59,7 @@
   } from "./interactions/map-history";
   import { SaveSuccess } from "../stores/success";
   import { currentMapRotationStore, mapEditLock } from "./service";
-  import { mapChunkProgress } from "./map-chunk-buffer";
+  import MapLoadingOverlay from "./MapLoadingOverlay.svelte";
   import type { Point, MapArea } from "./model";
   import type { MowSettingsData, RouteFinding } from "../model";
   import { gamepadStore, GamepadButton } from "../stores/gamepad";
@@ -1224,23 +1224,7 @@
     </Grid>
   </div>
   <div class="map-canvas-wrapper" class:hidden={showSchedule}>
-    {#if $socketStore.isLoadingMap || $mapChunkProgress}
-      <div class="map-loading-overlay" aria-live="polite">
-        <div class="map-loading-panel">
-          {#if $mapChunkProgress && $mapChunkProgress.total > 0}
-            {@const loadingPercent = Math.min(100, Math.round(($mapChunkProgress.received / $mapChunkProgress.total) * 100))}
-            <ProgressBar
-              value={loadingPercent}
-              max={100}
-              helperText={`${$mapChunkProgress.label} (${loadingPercent}%)`}
-            />
-          {:else}
-            <Loading small withOverlay={false} description="Loading map" />
-            <span>Loading map...</span>
-          {/if}
-        </div>
-      </div>
-    {/if}
+    <MapLoadingOverlay />
     <MapStatusOverlay
       compassRotation={compassRotation}
       socketState={$socketStore}
@@ -1442,27 +1426,6 @@
   }
   .map-canvas-wrapper.hidden {
     display: none;
-  }
-  .map-loading-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 200;
-    display: grid;
-    place-items: center;
-    background: rgba(255, 255, 255, 0.72);
-    backdrop-filter: blur(1px);
-  }
-  .map-loading-panel {
-    width: min(24rem, calc(100% - 2rem));
-    padding: 1rem;
-    background: #ffffff;
-    border: 1px solid #d6d6d6;
-    border-radius: 4px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
-  }
-  .map-loading-panel :global(.bx--loading--small) {
-    margin-right: 0.75rem;
-    vertical-align: middle;
   }
   .goto-floater {
     position: absolute;

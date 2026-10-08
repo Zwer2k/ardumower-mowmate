@@ -31,13 +31,14 @@
     import { browser } from '$app/environment';
     import { goto } from '$app/navigation';
     import { SettingsService } from '../service';
-    import { socketStore } from '../stores/socket';
+    import { socketStore, pendingOperationStore } from '../stores/socket';
     import '../stores/gamepad-service'; // Global gamepad listener (runs even when RC dialog is closed)
 
     let toast = $state<ToastData | null>(null);
     $effect(() => { toast = $toastStore });
     import HelpDialog from "../widget/HelpDialog.svelte";
     import RemoteControlPopover from "../pages/dashboard/status/RemoteControlPopover.svelte";
+    import ProgressOverlay from "../widget/ProgressOverlay.svelte";
     import HeaderOverflowMenu from "../widget/HeaderOverflowMenu.svelte";
     import FirmwareUpdateBadge from "../widget/FirmwareUpdateBadge.svelte";
 
@@ -158,7 +159,12 @@
         />
     {/if}
 </Header>
-{#if (connectionWarningReady && !$socketStore.connected) || progressBusy}
+{#if progressBusy}
+    <ProgressOverlay fixed percent={opPct} label={opMsg || 'Working...'} />
+{:else if $pendingOperationStore}
+    <ProgressOverlay fixed label={$pendingOperationStore.label} />
+{/if}
+{#if connectionWarningReady && !$socketStore.connected}
     <div class="status-stack">
         {#if connectionWarningReady && !$socketStore.connected}
             <div class="connection-warning" role="status" aria-live="polite">
@@ -169,12 +175,6 @@
                     hideCloseButton
                     lowContrast
                 />
-            </div>
-        {/if}
-        {#if progressBusy}
-            <div class="progress-bar-container">
-                <div class="progress-bar {opPct === 0 ? 'indeterminate' : ''}" style="width: {opPct > 0 ? opPct + '%' : '0%'}"></div>
-                <div class="progress-bar-label">{opPct > 0 ? opPct + '%' : ''} {opMsg}</div>
             </div>
         {/if}
     </div>
@@ -306,48 +306,5 @@
 
 :global(.big) {
     display: none;
-}
-
-.progress-bar-container {
-    position: relative;
-    height: 18px;
-    background: #e0e0e0;
-    overflow: hidden;
-    z-index: 9000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.progress-bar {
-    position: absolute;
-    top: 0;
-    left: 0;
-    height: 100%;
-    background: #4caf50;
-    transition: width 0.5s ease;
-    z-index: 9001;
-}
-
-.progress-bar-label {
-    position: relative;
-    z-index: 9002;
-    font-size: 12px;
-    font-weight: 600;
-    color: #161616;
-    white-space: nowrap;
-    text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
-}
-
-.progress-bar.indeterminate {
-    width: 100% !important;
-    background: linear-gradient(90deg, transparent, #66bb6a, #4caf50, #66bb6a, transparent);
-    background-size: 200% 100%;
-    animation: progress-indeterminate 1.5s ease-in-out infinite;
-}
-
-@keyframes progress-indeterminate {
-    0%   { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
 }
 </style>

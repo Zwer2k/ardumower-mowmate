@@ -118,6 +118,27 @@ const initialState: SocketState = {
 };
 
 export const socketStore = writable<SocketState>(initialState);
+
+// Sofortige Rückmeldung nach einem Klick, bis das Modem selbst Fortschritt
+// meldet: Vor dem Speichern gehen erst die geänderten Kartendaten hinüber, und
+// das Modem arbeitet die Anfrage erst in seiner nächsten loop()-Runde ab.
+export const pendingOperationStore = writable<{ op: string; label: string } | null>(null);
+let pendingOperationTimer: ReturnType<typeof setTimeout> | null = null;
+
+function startPendingOperation(op: string, label: string) {
+  if (pendingOperationTimer) clearTimeout(pendingOperationTimer);
+  pendingOperationStore.set({ op, label });
+  // Sicherheitsnetz, falls das Modem die Anfrage nie beantwortet.
+  pendingOperationTimer = setTimeout(() => clearPendingOperation(), 30000);
+}
+
+function clearPendingOperation(op?: string) {
+  const pending = get(pendingOperationStore);
+  if (!pending || (op && pending.op !== op)) return;
+  if (pendingOperationTimer) clearTimeout(pendingOperationTimer);
+  pendingOperationTimer = null;
+  pendingOperationStore.set(null);
+}
 if (typeof window !== "undefined") {
   (window as any).socketStore = socketStore;
 }
@@ -472,6 +493,8 @@ class SocketService {
                     // not part of the `State` TS type. Preserve it on the object
                     // for the UI by assigning to `any` so Map.svelte can read it.
                     if (jsonData.progressOp !== undefined) (st as any).progressOp = jsonData.progressOp;
+                    // Das Modem meldet den Vorgang jetzt selbst.
+                    if (jsonData.progressOp) clearPendingOperation(jsonData.progressOp);
                   }
                   newState.state = st;
                 }
@@ -847,6 +870,7 @@ class SocketService {
               const mapsCount = socketStore ? get(socketStore).maps.length + 1 : 1;
               mwf.onNewMapReceived(`Karte ${mapsCount}`);
             }
+            if (workflowFinishSaveMap || workflowSaveRejected) clearPendingOperation("save");
             if (workflowFinishSaveMap) {
               mwf.finishSaveMap(workflowFinishSaveMap.id, workflowFinishSaveMap.name, workflowFinishSaveMap.rotation);
             }
@@ -1157,6 +1181,7 @@ class SocketService {
   }
 
   sendCalculateWaypoints() {
+    startPendingOperation("calculate", "Calculating waypoints...");
     const req: RequestSocketMessage = {
       type: RequestDataType.calculateWaypoints,
       data: {},
@@ -1224,6 +1249,7 @@ class SocketService {
     mapMetaStore.set(null);
     const mapId = this.mapWriteTargetId();
     this.pendingSaveMapId = mapId;
+    startPendingOperation("save", "Saving map...");
     const req: RequestSocketMessage = {
       type: RequestDataType.saveMap,
       data: { name, rotation, mapId },
