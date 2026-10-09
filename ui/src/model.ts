@@ -412,6 +412,7 @@ export enum ResponseDataType {
   pong,
   firmwareStatus,
   routeReport,
+  mapOpResult,
 }
 
 export interface ScheduleEntry {

@@ -49,10 +49,10 @@
       <Button
         kind="tertiary"
         size="small"
-        disabled={!effectiveMapId || workflow.renameMode || workflowBusy}
+        disabled={!effectiveMapId || effectiveMapId.startsWith("__") || workflow.renameMode || workflowBusy}
         on:click={onSetDefaultMap}
         icon={IconStar}
-        iconDescription="Set as default map"
+        iconDescription={effectiveMapId?.startsWith("__") ? "Save the map before making it the default" : "Set as default map"}
       >
         <span class="btn-label">Default</span>
       </Button>

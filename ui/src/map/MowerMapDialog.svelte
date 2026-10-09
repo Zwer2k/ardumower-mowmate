@@ -181,7 +181,6 @@
         return;
       }
       onImport(result.map, result.rotation, new Date().toISOString(), "CaSSAndRA GeoJSON");
-      SaveSuccess.set({ action: "import geojson map", date: new Date() });
       open = false;
       return;
     }
@@ -196,7 +195,6 @@
       return;
     }
     onImport(result.map, result.rotation, result.dateTime, result.source, result.settings);
-    SaveSuccess.set({ action: "import mower map", date: new Date() });
     open = false;
   }
 

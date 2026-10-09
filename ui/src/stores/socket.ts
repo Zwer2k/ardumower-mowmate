@@ -459,6 +459,11 @@ class SocketService {
               return;
             }
 
+            if (msgType === ResponseDataType.mapOpResult) {
+              this.handleMapOpResult(jsonData.data as { op: string; ok: boolean; error?: string; mapId?: string });
+              return;
+            }
+
             // Map-Workflow-Store wird nur bei Map-relevanten Nachrichten
             // gebraucht; bei allen anderen Nachrichten (z. B. Upload-Progress
             // über mowerConsole) sparen wir den Import und vermeiden
@@ -1350,7 +1355,34 @@ class SocketService {
     this.sendMessage(req);
   }
 
-  sendImportMap(json: string, name: string, rotation: number = 0) {
+  // Mäh-Einstellungen eines Imports: erst nach erfolgreichem Import für die
+  // neue Karte senden, nicht vorher an die gerade aktuelle.
+  private pendingImportSettings: Partial<import("../model").MowSettingsData> | null = null;
+
+  /** Ergebnis einer Kartenoperation vom Modem (create, copy, load, save, rename, delete, discard, setActive, import). */
+  private handleMapOpResult(result: { op: string; ok: boolean; error?: string; mapId?: string }) {
+    if (result.op === "import") {
+      const settings = this.pendingImportSettings;
+      this.pendingImportSettings = null;
+      if (result.ok && settings) this.sendMowSettings(settings as import("../model").MowSettingsData);
+    }
+    if (result.ok) {
+      if (result.op === "import") toastStore.set({ msg: "Map imported", type: "success" });
+      return;
+    }
+    if (result.op === "save") {
+      this.pendingSaveMapId = null;
+      clearPendingOperation("save");
+    }
+    const message = result.error || `The map operation "${result.op}" failed.`;
+    // Workflow beenden, sonst wertet die nächste Kartenliste den Vorgang als erfolgreich.
+    mapWorkflowStore.setError(message);
+    toastStore.set({ msg: message, type: "error" });
+  }
+
+  sendImportMap(json: string, name: string, rotation: number = 0,
+                settings?: Partial<import("../model").MowSettingsData>) {
+    this.pendingImportSettings = settings ?? null;
     const req: RequestSocketMessage = {
       type: RequestDataType.importMap,
       data: { json, name, rotation },

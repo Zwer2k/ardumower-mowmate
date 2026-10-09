@@ -564,21 +564,9 @@ bool MowerAdapter::importMowerMap(const String &json, ArduMower::Domain::Robot::
     Log(WARN, "%simportMowerMap: invalid map geometry", _LOG_);
     return false;
   }
-  // Importierte Mäh-Einstellungen in den aktuellen Settings übernehmen.
-  _mowSettings.pattern = outMap.pattern;
-  _mowSettings.width = outMap.mowOfs;
-  _mowSettings.angle = outMap.patternAngle;
-  _mowSettings.distanceToBorder = outMap.distanceToBorder;
-  _mowSettings.borderLaps = outMap.borderLaps;
-  _mowSettings.doMowArea = outMap.doMowArea;
-  _mowSettings.doMowPerimeter = outMap.doMowPerimeter;
-  _mowSettings.doMowBorder = outMap.doMowBorder;
-  _mowSettings.doMowExclusions = outMap.doMowExclusions;
-  _mowSettings.doMowExclusionBorder = outMap.doMowExclusionBorder;
-  _mowSettings.mowBorderCcw = outMap.mowBorderCcw;
-  _mowSettings.simplifyEpsilon = outMap.simplifyEpsilon;
-  _mowSettings.checkTurnRadius = outMap.checkTurnRadius;
-  _mowSettings.timestamp = millis();
+  // Nur prüfen und einlesen, keine Seiteneffekte: Die Mäh-Einstellungen
+  // überträgt der Browser nach erfolgreichem Import für die neue Karte.
+  // Früher landeten sie in der Karte, die zum Zeitpunkt des Imports aktuell war.
   return true;
 }
 

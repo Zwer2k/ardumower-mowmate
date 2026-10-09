@@ -16,7 +16,7 @@
   import { mowSettingsStore } from "./mow-settings";
   import { filterWaypointsByToggles } from "./core/waypoint-filter";
   import { openConfirm, openConfirmChoice } from "../stores/confirm-dialog";
-  import { mapWorkflowStore, isMapDirty } from "./map-workflow";
+  import { mapWorkflowStore, isMapDirty, generateUniqueName } from "./map-workflow";
   import { isMowerMapSynced, setMapDirty } from "./services/map-sync";
   import { get } from "svelte/store";
   import MowSettingsDialog from "./MowSettingsDialog.svelte";
@@ -555,11 +555,11 @@
     source?: string,
     settings?: Partial<import("../model").MowSettingsData>,
   ) {
+    // Karte und Einstellungen erst übernehmen, wenn das Modem den Import
+    // bestätigt (mapOpResult): Es legt eine neue Karte an und schickt sie
+    // zurück. Vorher landeten Geometrie und Einstellungen bei einem Fehler in
+    // der gerade aktuellen Karte.
     currentMapRotationStore.set(((rotation % 360) + 360) % 360);
-    MapStore.set({ map, presentation: calculatePresentation(map, 0) });
-    if (settings) {
-      socketService.sendMowSettings(settings as MowSettingsData);
-    }
     // MowerMap::fromJson() (backend) expects the same X/Y convention as the
     // persisted map format (Y not flipped), unlike the setMap handler which
     // flips Y itself. Convert frontend points (Y-up) back to that convention
@@ -576,8 +576,9 @@
         waypoints: map.waypoints.points.map(toBackendPoint),
         rotation,
       }),
-      $mapWorkflowStore.pendingName || effectiveMapName || defaultMapName(),
+      generateUniqueName(source ? `Import ${source}` : "Imported map"),
       rotation,
+      settings,
     );
   }
 

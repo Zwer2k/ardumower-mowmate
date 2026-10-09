@@ -441,11 +441,17 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
 
    case RequestDataType::createMap: {
     String name = jsonData["name"] | "";
+    // Ein laufender Transfer zum Browser hält die Lesesperre; ohne Abbruch
+    // vorher scheiterte die Operation still (z. B. "Verwerfen -> Neue Karte").
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     if (_source.createMap(name)) {
-      _socketHandler->abortMapChunkSend();
-      yield();
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "create", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "create", false, "The map could not be created. The name may already be in use.");
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -453,11 +459,15 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
 
    case RequestDataType::copyMap: {
     String name = jsonData["name"] | "";
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     if (_source.copyMap(name)) {
-      _socketHandler->abortMapChunkSend();
-      yield();
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "copy", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "copy", false, "The map could not be copied. The name may already be in use.");
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -477,11 +487,13 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "load", true);
     } else {
       // Die aktuelle Karte bei einem Ladefehler behalten. Die Map-Liste
       // liefert dem Frontend wieder die weiterhin autoritative currentId.
       _socketHandler->abortMapChunkSend();
       yield();
+      _socketHandler->sendMapOpResult(this, "load", false, "The map could not be loaded.");
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -496,6 +508,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     if (requestedMapId != _source.currentMapId()) {
       Log(WARN, "%s saveMap: request for map %s rejected; current map is %s", _LOG_,
           requestedMapId.c_str(), _source.currentMapId().c_str());
+      _socketHandler->sendMapOpResult(this, "save", false, "The map was not saved: the modem switched to another map.");
       _socketHandler->sendMapList(NULL);
       break;
     }
@@ -511,6 +524,9 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     _socketHandler->sendData(ResponseDataType::mowerState, NULL, true);
     if (saved) {
       _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "save", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "save", false, "The map was not saved. The name may already be in use, or the storage is full.");
     }
     break;
   }
@@ -520,30 +536,41 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     String name = jsonData["name"] | "";
     _socketHandler->abortMapChunkSend();
     yield();
-    if (_source.renameMap(id, name)) {
-      _socketHandler->sendMapList(NULL);
+    const bool renamed = _source.renameMap(id, name);
+    if (!renamed) {
+      _socketHandler->sendMapOpResult(this, "rename", false, "The map was not renamed. The name may already be in use.");
     }
+    _socketHandler->sendMapList(NULL);
+    if (renamed) _socketHandler->sendMapOpResult(this, "rename", true);
     break;
   }
 
    case RequestDataType::deleteMap: {
     String id = jsonData["id"] | "";
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     if (_source.deleteMap(id)) {
-      _socketHandler->abortMapChunkSend();
-      yield();
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "delete", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "delete", false, "The map could not be deleted.");
       _socketHandler->sendMapList(NULL);
     }
     break;
   }
 
    case RequestDataType::discardMap: {
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     if (_source.discardMap()) {
-      _socketHandler->abortMapChunkSend();
-      yield();
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "discard", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "discard", false, "The changes could not be discarded.");
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -551,9 +578,12 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
 
    case RequestDataType::setActiveMap: {
     String id = jsonData["id"] | "";
-    if (_source.setActiveMap(id)) {
+    const bool ok = _source.setActiveMap(id);
+    if (ok) {
       _socketHandler->sendMapList(NULL);
     }
+    _socketHandler->sendMapOpResult(this, "setActive", ok,
+        ok ? "" : "Only saved maps can be the default map. Save the map first.");
     break;
   }
 
@@ -561,18 +591,27 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     String json = jsonData["json"] | "";
     String name = jsonData["name"] | "";
     double rotation = jsonData["rotation"] | 0.0;
+    // Erst prüfen (ohne Seiteneffekte), dann neue Karte anlegen, dann füllen.
+    // Früher schrieb der Import die Mäh-Einstellungen in die aktuelle Karte,
+    // bevor createMap am vergebenen Namen scheiterte.
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     ArduMower::Domain::Robot::MowerMap imported;
-    if (_source.importMowerMap(json, imported)) {
-      imported.rotation = rotation;
-      if (_source.createMap(name)) {
-        _socketHandler->setMap(imported);
-        _socketHandler->abortMapChunkSend();
-        yield();
-        _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
-        _socketHandler->sendData(ResponseDataType::map, NULL, true);
-        _socketHandler->sendMapList(NULL);
-      }
+    if (!_source.importMowerMap(json, imported)) {
+      _socketHandler->sendMapOpResult(this, "import", false, "The file does not contain a valid map.");
+      break;
     }
+    imported.rotation = rotation;
+    if (!_source.createMap(name)) {
+      _socketHandler->sendMapOpResult(this, "import", false, "The imported map could not be created. The name may already be in use.");
+      _socketHandler->sendMapList(NULL);
+      break;
+    }
+    _socketHandler->setMap(imported);
+    _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+    _socketHandler->sendData(ResponseDataType::map, NULL, true);
+    _socketHandler->sendMapList(NULL);
+    _socketHandler->sendMapOpResult(this, "import", true);
     break;
   }
 
@@ -2283,6 +2322,22 @@ void UiSocketHandler::sendMapList(UiSocketItem *sendTo)
       _ws->cleanupClients();
     }
   }
+}
+
+void UiSocketHandler::sendMapOpResult(UiSocketItem *sendTo, const char *op, bool ok, const char *error)
+{
+  if (!sendTo) return;
+  JsonDocument doc;
+  doc["type"] = ResponseDataType::mapOpResult;
+  auto data = doc["data"].to<JsonObject>();
+  data["op"] = op;
+  data["ok"] = ok;
+  if (!ok && error && *error) data["error"] = error;
+  data["mapId"] = _source.currentMapId();
+  String json;
+  serializeJson(doc, json);
+  sendTo->sendText(json);
+  if (!ok) Log(WARN, "%s map operation %s failed: %s", _LOG_, op, error ? error : "");
 }
 
 void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted)

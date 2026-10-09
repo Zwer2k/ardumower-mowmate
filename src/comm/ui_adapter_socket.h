@@ -93,6 +93,7 @@ namespace ArduMower
         responsePong,
         firmwareStatus,
         routeReport,
+        mapOpResult,
         responseDataTypeLength
       };
 
@@ -201,6 +202,9 @@ namespace ArduMower
         void sendData(ResponseDataType dataType, UiSocketItem *sendTo = NULL, bool force = false);
         void sendMapList(UiSocketItem *sendTo = NULL);
         void sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted);
+        // Ergebnis einer Kartenoperation (create, copy, load, save, rename,
+        // delete, discard, setActive, import) an den anfragenden Browser.
+        void sendMapOpResult(UiSocketItem *sendTo, const char *op, bool ok, const char *error = "");
         // Ergebnis der Routenprüfung der letzten Wegpunktberechnung.
         void sendRouteReport(UiSocketItem *sendTo = NULL);
         void sendSchedule(UiSocketItem *sendTo = NULL);
