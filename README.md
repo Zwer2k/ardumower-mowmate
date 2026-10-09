@@ -199,18 +199,6 @@ For the MATRIX MOW800 with STM32 controller, MowMate uses:
 
 See the [ESP32-S3 MOW800/STM32 pinout](docs/screenshots/esp32-s3-mow800-stm32-pinout.svg) for the STM32-oriented wiring.
 
-### ArduMower PCB 1.3
-
-For the classic **ArduMower PCB 1.3**, the wiring is different from the MATRIX MOW800 / STM32 setup:
-
-- `P44 (WLAN)` is used for the main mower UART
-- `P27 (PX0/RX0)` can be used as an optional read-only terminal input
-- `P23 (MP-R)` provides the mower reset line
-- `JP11` must be set to **3.3V logic**
-- the ESP32-S3 GPIOs are **not 5V tolerant**
-
-See the [ESP32-S3 PCB 1.3 pinout](docs/screenshots/esp32-s3-pcb13-pinout.svg) for the board-specific wiring diagram.
-
 ### ArduMower PCB 1.4
 
 Wiring of an **ESP32-S3-DevKitC-1** to the ArduMower **PCB 1.4**:
@@ -218,6 +206,8 @@ Wiring of an **ESP32-S3-DevKitC-1** to the ArduMower **PCB 1.4**:
 - power (5V, GND) and the main mower UART (`GPIO17` TX2 / `GPIO18` RX2) via the **Bluetooth connector**
 - the terminal UART (`GPIO15` RX1 / `GPIO16` TX1)
 - the mower reset line (`GPIO7`) from `P23 (MP-R)`
+
+The ESP32-S3 GPIOs are **not 5V tolerant**: set the Bluetooth connector's signal level jumper `JP10 (BlueS)` to **3.3V**; `JP4 (BlueV)` supplies 5V. The same wiring also fits the ArduMower PCB 1.3.
 
 ![Wiring plan ESP32-S3 to ArduMower PCB 1.4](docs/wiring_plan_ESP32-S3_to_PCB1.4.png)
 
