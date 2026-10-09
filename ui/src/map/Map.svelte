@@ -60,6 +60,7 @@
   import { SaveSuccess } from "../stores/success";
   import { currentMapRotationStore, mapEditLock } from "./service";
   import MapLoadingOverlay from "./MapLoadingOverlay.svelte";
+  import { capacityExceeded, confirmUploadCapacity, mowerCapacityFor } from "./services/mower-capacity";
   import type { Point, MapArea } from "./model";
   import type { MowSettingsData, RouteFinding } from "../model";
   import { gamepadStore, GamepadButton } from "../stores/gamepad";
@@ -411,10 +412,20 @@
     socketService.sendSaveMap(name, compassRotation);
   }
 
-  function onUploadMap() {
+  async function onUploadMap() {
+    if (!(await confirmUploadCapacity())) return;
+    const syncPending = mapSyncTimer !== null;
     if (mapSyncTimer) {
       clearTimeout(mapSyncTimer);
       mapSyncTimer = null;
+    }
+    // Der Editor gleicht Änderungen nach 250 ms selbst mit dem Modem ab. Ist
+    // nichts mehr offen, hat das Modem den Stand bereits: direkt hochladen wie
+    // der Upload-Knopf des Dashboards. Die ganze Karte vorher erneut zu senden
+    // blieb sonst oft ohne Bestätigung hängen, und der Knopf tat nichts.
+    if (!syncPending && !socketService.hasUnsyncedEdits()) {
+      socketService.sendUploadMap();
+      return;
     }
     const mapData = buildMapSetData(get(MapStore).map, compassRotation);
     lastSyncedMap = JSON.stringify(mapData);
@@ -582,6 +593,9 @@
     .map((i) => rawWaypoints[i])
     .filter((p): p is Point => !!p);
   $: totalPoints = perimeterPoints + dockpointsPoints + waypointsPoints + exclusionPoints.reduce((a, b) => a + b, 0);
+  // Schätzung, wie viele Punkte in den Speicher des Mähers passen.
+  $: mowerCapacity = mowerCapacityFor($socketStore, $MapStore?.map, $mowSettingsStore);
+  $: mowerCapacityExceeded = capacityExceeded(mowerCapacity);
 
   // ─── Edit/draw state ───────────────────────────────────────────────────────
   let drawActive = false;
@@ -1233,6 +1247,8 @@
       {dockpointsPoints}
       {waypointsPoints}
       {totalPoints}
+      {mowerCapacity}
+      {mowerCapacityExceeded}
       needsUpload={sync.needsUpload}
       onUploadMap={onUploadMap}
       {selectedExclusionIndex}

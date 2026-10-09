@@ -16,6 +16,11 @@
     import { onMount } from 'svelte';
     import MotorRpmChart from './MotorRpmChart.svelte';
     import { MotorRpmStore } from '../../../stores/motorRpm';
+    import { confirmUploadCapacity } from '../../../map/services/mower-capacity';
+
+    async function uploadMap() {
+        if (await confirmUploadCapacity()) socketService.sendUploadMap();
+    }
 
     // The mower reports its durations in seconds (Sunray counts them up once
     // per second). Show minutes below an hour and hours above, instead of
@@ -320,7 +325,7 @@
         <!-- Schnellaktionen -->
         <div class="quick-actions">
             {#if hasMapData && !isMapSynced}
-                <Button kind="primary" icon={Upload} size="small" class="action-upload" on:click={() => socketService.sendUploadMap()} />
+                <Button kind="primary" icon={Upload} size="small" class="action-upload" on:click={uploadMap} />
             {/if}
             <Button kind="primary" icon={PlayFilledAlt} size="small" class="action-start" disabled={hasMapData && !isMapSynced} on:click={() => sendCmd('start')} />
             <Button kind="danger" icon={StopFilledAlt} size="small" class="action-stop" disabled={hasMapData && !isMapSynced} on:click={() => sendCmd('stop')} />

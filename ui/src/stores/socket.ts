@@ -128,8 +128,14 @@ let pendingOperationTimer: ReturnType<typeof setTimeout> | null = null;
 function startPendingOperation(op: string, label: string) {
   if (pendingOperationTimer) clearTimeout(pendingOperationTimer);
   pendingOperationStore.set({ op, label });
-  // Sicherheitsnetz, falls das Modem die Anfrage nie beantwortet.
-  pendingOperationTimer = setTimeout(() => clearPendingOperation(), 30000);
+  // Sicherheitsnetz, falls das Modem die Anfrage nie beantwortet (z. B. weil
+  // es sie für eine andere Karte hält): Anzeige beenden und Bescheid geben.
+  pendingOperationTimer = setTimeout(() => {
+    pendingOperationTimer = null;
+    if (get(pendingOperationStore)?.op !== op) return;
+    pendingOperationStore.set(null);
+    toastStore.set({ msg: `The modem did not respond: "${label.replace(/\.+$/, "")}" did not start. Try again.`, type: "error" });
+  }, 30000);
 }
 
 function clearPendingOperation(op?: string) {
@@ -258,6 +264,8 @@ class SocketService {
   private nextMapSyncId = 1;
   private pendingUpload: { mapData: import("../model").MapSetData; syncId: number; mapId: string } | null = null;
   private pendingUploadRetry: ReturnType<typeof setTimeout> | null = null;
+  private pendingUploadAttempts = 0;
+  private pendingUploadDeadline: ReturnType<typeof setTimeout> | null = null;
   // Last plain setMap() (editor sync). The backend rejects setMap while it is
   // streaming the map to clients (mapAck.accepted=false); without a retry the
   // edit was silently lost, because the editor only resends when the map
@@ -1116,13 +1124,38 @@ class SocketService {
     }
   }
 
+  /** Editor-Änderungen, die das Modem noch nicht bestätigt hat. */
+  hasUnsyncedEdits(): boolean {
+    return this.lastSetMap !== null || this.unsyncedMapId !== null;
+  }
+
   sendMapAndUpload(mapData: import("../model").MapSetData) {
     if (this.editRecoveryId) return;
     const syncId = this.nextMapSyncId++;
     const mapId = this.mapWriteTargetId();
     this.unsyncedMapId = mapId;
     this.pendingUpload = { mapData, syncId, mapId };
+    this.pendingUploadAttempts = 0;
+    startPendingOperation("upload", "Uploading map...");
+    // Ohne Bestätigung des Modems startet der Upload nie; statt still zu
+    // hängen, gibt es nach 15 s eine Meldung.
+    if (this.pendingUploadDeadline) clearTimeout(this.pendingUploadDeadline);
+    this.pendingUploadDeadline = setTimeout(() => {
+      this.pendingUploadDeadline = null;
+      if (this.pendingUpload?.syncId !== syncId) return;
+      this.abandonPendingUpload("The modem did not accept the map, so the upload did not start. Try again.");
+    }, 15000);
     this.sendPendingUploadMap();
+  }
+
+  private abandonPendingUpload(message: string) {
+    this.pendingUpload = null;
+    if (this.pendingUploadRetry) {
+      clearTimeout(this.pendingUploadRetry);
+      this.pendingUploadRetry = null;
+    }
+    clearPendingOperation("upload");
+    toastStore.set({ msg: message, type: "error" });
   }
 
   private sendPendingUploadMap() {
@@ -1140,6 +1173,11 @@ class SocketService {
   }
 
   private schedulePendingUploadRetry() {
+    // Lehnt das Modem dauerhaft ab, nicht endlos alle 150 ms neu senden.
+    if (++this.pendingUploadAttempts > 20) {
+      this.abandonPendingUpload("The modem kept rejecting the map, so the upload did not start. Try again.");
+      return;
+    }
     if (this.pendingUploadRetry) clearTimeout(this.pendingUploadRetry);
     this.pendingUploadRetry = setTimeout(() => {
       this.pendingUploadRetry = null;
@@ -1148,6 +1186,11 @@ class SocketService {
   }
 
   sendUploadMap(mapId = get(socketStore).currentMapId) {
+    if (this.pendingUploadDeadline) {
+      clearTimeout(this.pendingUploadDeadline);
+      this.pendingUploadDeadline = null;
+    }
+    startPendingOperation("upload", "Uploading map...");
     const req: RequestSocketMessage = {
       type: RequestDataType.uploadMap,
       data: { mapId },
