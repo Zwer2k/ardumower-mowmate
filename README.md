@@ -186,7 +186,7 @@ Before building or flashing the firmware, install the following tools:
 
 ## Hardware Pinout
 
-The ESP32-S3 pinout is described separately for the [MATRIX MOW800 / STM32](docs/pinout.md) and the [ArduMower PCB 1.3 / 1.4](docs/pinout-pcb.md). It applies to the **ESP32-S3-DevKitC-1** development board as well as to soldering an **ESP32-S3-WROOM-1 module** directly onto a custom PCB.
+The ESP32-S3 pinout is described separately for the [MATRIX MOW800 / STM32](docs/pinout-mow800.md) and the [ArduMower PCB 1.3 / 1.4](docs/pinout-pcb.md). It applies to the **ESP32-S3-DevKitC-1** development board as well as to soldering an **ESP32-S3-WROOM-1 module** directly onto a custom PCB.
 
 ### MATRIX MOW800 / STM32
 
@@ -334,7 +334,7 @@ Motor plot test (60s motor ramp test) with safety confirmation and live PWM/tick
 
 ![Settings](docs/screenshots/settings.png)
 
-Configuration of WiFi, Bluetooth, MQTT, Prometheus, PS4 controller, and OTA updates. OTA flashing of the Sunray firmware (STM32) requires trigger lines (`BOOT0` on GPIO 5, `NRST` on GPIO 7) between the ESP32 and the STM32. See [Pinout](docs/pinout.md) for details.
+Configuration of WiFi, Bluetooth, MQTT, Prometheus, PS4 controller, and OTA updates. OTA flashing of the Sunray firmware (STM32) requires trigger lines (`BOOT0` on GPIO 5, `NRST` on GPIO 7) between the ESP32 and the STM32. See [Pinout](docs/pinout-mow800.md) for details.
 
 ### Integrations
 
