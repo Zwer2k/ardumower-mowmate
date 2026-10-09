@@ -1978,6 +1978,11 @@ void UiSocketHandler::processUploadToMower() {
   } else {
     sendProgress("upload", 100, "Upload failed");
     Log(WARN, "%s processUploadToMower: upload failed", _LOG_);
+    // Die Fortschrittsanzeige verschwindet bei 100 %; der Grund kommt als
+    // Fehlermeldung an alle Browser.
+    String reason = _cmd.uploadMapToMowerError();
+    if (reason.length() == 0) reason = "The map upload to the mower failed.";
+    sendMapOpResult(NULL, "upload", false, reason.c_str());
   }
   sendData(ResponseDataType::mowerState, NULL, true);
   _cmd.requestStatusNow(); // refresh state/crc immediately after upload
@@ -2329,7 +2334,6 @@ void UiSocketHandler::sendMapList(UiSocketItem *sendTo)
 
 void UiSocketHandler::sendMapOpResult(UiSocketItem *sendTo, const char *op, bool ok, const char *error)
 {
-  if (!sendTo) return;
   JsonDocument doc;
   doc["type"] = ResponseDataType::mapOpResult;
   auto data = doc["data"].to<JsonObject>();
@@ -2339,7 +2343,11 @@ void UiSocketHandler::sendMapOpResult(UiSocketItem *sendTo, const char *op, bool
   data["mapId"] = _source.currentMapId();
   String json;
   serializeJson(doc, json);
-  sendTo->sendText(json);
+  if (sendTo) {
+    sendTo->sendText(json);
+  } else if (countConnectedClients() > 0) {
+    sendTextAllWithRetry(json);
+  }
   if (!ok) Log(WARN, "%s map operation %s failed: %s", _LOG_, op, error ? error : "");
 }
 

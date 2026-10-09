@@ -292,6 +292,8 @@ namespace ArduMower
       virtual bool uploadSavedMapToMower(const String &id) override;
       virtual bool uploadMapToMowerActive() override { return _mapUploadState.active; }
       virtual bool uploadMapToMowerSuccess() override { return _mapUploadState.phase == MapUploadState::done; }
+      virtual String uploadMapToMowerError() override { return _mapUploadError; }
+      String _mapUploadError;
       virtual ArduMower::Domain::Robot::UploadProgress uploadProgress() override;
       virtual bool customCmd(String cmd);
       virtual void drainRx(const char* line, bool &stop) override;

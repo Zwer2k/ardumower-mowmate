@@ -2208,6 +2208,15 @@ void MowerAdapter::processMapUpload()
         Log(WARN, "%sprocessMapUpload: response index mismatch in phase %d (expected %d, got %d)",
             _LOG_, _mapUploadState.phase, _mapUploadState.lastExpectedNextIdx, respIdx);
         responseValid = false;
+        // Sunray bestätigt mit W,<Index> den Punkt, an dem setPoint() abbrach
+        // (zu wenig Speicher oder gesperrt nach einem früheren Speicherfehler).
+        // Denselben Chunk erneut zu senden ändert daran nichts.
+        if (respIdx < _mapUploadState.lastExpectedNextIdx) {
+          _mapUploadError = "The mower stopped accepting map points at point " + String(respIdx) +
+              " of " + String(uploadProgress().totalTotal) +
+              ". It most likely ran out of memory: reduce the number of points (e.g. Lines instead of Rings, a larger track width). If even small maps fail, restart the mower.";
+          _mapUploadState.chunkRetry = 2; // sofort abbrechen (unten +1 = 3)
+        }
       }
     }
     if (!responseValid) {
@@ -2215,6 +2224,8 @@ void MowerAdapter::processMapUpload()
       Log(WARN, "%sprocessMapUpload: command failed in phase %d (retry %d/3)", _LOG_, _mapUploadState.phase, _mapUploadState.chunkRetry);
       if (_mapUploadState.chunkRetry >= 3) {
         Log(ERR, "%sprocessMapUpload: command failed in phase %d after 3 retries", _LOG_, _mapUploadState.phase);
+        if (_mapUploadError.length() == 0)
+          _mapUploadError = "The mower did not confirm the map transfer.";
         if (_mapUploadLockedMap) _map.endRead();
         _mapUploadLockedMap = false;
         _mapUploadState.snapshot = ArduMower::Domain::Robot::MowerMap();
@@ -2245,6 +2256,7 @@ void MowerAdapter::processMapUpload()
   switch (_mapUploadState.phase) {
     case MapUploadState::start:
       Log(INFO, "%sprocessMapUpload: uploading map...", _LOG_);
+      _mapUploadError = "";
       _mapUploadState.phase = MapUploadState::perimeter;
       _mapUploadState.pointIdx = 0;
       _mapUploadState.chunkRetry = 0;

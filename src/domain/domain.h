@@ -634,6 +634,8 @@ namespace ArduMower
         virtual bool uploadSavedMapToMower(const String &id) { (void)id; return false; }
         virtual bool uploadMapToMowerActive() { return false; }
         virtual bool uploadMapToMowerSuccess() { return false; }
+        // Grund des letzten fehlgeschlagenen Uploads zum Mäher (leer = unbekannt).
+        virtual String uploadMapToMowerError() { return ""; }
         virtual UploadProgress uploadProgress() { return UploadProgress(); }
         virtual bool customCmd(String cmd) = 0;
       };
