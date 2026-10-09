@@ -157,7 +157,10 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   _map.doMowExclusionBorder = _mowSettings.doMowExclusionBorder;
   _map.simplifyEpsilon = _mowSettings.simplifyEpsilon;
   _map.checkTurnRadius = _mowSettings.checkTurnRadius;
-  _map.timestamp = millis();
+  // _map.timestamp bleibt unverändert: Er steuert die Übertragung der Karte an
+  // den Browser, und die Geometrie hat sich nicht geändert. Jedes Umschalten
+  // eines Mäh-Toggles schickte sonst die ganze Karte (tausende Wegpunkte)
+  // erneut; die Einstellungen selbst gehen per mowSettings-Nachricht hinaus.
   _currentMapUnsaved = true;
   _mapListDirty = true;
 
