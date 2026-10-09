@@ -566,6 +566,8 @@ namespace ArduMower
         // Nur die Dockpunkte, ohne die ganze Karte zu kopieren (die Statusnachricht
         // braucht sie bei jedem Senden).
         virtual std::vector<ArduMower::Domain::Robot::MapPoint> dockpoints() { return mowerMap().dockpoints; }
+        // Zeitstempel der aktuellen Karte, ohne sie zu kopieren.
+        virtual uint32_t mowerMapTimestamp() { return mowerMap().timestamp; }
         virtual String saveMap(const String &name, double rotation = 0.0,
                                const std::function<void(int percent)> &progress = {}) { (void)name; (void)rotation; (void)progress; return ""; }
         virtual bool loadMap(const String &id) { (void)id; return false; }

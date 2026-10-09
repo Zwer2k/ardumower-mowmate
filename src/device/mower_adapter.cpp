@@ -106,13 +106,18 @@ void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
     Log(WARN, "%ssetMap: Map-Lesevorgang läuft noch, ignoriere", _LOG_);
     return;
   }
+  const bool wasUnsaved = _currentMapUnsaved;
+  const double oldArea = _currentMapArea;
   _map = map;
   _map.timestamp = millis();
   _lastUploadedMapId = "";
   _lastUploadedMapCrc = 0;
   _currentMapUnsaved = true;
-  _mapListDirty = true;
   updateCurrentMapMeta();
+  // Die Kartenliste zeigt nur "ungespeichert" und die Fläche. Sie ging früher
+  // bei jeder Bearbeitung (alle 250 ms) an alle Browser.
+  if (!wasUnsaved || fabs(oldArea - _currentMapArea) >= 0.05)
+    _mapListDirty = true;
   if (_currentMapId.startsWith("__t_")) {
     updateTransientMapMeta(_currentMapId, _map, _map.rotation);
   } else {

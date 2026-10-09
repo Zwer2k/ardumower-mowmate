@@ -211,6 +211,7 @@ namespace ArduMower
       virtual ArduMower::Domain::Robot::Obstacles *obstaclesP() { return &_obstacles; }
       virtual ArduMower::Domain::Robot::MowerMap mowerMap() { return _map; }
       virtual std::vector<ArduMower::Domain::Robot::MapPoint> dockpoints() override { return _map.dockpoints; }
+      virtual uint32_t mowerMapTimestamp() override { return _map.timestamp; }
       virtual void beginMowerMapRead() override { _map.beginRead(); }
       virtual void endMowerMapRead() override { _map.endRead(); }
       virtual bool isMowerMapReading() override { return _map.isReading(); }

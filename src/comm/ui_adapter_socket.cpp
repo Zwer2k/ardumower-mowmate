@@ -2342,16 +2342,20 @@ void UiSocketHandler::sendMapOpResult(UiSocketItem *sendTo, const char *op, bool
 
 void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted)
 {
-  const auto map = _source.mowerMap();
+  // Jede Bearbeitung (alle 250 ms) bestätigt hier: Früher kostete das eine
+  // Kopie der ganzen Karte nur für den Zeitstempel und einen MD5 über die
+  // komplette Geometrie. Der Browser speichert den Hash nur, entscheidet aber
+  // nichts damit; die Kartenliste liefert ihn bei Bedarf.
+  const uint32_t mapTimestamp = _source.mowerMapTimestamp();
   if (accepted) {
-    oldDataTimestamp[ResponseDataType::map] = map.timestamp;
+    oldDataTimestamp[ResponseDataType::map] = mapTimestamp;
   }
 
   JsonDocument doc;
   doc["type"] = ResponseDataType::mapAck;
-  doc["timestamp"] = map.timestamp;
+  doc["timestamp"] = mapTimestamp;
   auto data = doc["data"].to<JsonObject>();
-  data["hash"] = _source.currentMapHash();
+  data["hash"] = "";
   data["crc"] = _source.currentMapCrc();
   data["area"] = _source.currentMapArea();
   data["rotation"] = _source.currentMapRotation();
