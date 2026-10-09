@@ -270,7 +270,10 @@ class SocketService {
   // streaming the map to clients (mapAck.accepted=false); without a retry the
   // edit was silently lost, because the editor only resends when the map
   // changed again.
-  private lastSetMap: { mapData: import("../model").MapSetData; syncId: number; mapId: string; attempts: number } | null = null;
+  private lastSetMap: { mapData: import("../model").MapSetData; syncId: number; mapId: string; attempts: number; waypointsJson?: string } | null = null;
+  // Wegpunkte, die das Modem zuletzt bestätigt hat. Sind sie unverändert,
+  // schickt der Editor sie nicht erneut mit (keepWaypoints).
+  private ackedWaypoints: { mapId: string; json: string } | null = null;
   private setMapRetry: ReturnType<typeof setTimeout> | null = null;
   // The modem rejects setMap while it streams the map to a browser, which after
   // a reconnect can take well over the old 6 s. Give it a minute.
@@ -372,6 +375,8 @@ class SocketService {
           // zurückgesetzten Transfer-IDs.
           resetMapTransferTracking();
           this.firstMapListAfterConnect = true;
+          // Nach einem Neustart des Modems sind dessen Wegpunkte ungewiss.
+          this.ackedWaypoints = null;
           // A restore interrupted by this reconnect starts over with the next map list.
           this.editRecoveryId = null;
 
@@ -625,6 +630,8 @@ class SocketService {
                         this.pendingUpload = null;
                       }
                     } else if (this.lastSetMap?.syncId === data.syncId) {
+                      // Abgelehnt: beim nächsten Versuch die Wegpunkte wieder mitschicken.
+                      this.ackedWaypoints = null;
                       if (this.lastSetMap.mapId === data.mapId && data.mapId === newState.currentMapId) {
                         this.scheduleSetMapRetry();
                       } else {
@@ -636,6 +643,9 @@ class SocketService {
                     break;
                   }
                   if (this.lastSetMap?.syncId === data.syncId) {
+                    if (this.lastSetMap.waypointsJson !== undefined) {
+                      this.ackedWaypoints = { mapId: this.lastSetMap.mapId, json: this.lastSetMap.waypointsJson };
+                    }
                     this.lastSetMap = null;
                   }
                   if (!this.lastSetMap && (!this.pendingUpload || this.pendingUpload.syncId === data.syncId)) {
@@ -1093,10 +1103,14 @@ class SocketService {
   private sendLastSetMap() {
     const last = this.lastSetMap;
     if (!last) return;
-    const req: RequestSocketMessage = {
-      type: RequestDataType.setMap,
-      data: { ...last.mapData, syncId: last.syncId, mapId: last.mapId },
-    };
+    last.waypointsJson ??= JSON.stringify(last.mapData.waypoints);
+    const data: import("../model").MapSetData = { ...last.mapData, syncId: last.syncId, mapId: last.mapId };
+    if (this.ackedWaypoints?.mapId === last.mapId && this.ackedWaypoints.json === last.waypointsJson) {
+      data.waypoints = [];
+      data.keepWaypoints = true;
+      data.waypointCount = last.mapData.waypoints.length;
+    }
+    const req: RequestSocketMessage = { type: RequestDataType.setMap, data };
     this.sendMessage(req);
   }
 
@@ -1260,6 +1274,7 @@ class SocketService {
   }
 
   sendLoadMap(id: string, discardCurrent = false) {
+    this.ackedWaypoints = null;
     this.pendingUpload = null;
     if (this.pendingUploadRetry) {
       clearTimeout(this.pendingUploadRetry);

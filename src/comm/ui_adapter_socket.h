@@ -313,7 +313,8 @@ namespace ArduMower
 
       private:
         void startMapChunkSend(UiSocketItem* sendTo, bool force);
-        void processMapChunkSend();
+        bool processMapChunkSend();
+        void pumpMapChunkSend();
         void finishMapChunkSend();
         void processScheduleTriggerStateMachine();
         bool sendMapChunk(MapPointType pointType, const std::vector<ArduMower::Domain::Robot::MapPoint>& points, uint32_t timestamp, uint32_t clientId, int exclusionIdx, size_t startIdx, size_t blockSize, bool reset, size_t &nextIdx);

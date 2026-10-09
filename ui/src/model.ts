@@ -587,6 +587,9 @@ export interface MapSetData {
   source?: string;
   syncId?: number;
   mapId?: string;
+  /** Wegpunkte weggelassen: das Modem behält seine (Anzahl zur Kontrolle). */
+  keepWaypoints?: boolean;
+  waypointCount?: number;
 }
 
 export interface RequestSocketMessage {

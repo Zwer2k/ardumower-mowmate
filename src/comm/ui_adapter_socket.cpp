@@ -337,9 +337,30 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       for (JsonObject p : searchWire) {
         map.searchWire.push_back(readPoint(p));
       }
-      JsonArray waypoints = jsonData["waypoints"];
-      for (JsonObject p : waypoints) {
-        map.waypoints.push_back(readPoint(p));
+      // keepWaypoints: Der Editor schickt die Wegpunkte nur mit, wenn sie sich
+      // seit dem letzten bestätigten Abgleich geändert haben. Sonst blieben bei
+      // jeder Änderung tausende Wegpunkte (~200 KB JSON) zu übertragen und zu
+      // parsen. Stimmt die Anzahl nicht, wird abgelehnt; der Editor schickt
+      // dann alles.
+      const bool keepWaypoints = jsonData["keepWaypoints"] | false;
+      bool keepMismatch = false;
+      if (keepWaypoints) {
+        if (requestedMapId.length() > 0 && requestedMapId == _source.currentMapId()) {
+          const int expected = jsonData["waypointCount"] | -1;
+          auto current = _source.mowerMap();
+          if (expected >= 0 && current.waypoints.size() == (size_t)expected) {
+            map.waypoints = std::move(current.waypoints);
+          } else {
+            keepMismatch = true;
+            Log(WARN, "%s setMap: keepWaypoints with %d, modem has %u waypoints - rejected", _LOG_,
+                expected, (unsigned)current.waypoints.size());
+          }
+        }
+      } else {
+        JsonArray waypoints = jsonData["waypoints"];
+        for (JsonObject p : waypoints) {
+          map.waypoints.push_back(readPoint(p));
+        }
       }
       map.rotation = jsonData["rotation"] | 0.0;
       const MowSettings settings = _source.mowSettings();
@@ -359,7 +380,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
         Log(DBG, "%s setMap: parsed perimeter=%d exclusions=%d dockpoints=%d searchWire=%d waypoints=%d rotation=%.1f", _LOG_,
           map.perimeter.size(), map.exclusions.size(), map.dockpoints.size(), map.searchWire.size(), map.waypoints.size(), map.rotation);
       const bool mapIdMatches = requestedMapId.length() > 0 && requestedMapId == _source.currentMapId();
-      const bool accepted = mapIdMatches && !_source.isMowerMapReading();
+      const bool accepted = mapIdMatches && !_source.isMowerMapReading() && !keepMismatch;
       if (accepted) {
         _socketHandler->setMap(map);
       } else if (!mapIdMatches) {
@@ -1048,6 +1069,8 @@ void UiSocketHandler::loop()
 
   _ws->cleanupClients();
 
+  pumpMapChunkSend();
+
   // Kartenliste bei Änderungen broadcasten, sobald mindestens ein Client verbunden ist
   if (_source.mapListDirty() && countConnectedClients() > 0) {
     _source.clearMapListDirty();
@@ -1438,8 +1461,8 @@ void UiSocketHandler::startMapChunkSend(UiSocketItem* sendTo, bool force) {
 }
 
 // Pro loop() einen Chunk versenden – Snapshot aus mapChunkSendState verwenden
-void UiSocketHandler::processMapChunkSend() {
-  if (!mapChunkSendState.active) return;
+bool UiSocketHandler::processMapChunkSend() {
+  if (!mapChunkSendState.active) return false;
   // Stall-Watchdog: ein Transfer, der längere Zeit keinen einzigen Chunk
   // loswird (Client-Queue voll, Client hängt in WS_DISCONNECTING, ...),
   // blockiert sonst dauerhaft ALLE anderen Nachrichten (sendData() kehrt bei
@@ -1453,20 +1476,22 @@ void UiSocketHandler::processMapChunkSend() {
     // Retry later; by then cleanupClients()/the TCP ACK timeout have usually
     // removed the client that caused the stall.
     _mapSendPendingUntil = millis() + 5000;
-    return;
+    return false;
   }
   // Retry-Delay: bei fehlgeschlagenem Senden 100ms warten
-  if (mapChunkSendState.lastRetryMs && millis() - mapChunkSendState.lastRetryMs < 100) return;
+  if (mapChunkSendState.lastRetryMs && millis() - mapChunkSendState.lastRetryMs < 100) return false;
   // Keine Clients → Chunk-Versand abbrechen
   if (countConnectedClients() == 0) {
     Log(DBG, "%s processMapChunkSend: no connected clients, aborting", _LOG_);
     mapChunkSendState.active = false;
     _source.endMowerMapRead();
-    return;
+    return false;
   }
   // Snapshot verwenden: einmalig beim Start gespeichert, bleibt konsistent
   auto& map = mapChunkSendState.snapshot;
-  const size_t blockSize = 30;
+  // Bis 256 Punkte bzw. ~4 KB JSON pro Chunk (sendMapChunk); Puffer ab 512 Byte
+  // liegen im PSRAM. Früher 30 Punkte/1 KB: ~16 Punkte pro Chunk.
+  const size_t blockSize = 256;
   bool chunkSent = false;
   bool stalled = false;
   size_t nextIdx = 0;
@@ -1594,7 +1619,22 @@ void UiSocketHandler::processMapChunkSend() {
   if (mapChunkSendState.active && !stalled) {
     mapChunkSendState.lastProgressMs = millis();
   }
+  // true: ein Chunk ging hinaus und der Transfer läuft weiter
+  return mapChunkSendState.active && !stalled;
 }
+
+// Mehrere Chunks pro loop(), solange der Client aufnimmt: Früher ging nur in
+// jeder ~12. loop()-Runde ein Chunk hinaus (Round-Robin mit allen anderen
+// Aufgaben), die WLAN-Verbindung lag damit weitgehend brach.
+void UiSocketHandler::pumpMapChunkSend() {
+  if (!mapChunkSendState.active) return;
+  const uint32_t start = millis();
+  for (int i = 0; i < 8 && millis() - start < 20; i++) {
+    if (!processMapChunkSend()) break;
+  }
+}
+
+
 
 // End the current chunk transfer (completed or aborted) and flush the
 // non-map messages that were held back while it was running, so the frame
@@ -1632,7 +1672,7 @@ void UiSocketHandler::finishMapChunkSend() {
 
 // Hilfsfunktion: Sende einen Chunk eines MapPoint-Vektors
 bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<ArduMower::Domain::Robot::MapPoint>& points, uint32_t timestamp, uint32_t clientId, int exclusionIdx, size_t startIdx, size_t blockSize, bool reset, size_t &nextIdx) {
-  const size_t maxJsonSize = 1024;
+  const size_t maxJsonSize = 4096;
   size_t total = points.size();
   nextIdx = 0;
   if (!reset && (startIdx > total || (startIdx == total && total > 0))) return false;
