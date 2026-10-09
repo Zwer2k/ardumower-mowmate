@@ -74,6 +74,7 @@ export namespace Settings {
     support_cutter_speed: boolean;
     support_cutter_height: boolean;
     has_sonar: boolean;
+    support_firmware_upload: boolean;
   }
 }
 

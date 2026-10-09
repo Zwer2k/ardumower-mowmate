@@ -44,7 +44,7 @@ static const uint32_t GITHUB_CHECK_READY_DELAY_MS = 60 * 1000UL;
 static const time_t GITHUB_MIN_VALID_EPOCH = 1609459200;
 
 HttpServer::HttpServer(Settings::Settings &settings, AsyncWebServer &server, MowerUpdater &mowerUpdater)
-    : ArduMower::Modem::Http::Common(settings), _server(server), _mowerUpdater(mowerUpdater),
+    : ArduMower::Modem::Http::Common(settings), _server(server), _appSettings(settings), _mowerUpdater(mowerUpdater),
   _active(false), _failed(false), _restart(false), _restartTime(0), _flashSession(NULL),
   _githubUpdateActive(false), _githubUpdateSucceeded(false), _githubUpdateErrorLogged(false),
   _githubUpdateBuffered(false), _githubDownloadProgress(0), _githubDownloadTotal(0),
@@ -997,6 +997,12 @@ void HttpServer::beginMowerUpdate(AsyncWebServerRequest *request, String filenam
 {
   if (!auth(request))
     return;
+  if (!_appSettings.mower.supportFirmwareUpload)
+  {
+    Log(WARN, "Ota::Http::beginMowerUpdate::disabled in mower capabilities");
+    reject(request, 403, "upload", "mower-firmware-upload-disabled");
+    return;
+  }
 
   auto session = new Http::MowerUploadSession(this, filename, _mowerUpdater);
   request->_tempObject = session;

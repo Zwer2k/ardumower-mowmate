@@ -194,7 +194,7 @@ namespace ArduMower
       {
       public:
         Mower() : mowSpeed(0.3f), gotoSpeed(0.5f), fixTimeout(60), finishAndRestart(false), cutterPwm(255), mowHeight(55),
-                 supportCutterSpeed(true), supportCutterHeight(true), hasSonar(true) {}
+                 supportCutterSpeed(true), supportCutterHeight(true), hasSonar(true), supportFirmwareUpload(true) {}
 
         float mowSpeed;
         float gotoSpeed;
@@ -208,6 +208,9 @@ namespace ArduMower
         bool supportCutterSpeed;
         bool supportCutterHeight;
         bool hasSonar;
+        // Mäher-Firmware über das Modem flashen (STM32-Bootloader über
+        // BOOT0/NRST). Aus: Option im Firmware-Dialog ausgeblendet, Upload abgelehnt.
+        bool supportFirmwareUpload;
 
         virtual void marshal(JsonObject o) const override;
         virtual bool unmarshal(JsonObject o) override;

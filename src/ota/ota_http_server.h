@@ -110,6 +110,7 @@ namespace ArduMower
       {
       private:
         AsyncWebServer &_server;
+        Settings::Settings &_appSettings;
         MowerUpdater &_mowerUpdater;
         bool _active;
         bool _failed;
