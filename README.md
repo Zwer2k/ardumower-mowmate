@@ -197,7 +197,7 @@ For the MATRIX MOW800 with STM32 controller, MowMate uses:
 - `GPIO5` (`BOOT0`) and `GPIO7` (`NRST`) for STM32 OTA control
 - `GPIO43` / `GPIO44` for the USB debug console
 
-See the [ESP32-S3 MOW800/STM32 pinout](docs/screenshots/esp32-s3-mow800-stm32-pinout.svg) for the STM32-oriented wiring.
+See the [ESP32-S3 MOW800/STM32 pinout](docs/esp32-s3-mow800-stm32-pinout.svg) for the STM32-oriented wiring.
 
 ### ArduMower PCB 1.3 / 1.4
 
