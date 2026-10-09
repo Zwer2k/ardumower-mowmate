@@ -5,6 +5,7 @@
 #include "mower_map.h"
 #include "map_manager.h"
 #include "router.h"
+#include <deque>
 #include "encrypt.h"
 #include "settings.h"
 
@@ -173,6 +174,9 @@ namespace ArduMower
       void parseATXCommand(const char* line);
 
       bool sendCommand(const String& command, bool encrypt = true);
+      // Fertig verschlüsselte Befehle, die warten, bis der Router frei ist.
+      std::deque<String> _commandQueue;
+      void flushCommandQueue();
       bool sendCommandWithResponse(const String& command, char* response, size_t responseLen, bool encrypt = true, int timeoutMs = 3000);
       bool sendCommandWithResponseAsync(const String& command, std::function<void(const char*, bool)> callback, bool encrypt = true, int timeoutMs = 3000);
       void processPendingCommand();

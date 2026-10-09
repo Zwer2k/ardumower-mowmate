@@ -2410,6 +2410,7 @@ void MowerAdapter::processMapUpload()
 
 void MowerAdapter::loop()
 {
+  flushCommandQueue();
   startMapUploadFromLoop();
   processPendingCommand();
   processMapUpload();
@@ -2464,7 +2465,40 @@ bool MowerAdapter::sendCommand(const String& command, bool encrypt)
   if (encrypt)
     enc.encrypt(buf, strlen(buf));
 
-  return router.sendWithoutResponse(buf);
+  // Sunray beantwortet jeden AT-Befehl. Bis die Antwort da ist, bleibt der
+  // Router belegt: Ein HTTP-Client (z. B. CaSSAndRA) bekam sonst die Antwort
+  // auf unsere letzte Abfrage zugestellt, hielt sie für falsch und schickte
+  // seinen Befehl (z. B. AT+P) im Sekundentakt erneut.
+  //
+  // Ist der Router belegt, wird der Befehl eingereiht statt verworfen: Viele
+  // Aufrufer (z. B. Stop aus der Oberfläche) werten den Rückgabewert nicht aus,
+  // ein Stop ging dann unbemerkt verloren. Reihenfolge bleibt erhalten,
+  // identische Befehle werden nicht doppelt eingereiht.
+  if (_commandQueue.empty() && router.sendAwaitingAnswer(buf))
+    return true;
+
+  const String queued(buf);
+  for (const auto &q : _commandQueue)
+    if (q == queued)
+      return true;
+  static const size_t maxQueuedCommands = 8;
+  if (_commandQueue.size() >= maxQueuedCommands)
+  {
+    Log(WARN, "%ssendCommand: queue full, dropping %s", _LOG_, command.c_str());
+    return false;
+  }
+  _commandQueue.push_back(queued);
+  Log(DBG, "%ssendCommand: router busy, queued %s (%u waiting)", _LOG_, command.c_str(),
+      (unsigned)_commandQueue.size());
+  return true;
+}
+
+void MowerAdapter::flushCommandQueue()
+{
+  if (_commandQueue.empty())
+    return;
+  if (router.sendAwaitingAnswer(_commandQueue.front()))
+    _commandQueue.pop_front();
 }
 
 bool MowerAdapter::sendCommandWithResponseAsync(const String& command, std::function<void(const char*, bool)> callback, bool encrypt, int timeoutMs)
