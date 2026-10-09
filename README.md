@@ -186,7 +186,7 @@ Before building or flashing the firmware, install the following tools:
 
 ## Hardware Pinout
 
-The ESP32-S3 pinout is described in the separate [Pinout documentation](docs/pinout.md). It applies to the **ESP32-S3-DevKitC-1** development board as well as to soldering an **ESP32-S3-WROOM-1 module** directly onto a custom PCB.
+The ESP32-S3 pinout is described separately for the [MATRIX MOW800 / STM32](docs/pinout.md) and the [ArduMower PCB 1.3 / 1.4](docs/pinout-pcb.md). It applies to the **ESP32-S3-DevKitC-1** development board as well as to soldering an **ESP32-S3-WROOM-1 module** directly onto a custom PCB.
 
 ### MATRIX MOW800 / STM32
 
@@ -210,6 +210,8 @@ Wiring of an **ESP32-S3-DevKitC-1** to the ArduMower **PCB 1.3 / 1.4**:
 The ESP32-S3 GPIOs are **not 5V tolerant**: set the Bluetooth connector's signal level jumper `JP10 (BlueS)` to **3.3V**; `JP4 (BlueV)` supplies 5V.
 
 ![Wiring plan ESP32-S3 to ArduMower PCB 1.3 / 1.4](docs/wiring_plan_ESP32-S3_to_PCB1.4.png)
+
+Connections, jumpers and notes: [PCB 1.3 / 1.4 pinout](docs/pinout-pcb.md).
 
 
 ## Flashing the MowMate firmware
