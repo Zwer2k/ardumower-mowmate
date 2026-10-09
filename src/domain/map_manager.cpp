@@ -198,6 +198,11 @@ namespace ArduMower {
                                 const std::function<void(int percent)> &progress) {
             if (!_initialized && !begin()) return "";
             auto report = [&](int percent) { if (progress) progress(percent); };
+            // Alle Änderungen am Index erst nach erfolgreichem Schreiben gelten
+            // lassen: Früher blieben bei vollem Speicher oder Schreibfehler
+            // Geister-Karten bzw. falsche Prüfsummen im Index zurück.
+            const auto indexBackup = _index;
+            auto rollback = [&]() { _index = indexBackup; return String(""); };
             report(0);
 
             if (!isMapValid(map)) {
@@ -287,7 +292,7 @@ namespace ArduMower {
             if (required > freeBytes) {
                 Log(ERR, "%s save: Nicht genug SPIFFS-Speicher (benötigt ~%u, frei %u)",
                     _LOG_, (unsigned)required, (unsigned)freeBytes);
-                return "";
+                return rollback();
             }
 
             // Map-Datei schreiben (10..90 %, nach geschriebenen Bytes)
@@ -297,7 +302,7 @@ namespace ArduMower {
             };
             if (!ArduMower::Util::writeJsonAtomic(SPIFFS, fileName, mapDoc, writeProgress)) {
                 Log(ERR, "%s save: Datei %s konnte nicht geschrieben werden", _LOG_, fileName.c_str());
-                return "";
+                return rollback();
             }
 
             // Aktiv setzen und Index speichern
@@ -312,7 +317,17 @@ namespace ArduMower {
               }
             }
             report(92);
-            saveIndex();
+            if (!saveIndex()) {
+                // Neue Karte: Datei wieder entfernen, sonst bleibt sie verwaist.
+                // Aktualisierte Karte: Datei und Index im RAM passen zusammen;
+                // der Index auf SPIFFS holt das beim nächsten Schreiben nach.
+                const bool isNew = indexBackup.maps.size() != _index.maps.size();
+                if (isNew) {
+                    SPIFFS.remove(fileName);
+                    return rollback();
+                }
+                return "";
+            }
             report(100);
 
             return meta ? meta->id : "";
@@ -362,8 +377,7 @@ namespace ArduMower {
             ArduMower::Util::recoverAtomicFile(SPIFFS, meta->file);
             File file = SPIFFS.open(meta->file);
             if (!file || file.isDirectory()) {
-                saveIndex();
-                return true;
+                return saveIndex();
             }
             JsonDocument doc;
             auto err = deserializeJson(doc, file);
@@ -380,17 +394,17 @@ namespace ArduMower {
             } else {
                 Log(ERR, "%s rename: Datei %s nicht lesbar (%s), nur Index aktualisiert", _LOG_, meta->file.c_str(), err.c_str());
             }
-            saveIndex();
-            return true;
+            return saveIndex();
         }
 
         bool MapManager::remove(const String &id) {
             if (!_initialized && !begin()) return false;
             for (auto it = _index.maps.begin(); it != _index.maps.end(); ++it) {
                 if (it->id == id) {
-                    if (SPIFFS.exists(it->file)) SPIFFS.remove(it->file);
-                    const String tmp = ArduMower::Util::atomicTmpPath(it->file);
-                    if (SPIFFS.exists(tmp)) SPIFFS.remove(tmp);
+                    // Erst den Index schreiben, dann die Dateien löschen: Schlägt
+                    // der Index fehl, bleibt die Karte vollständig erhalten.
+                    const auto indexBackup = _index;
+                    const String file = it->file;
                     const bool wasActive = (_index.activeId == id);
                     _index.maps.erase(it);
                     // Beim Löschen der Default-Karte sofort auf die erste
@@ -400,7 +414,13 @@ namespace ArduMower {
                     if (wasActive) {
                         _index.activeId = _index.maps.empty() ? "" : _index.maps.front().id;
                     }
-                    saveIndex();
+                    if (!saveIndex()) {
+                        _index = indexBackup;
+                        return false;
+                    }
+                    if (SPIFFS.exists(file)) SPIFFS.remove(file);
+                    const String tmp = ArduMower::Util::atomicTmpPath(file);
+                    if (SPIFFS.exists(tmp)) SPIFFS.remove(tmp);
                     return true;
                 }
             }

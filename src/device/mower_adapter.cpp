@@ -746,6 +746,7 @@ void MowerAdapter::parseArduMowerCommand(const char* line)
 // Die Exclusion-Polygone werden über anschließende AT+X-Befehle mitgeteilt.
 void MowerAdapter::parseATNCommand(const char* line) {
   Log(DBG, "%sparseATNCommand (map counts)", _LOG_);
+  if (ownMapUploadRunning()) return;
   int waitCount = 0;
   while (_map.isReading() && waitCount < 10) {
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -782,6 +783,7 @@ void MowerAdapter::parseATNCommand(const char* line) {
 // AT+X Kommando: AT+X,<startIdx>,<len1>,<len2>,...
 void MowerAdapter::parseATXCommand(const char* line) {
   Log(DBG, "%sparseATXCommand (exclusion sizes)", _LOG_);
+  if (ownMapUploadRunning()) return;
   int waitCount = 0;
   while (_map.isReading() && waitCount < 10) {
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -822,15 +824,17 @@ void MowerAdapter::finalizeInterceptedMap() {
   Log(DBG, "%sfinalizeInterceptedMap: perimeter=%d exclusions=%d dock=%d waypoints=%d",
       _LOG_, tempNPerimeter, tempNExclusions, tempNDockpoints, tempNWaypoints);
 
-  _map.perimeter.clear();
-  _map.exclusions.clear();
-  _map.dockpoints.clear();
-  _map.waypoints.clear();
+  // Erst in lokale Listen aufbauen und prüfen, dann übernehmen: Früher wurde
+  // _map vor der Prüfung geleert und gefüllt; bei einem Fehler blieb eine
+  // halbe Karte unter der alten ID stehen, die Speichern, Upload und Export
+  // dann weiterverwendeten.
+  std::vector<MapPoint> perimeter, dockpoints, waypoints;
+  std::vector<std::vector<MapPoint>> exclusions;
 
   int idx = 0;
   // Perimeter
   for (int i = 0; i < tempNPerimeter && idx < (int)tempWaypointsBuffer.size(); i++, idx++) {
-    _map.perimeter.push_back(tempWaypointsBuffer[idx]);
+    perimeter.push_back(tempWaypointsBuffer[idx]);
   }
   // Exclusions anhand der AT+X-Längen aufteilen
   for (size_t ex = 0; ex < tempExclusionSizes.size(); ex++) {
@@ -838,47 +842,51 @@ void MowerAdapter::finalizeInterceptedMap() {
     for (int j = 0; j < tempExclusionSizes[ex] && idx < (int)tempWaypointsBuffer.size(); j++, idx++) {
       excl.push_back(tempWaypointsBuffer[idx]);
     }
-    _map.exclusions.push_back(excl);
+    exclusions.push_back(excl);
   }
   // Dockpoints
   for (int i = 0; i < tempNDockpoints && idx < (int)tempWaypointsBuffer.size(); i++, idx++) {
-    _map.dockpoints.push_back(tempWaypointsBuffer[idx]);
+    dockpoints.push_back(tempWaypointsBuffer[idx]);
   }
   // Waypoints
   for (int i = 0; i < tempNWaypoints && idx < (int)tempWaypointsBuffer.size(); i++, idx++) {
-    _map.waypoints.push_back(tempWaypointsBuffer[idx]);
+    waypoints.push_back(tempWaypointsBuffer[idx]);
   }
 
   // Summen prüfen
   bool ok = true;
   int totalExclPoints = 0;
-  for (const auto &ex : _map.exclusions) totalExclPoints += ex.size();
-  if ((int)_map.perimeter.size() != tempNPerimeter) {
-    Log(ERR, "%sfinalizeInterceptedMap: perimeter count mismatch %d != %d", _LOG_, _map.perimeter.size(), tempNPerimeter);
+  for (const auto &ex : exclusions) totalExclPoints += ex.size();
+  if ((int)perimeter.size() != tempNPerimeter) {
+    Log(ERR, "%sfinalizeInterceptedMap: perimeter count mismatch %d != %d", _LOG_, perimeter.size(), tempNPerimeter);
     ok = false;
   }
   if (totalExclPoints != tempNExclusions) {
     Log(ERR, "%sfinalizeInterceptedMap: exclusion point count mismatch %d != %d", _LOG_, totalExclPoints, tempNExclusions);
     ok = false;
   }
-  if ((int)_map.exclusions.size() != (int)tempExclusionSizes.size()) {
-    Log(ERR, "%sfinalizeInterceptedMap: exclusion polygon count mismatch %d != %d", _LOG_, _map.exclusions.size(), tempExclusionSizes.size());
+  if ((int)exclusions.size() != (int)tempExclusionSizes.size()) {
+    Log(ERR, "%sfinalizeInterceptedMap: exclusion polygon count mismatch %d != %d", _LOG_, exclusions.size(), tempExclusionSizes.size());
     ok = false;
   }
-  if ((int)_map.dockpoints.size() != tempNDockpoints) {
-    Log(ERR, "%sfinalizeInterceptedMap: dockpoints count mismatch %d != %d", _LOG_, _map.dockpoints.size(), tempNDockpoints);
+  if ((int)dockpoints.size() != tempNDockpoints) {
+    Log(ERR, "%sfinalizeInterceptedMap: dockpoints count mismatch %d != %d", _LOG_, dockpoints.size(), tempNDockpoints);
     ok = false;
   }
-  if ((int)_map.waypoints.size() != tempNWaypoints) {
-    Log(ERR, "%sfinalizeInterceptedMap: waypoints count mismatch %d != %d", _LOG_, _map.waypoints.size(), tempNWaypoints);
+  if ((int)waypoints.size() != tempNWaypoints) {
+    Log(ERR, "%sfinalizeInterceptedMap: waypoints count mismatch %d != %d", _LOG_, waypoints.size(), tempNWaypoints);
     ok = false;
   }
   if (!ok) {
-    Log(ERR, "%sfinalizeInterceptedMap: Map-Übertragung fehlerhaft, Abbruch", _LOG_);
+    Log(ERR, "%sfinalizeInterceptedMap: Map-Übertragung fehlerhaft, Abbruch (Karte unverändert)", _LOG_);
     tempMapCountsReceived = false;
     tempExclusionSizes.clear();
     return;
   }
+  _map.perimeter = std::move(perimeter);
+  _map.exclusions = std::move(exclusions);
+  _map.dockpoints = std::move(dockpoints);
+  _map.waypoints = std::move(waypoints);
   Log(DBG, "%sfinalizeInterceptedMap: Map vollständig, sende an Client", _LOG_);
   _map.timestamp = millis();
   _mapListDirty = true;
@@ -1781,6 +1789,7 @@ void MowerAdapter::parseStateResponse(const char* line)
 void MowerAdapter::parseATWCommand(const char* line)
 {
   Log(DBG, "%sparseATWCommand (waypoint-list)", _LOG_);
+  if (ownMapUploadRunning()) return;
   if (_map.isReading()) {
     Log(DBG, "%sparseATWCommand: Map-Lesevorgang läuft, ignoriere", _LOG_);
     return;

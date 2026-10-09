@@ -117,15 +117,22 @@ namespace ArduMower {
                 // Mindestwendekreis in m; nur für den Prüfbericht, verändert die Route nicht.
                 float checkTurnRadius = 0.30f;
 
-                // Flag, ob aktuell ein Lesevorgang läuft (z.B. für Map-Transfer)
-                bool reading = false;
+                // Anzahl laufender Lesevorgänge (Map-Transfer zum Browser, Upload
+                // zum Mäher). Ein Zähler statt eines Flags: Laufen beide, gab
+                // früher der zuerst fertige die Sperre auch für den anderen frei.
+                // Kopieren ergibt eine ungesperrte Karte (Snapshot), Zuweisen
+                // behält die Sperre des Ziels.
+                struct ReadLock {
+                    uint8_t count = 0;
+                    ReadLock() = default;
+                    ReadLock(const ReadLock &) : count(0) {}
+                    ReadLock &operator=(const ReadLock &) { return *this; }
+                };
+                ReadLock readLock;
 
-                // Setzt das reading-Flag (z.B. vor Map-Transfer)
-                void beginRead() { reading = true; }
-                // Hebt das reading-Flag wieder auf
-                void endRead() { reading = false; }
-                // Prüft, ob aktuell gelesen wird
-                bool isReading() const { return reading; }
+                void beginRead() { if (readLock.count < 255) readLock.count++; }
+                void endRead() { if (readLock.count > 0) readLock.count--; }
+                bool isReading() const { return readLock.count > 0; }
 
                 // Kanonische Serialisierung nur der Geometrie (für Hash/Vergleich)
                 void marshalGeometry(JsonObject obj) const {
