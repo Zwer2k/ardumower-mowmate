@@ -211,6 +211,16 @@ For the classic **ArduMower PCB 1.3**, the wiring is different from the MATRIX M
 
 See the [ESP32-S3 PCB 1.3 pinout](docs/screenshots/esp32-s3-pcb13-pinout.svg) for the board-specific wiring diagram.
 
+### ArduMower PCB 1.4
+
+Wiring of an **ESP32-S3-DevKitC-1** to the ArduMower **PCB 1.4**:
+
+- power (5V, GND) and the main mower UART (`GPIO17` TX2 / `GPIO18` RX2) via the **Bluetooth connector**
+- the terminal UART (`GPIO15` RX1 / `GPIO16` TX1)
+- the mower reset line (`GPIO7`) from `P23 (MP-R)`
+
+![Wiring plan ESP32-S3 to ArduMower PCB 1.4](docs/wiring_plan_ESP32-S3_to_PCB1.4.png)
+
 
 ## Flashing the MowMate firmware
 

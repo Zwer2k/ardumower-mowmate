@@ -11,6 +11,12 @@ Alternatively, the **ESP32-S3-WROOM-1 module can be soldered directly onto a cus
 
 ![ESP32-S3-DevKitC-1 Pinout (MATRIX MOW800 / STM32)](screenshots/esp32-s3-mow800-stm32-pinout.svg)
 
+## Wiring ArduMower PCB 1.4
+
+Power (5V, GND) and the main mower UART (`GPIO17` TX2 / `GPIO18` RX2) come from the Bluetooth connector, the terminal UART uses `GPIO15` (RX1) / `GPIO16` (TX1), and the mower reset line goes from `P23 (MP-R)` to `GPIO7`.
+
+![Wiring plan ESP32-S3 to ArduMower PCB 1.4](wiring_plan_ESP32-S3_to_PCB1.4.png)
+
 ## Connections (MATRIX MOW800 / STM32)
 
 | Pin | Signal      | Direction | Connected to           | Description |
