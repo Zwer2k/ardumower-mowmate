@@ -5,6 +5,8 @@
 #include "json.h"
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
+#include <WiFi.h>
+#include "boot_diag.h"
 
 using namespace ArduMower::Modem::Http;
 
@@ -130,6 +132,16 @@ void UiAdapter::handleApiGetModemInfo(AsyncWebServerRequest *request)
   memory["heap_min_free"] = ESP.getMinFreeHeap();
   memory["psram_total"] = ESP.getPsramSize();
   memory["psram_free"] = ESP.getFreePsram();
+  // Funkverbindung und letzter Reset für das Status-Dashboard.
+  JsonObject network = root["network"].to<JsonObject>();
+  network["connected"] = WiFi.isConnected();
+  network["rssi"] = WiFi.isConnected() ? WiFi.RSSI() : 0;
+  network["channel"] = WiFi.channel();
+  network["ip"] = WiFi.localIP().toString();
+  network["tx_power"] = WiFi.getTxPower() / 4.0;
+  network["power_save"] = WiFi.getSleep();
+  network["bluetooth"] = _settings.bluetooth.enabled;
+  root["last_reset"] = ArduMower::Modem::BootDiag::lastResetReason();
   response->setLength();
   request->send(response);
 }

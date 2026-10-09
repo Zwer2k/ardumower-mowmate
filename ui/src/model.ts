@@ -103,6 +103,16 @@ export interface Info {
   memory?: MemoryInfo;
 }
 
+export interface NetworkInfo {
+  connected: boolean;
+  rssi: number;
+  channel: number;
+  ip: string;
+  tx_power: number;
+  power_save: boolean;
+  bluetooth: boolean;
+}
+
 export interface MemoryInfo {
   fs_total: number;
   fs_used: number;
