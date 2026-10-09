@@ -205,6 +205,9 @@ namespace ArduMower
         // Ergebnis einer Kartenoperation (create, copy, load, save, rename,
         // delete, discard, setActive, import) an den anfragenden Browser.
         void sendMapOpResult(UiSocketItem *sendTo, const char *op, bool ok, const char *error = "");
+        // Zeitplan an umbenannte oder gelöschte Karten anpassen.
+        void onMapRenamed(const String &id, const String &name);
+        void onMapDeleted(const String &id);
         // Ergebnis der Routenprüfung der letzten Wegpunktberechnung.
         void sendRouteReport(UiSocketItem *sendTo = NULL);
         void sendSchedule(UiSocketItem *sendTo = NULL);

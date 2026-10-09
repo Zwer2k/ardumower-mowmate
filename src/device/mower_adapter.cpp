@@ -447,64 +447,39 @@ bool MowerAdapter::renameMap(const String &id, const String &name) {
 }
 
 bool MowerAdapter::deleteMap(const String &id) {
+  const bool wasCurrent = (_currentMapId == id);
   if (id.startsWith("__t_")) {
     // Transiente (RAM-only) Karte direkt aus dem RAM entfernen.
     if (!removeTransientMap(id)) {
       Log(WARN, "%sdeleteMap: transiente Karte %s nicht gefunden", _LOG_, id.c_str());
       return false;
     }
-    if (_currentMapId == id) {
-      // Gelöschte Karte war gerade geladen: auf die erste gespeicherte Karte
-      // umschalten, falls vorhanden, sonst auf leere Karte zurücksetzen.
-      const auto &maps = _mapManager.list();
-      if (!maps.empty()) {
-        _currentMapId = maps.front().id;
-        if (!_mapManager.load(_currentMapId, _map)) {
-          _currentMapId = "";
-          _map = ArduMower::Domain::Robot::MowerMap();
-          _map.timestamp = millis();
-        }
-      } else {
-        _currentMapId = "";
-        _map = ArduMower::Domain::Robot::MowerMap();
-        _map.timestamp = millis();
-      }
-      _currentMapUnsaved = false;
-      _pendingRenameId = "";
-      _pendingRenameName = "";
-      updateCurrentMapMeta();
-    }
-    _mapListDirty = true;
-    Log(INFO, "%sdeleteMap: transiente Karte %s gelöscht", _LOG_, id.c_str());
-    return true;
+  } else {
+    if (!_mapManager.remove(id)) return false;
+    removeMapDraft(id);
   }
-
-  if (!_mapManager.remove(id)) return false;
-  removeMapDraft(id);
-  if (_currentMapId == id) {
-    // Gelöschte Karte war gerade geladen: aktiv gespeicherte Karte wieder
-    // herstellen, falls möglich, sonst auf leere Karte zurücksetzen.
-    ArduMower::Domain::Robot::MowerMap loaded;
-    if (_mapManager.loadActive(loaded)) {
-      _currentMapId = _mapManager.activeId();
-      _map = loaded;
-      _currentMapCrc = _mapManager.getCrc(_currentMapId);
-      syncMowSettingsFromMap();
-    } else {
-      _currentMapId = "";
-      _map = ArduMower::Domain::Robot::MowerMap();
-      _map.timestamp = millis();
-    }
-    // Der Unsaved-/Rename-Zustand gehörte zur gelöschten Karte; sonst wurde
-    // die Ersatzkarte als "unsaved" angezeigt.
-    _currentMapUnsaved = false;
-    _pendingRenameId = "";
-    _pendingRenameName = "";
-    updateCurrentMapMeta();
-  }
+  if (wasCurrent) loadReplacementMap();
   _mapListDirty = true;
   Log(INFO, "%sdeleteMap: Karte %s gelöscht", _LOG_, id.c_str());
   return true;
+}
+
+// Nach dem Löschen der aktuellen Karte: wie beim Start die Standardkarte laden,
+// sonst die erste gespeicherte, sonst eine leere Karte. Über loadMap(), damit
+// ein Entwurf, die CRC aus SPIFFS und die Mäh-Einstellungen gelten. Früher
+// nahm der Transient-Zweig die erste Karte statt der Standardkarte, und der
+// andere Zweig ignorierte Entwürfe und überschrieb die gespeicherte CRC.
+void MowerAdapter::loadReplacementMap() {
+  _currentMapId = "";
+  _currentMapUnsaved = false;
+  _pendingRenameId = "";
+  _pendingRenameName = "";
+  String target = _mapManager.activeId();
+  if (target.length() == 0 && !_mapManager.list().empty()) target = _mapManager.list().front().id;
+  if (target.length() > 0 && loadMap(target)) return;
+  _map = ArduMower::Domain::Robot::MowerMap();
+  _map.timestamp = millis();
+  updateCurrentMapMeta();
 }
 
 bool MowerAdapter::discardMap() {

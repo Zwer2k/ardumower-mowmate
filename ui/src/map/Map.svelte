@@ -60,6 +60,7 @@
   import { SaveSuccess } from "../stores/success";
   import { currentMapRotationStore, mapEditLock } from "./service";
   import MapLoadingOverlay from "./MapLoadingOverlay.svelte";
+  import { scheduleStore } from "../stores/schedule";
   import { capacityExceeded, confirmUploadCapacity, mowerCapacityFor } from "./services/mower-capacity";
   import type { Point, MapArea } from "./model";
   import type { MowSettingsData, RouteFinding } from "../model";
@@ -232,14 +233,23 @@
         text: `${name} ● (unsaved)`,
       });
     }
-    for (const m of $socketStore.maps) {
+    // Nach Namen sortiert (Zahlen numerisch: "Map 2" vor "Map 10").
+    const sorted = [...$socketStore.maps].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+    const mowerCrc = $socketStore.state?.map_crc ?? 0;
+    for (const m of sorted) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);
+      // Gespeicherte Karten haben ein Änderungsdatum (Unix-Zeit, 0 = unbekannt).
+      const modified = m.timestamp > 1600000000
+        ? ` · ${new Date(m.timestamp * 1000).toLocaleDateString()}`
+        : "";
       opts.push({
         id: m.id,
         // "●" marks a map with unsaved changes, so drafts stay recognizable
-        // after switching away from them.
-        text: `${m.name}${m.unsaved ? ' ●' : ''} (${m.area.toFixed(1)} m²)${m.id === $socketStore.activeMapId ? ' ★ default' : ''}`,
+        // after switching away from them. "on mower": its CRC matches the
+        // map the mower reports.
+        text: `${m.name}${m.unsaved ? ' ●' : ''} (${m.area.toFixed(1)} m²)${mowerCrc !== 0 && m.crc === mowerCrc ? ' ⇡ on mower' : ''}${m.id === $socketStore.activeMapId ? ' ★ default' : ''}${modified}`,
       });
     }
     return opts;
@@ -527,9 +537,14 @@
   async function onDeleteMap() {
     const target = dropdownSelectedId || effectiveMapId;
     if (!target || target === "__unsaved__") return;
+    // Zeitplan-Einträge dieser Karte deaktiviert das Modem beim Löschen.
+    const scheduled = (get(scheduleStore).entries ?? []).filter((e) => e.mapId === target && e.enabled);
+    const scheduleNote = scheduled.length > 0
+      ? ` It is used by ${scheduled.length} scheduled mowing ${scheduled.length === 1 ? "entry" : "entries"} (${scheduled.map((e) => e.name).join(", ")}), which will be disabled.`
+      : "";
     const choice = await openConfirm({
       title: "Delete map",
-      message: "Really delete this map? This cannot be undone.",
+      message: `Really delete this map? This cannot be undone.${scheduleNote}`,
       confirmText: "Delete",
       cancelText: "Cancel",
       kind: "danger",

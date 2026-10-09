@@ -86,6 +86,7 @@ namespace ArduMower
       // Eigener Upload zum Mäher läuft: dessen AT+W/N/X-Befehle laufen über
       // drainTx durch parseArduMowerCommand und dürfen nicht als von einem
       // anderen Client hochgeladene Karte abgefangen werden.
+      void loadReplacementMap();
       bool ownMapUploadRunning() const { return _mapUploadState.active || _mapUploadPending; }
       // Track last applied position settings to avoid redundant AT+P commands
       bool _lastPosApplied = false;

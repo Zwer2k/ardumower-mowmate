@@ -539,6 +539,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     const bool renamed = _source.renameMap(id, name);
     if (!renamed) {
       _socketHandler->sendMapOpResult(this, "rename", false, "The map was not renamed. The name may already be in use.");
+    } else {
+      _socketHandler->onMapRenamed(id, name);
     }
     _socketHandler->sendMapList(NULL);
     if (renamed) _socketHandler->sendMapOpResult(this, "rename", true);
@@ -550,6 +552,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     _socketHandler->abortMapChunkSendForMapChange();
     yield();
     if (_source.deleteMap(id)) {
+      _socketHandler->onMapDeleted(id);
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
@@ -2377,6 +2380,40 @@ bool UiSocketHandler::setSchedule(bool enabled, const std::vector<ArduMower::Mod
     _scheduleDirty = true;
   }
   return ok;
+}
+
+// Zeitplan-Einträge speichern Karten-ID und -Name. Beim Umbenennen zeigte der
+// Zeitplan sonst den alten Namen; nach dem Löschen startete ein Eintrag still
+// gar nicht mehr ("could not be started"). Gelöschte Karten deaktivieren den
+// Eintrag, statt ihn zu entfernen: der Nutzer sieht ihn und wählt neu.
+void UiSocketHandler::onMapRenamed(const String &id, const String &name)
+{
+  auto entries = _scheduleManager.entries();
+  bool changed = false;
+  for (auto &e : entries) {
+    if (e.mapId == id && e.mapName != name) { e.mapName = name; changed = true; }
+  }
+  if (!changed) return;
+  _scheduleManager.setConfig(_scheduleManager.enabled(), entries);
+  _scheduleManager.save();
+  sendSchedule(NULL);
+}
+
+void UiSocketHandler::onMapDeleted(const String &id)
+{
+  auto entries = _scheduleManager.entries();
+  bool changed = false;
+  for (auto &e : entries) {
+    if (e.mapId == id && e.enabled) {
+      e.enabled = false;
+      changed = true;
+      Log(WARN, "%s schedule entry %s disabled: its map was deleted", _LOG_, e.name.c_str());
+    }
+  }
+  if (!changed) return;
+  _scheduleManager.setConfig(_scheduleManager.enabled(), entries);
+  _scheduleManager.save();
+  sendSchedule(NULL);
 }
 
 bool UiSocketHandler::saveSchedule()
