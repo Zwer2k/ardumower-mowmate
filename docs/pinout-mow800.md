@@ -1,4 +1,6 @@
-# ESP32-S3 Pinout
+# ESP32-S3 Pinout – MATRIX MOW800 / STM32
+
+For the classic ArduMower PCB 1.3 / 1.4 see [pinout-pcb.md](pinout-pcb.md).
 
 ## Board
 
@@ -9,7 +11,7 @@ Alternatively, the **ESP32-S3-WROOM-1 module can be soldered directly onto a cus
 - **USB-to-UART bridge** (e.g., CP2102 or CH340C) for the serial console (GPIO43/44) and flashing
 - **5V power supply** (from mower PSU or USB)
 
-![ESP32-S3-DevKitC-1 Pinout (MATRIX MOW800 / STM32)](screenshots/esp32-s3-mow800-stm32-pinout.svg)
+![ESP32-S3-DevKitC-1 Pinout (MATRIX MOW800 / STM32)](esp32-s3-mow800-stm32-pinout.svg)
 
 ## Connections (MATRIX MOW800 / STM32)
 

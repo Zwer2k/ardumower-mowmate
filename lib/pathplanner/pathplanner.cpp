@@ -237,10 +237,12 @@ FreeSpaceRouter::FreeSpaceRouter(const Polygon &container,
         return b;
     };
     containerBox_ = boxOf(container_);
+    containerEdges_ = edgeBoxes(container_);
     for (const auto &o : obstacles) {
         if (o.size() < 3) continue;
         obstacles_.push_back(o);
         obstacleBoxes_.push_back(boxOf(o));
+        obstacleEdges_.push_back(edgeBoxes(o));
     }
 
     // Knoten: Ecken, an denen ein kürzester Weg abknicken kann. Beim Container
@@ -355,11 +357,31 @@ bool FreeSpaceRouter::pointFree(const Point &p) const {
     return true;
 }
 
-bool FreeSpaceRouter::crossesProperly(const Point &a, const Point &b, const Polygon &poly) const {
+// Rand der float-Rechtecke: deckt die Rundung von float bei Kartenkoordinaten
+// (Meter, wenige hundert) und die Toleranzen der genauen Prüfungen weit ab.
+// Verworfen werden nur Kanten, die die Strecke sicher nicht erreichen.
+static const float EDGE_BOX_MARGIN = 1e-3f;
+
+FreeSpaceRouter::EdgeBox FreeSpaceRouter::segmentBox(const Point &a, const Point &b) {
+    return EdgeBox{(float)std::min(a.X, b.X) - EDGE_BOX_MARGIN, (float)std::min(a.Y, b.Y) - EDGE_BOX_MARGIN,
+                   (float)std::max(a.X, b.X) + EDGE_BOX_MARGIN, (float)std::max(a.Y, b.Y) + EDGE_BOX_MARGIN};
+}
+
+std::vector<FreeSpaceRouter::EdgeBox> FreeSpaceRouter::edgeBoxes(const Polygon &poly) {
+    std::vector<EdgeBox> edges;
+    edges.reserve(poly.size());
+    for (size_t i = 0; i < poly.size(); i++)
+        edges.push_back(segmentBox(poly[i], poly[(i + 1) % poly.size()]));
+    return edges;
+}
+
+bool FreeSpaceRouter::crossesProperly(const Point &a, const Point &b, const Polygon &poly,
+    const std::vector<EdgeBox> &edges, const EdgeBox &box) const {
     // Echte Kreuzung: Endpunkte jeweils strikt auf verschiedenen Seiten.
     // Berühren einer Ecke oder Laufen auf einer Kante zählt nicht.
     const double eps = 1e-9;
     for (size_t i = 0; i < poly.size(); i++) {
+        if (boxesApart(edges[i], box)) continue;
         const Point &c = poly[i];
         const Point &d = poly[(i + 1) % poly.size()];
         const double o1 = crossProduct(a, b, c), o2 = crossProduct(a, b, d);
@@ -374,14 +396,15 @@ bool FreeSpaceRouter::crossesProperly(const Point &a, const Point &b, const Poly
 // mit den Kanten von poly, inklusive Durchgang durch Ecken und kollinearer
 // Überlappung. Zwischen zwei aufeinanderfolgenden Parametern liegt die Strecke
 // vollständig innerhalb oder außerhalb von poly.
-static void collectTouchParams(const Point &a, const Point &b, const Polygon &poly,
-    std::vector<double> &ts)
+void FreeSpaceRouter::collectTouchParams(const Point &a, const Point &b, const Polygon &poly,
+    const std::vector<EdgeBox> &edges, const EdgeBox &box, std::vector<double> &ts)
 {
     const double rx = b.X - a.X, ry = b.Y - a.Y;
     const double len2 = rx * rx + ry * ry;
     if (len2 < 1e-18) return;
     const double eps = 1e-9;
     for (size_t i = 0; i < poly.size(); i++) {
+        if (boxesApart(edges[i], box)) continue;
         const Point &c = poly[i];
         const Point &d = poly[(i + 1) % poly.size()];
         const double sx = d.X - c.X, sy = d.Y - c.Y;
@@ -406,21 +429,26 @@ static void collectTouchParams(const Point &a, const Point &b, const Polygon &po
 bool FreeSpaceRouter::segmentFree(const Point &a, const Point &b) const {
     const double minX = std::min(a.X, b.X), maxX = std::max(a.X, b.X);
     const double minY = std::min(a.Y, b.Y), maxY = std::max(a.Y, b.Y);
-    if (crossesProperly(a, b, container_)) return false;
-    std::vector<size_t> near;
+    const EdgeBox box = segmentBox(a, b);
+    if (crossesProperly(a, b, container_, containerEdges_, box)) return false;
+    std::vector<size_t> &near = nearScratch_;
+    near.clear();
     for (size_t i = 0; i < obstacles_.size(); i++) {
         const Box &o = obstacleBoxes_[i];
         if (maxX < o.minX || minX > o.maxX || maxY < o.minY || minY > o.maxY) continue;
-        if (crossesProperly(a, b, obstacles_[i])) return false;
+        if (crossesProperly(a, b, obstacles_[i], obstacleEdges_[i], box)) return false;
         near.push_back(i);
     }
     // Ohne echte Kreuzung kann die Strecke den freien Raum nur dort verlassen,
     // wo sie eine Ecke oder Kante berührt (z. B. Sehne durch zwei Ecken eines
     // Hindernisses). Zwischen je zwei Berührungen ist der Zustand konstant, also
     // genügt dort ein Test in der Mitte.
-    std::vector<double> ts{0.0, 1.0};
-    collectTouchParams(a, b, container_, ts);
-    for (size_t i : near) collectTouchParams(a, b, obstacles_[i], ts);
+    std::vector<double> &ts = touchScratch_;
+    ts.clear();
+    ts.push_back(0.0);
+    ts.push_back(1.0);
+    collectTouchParams(a, b, container_, containerEdges_, box, ts);
+    for (size_t i : near) collectTouchParams(a, b, obstacles_[i], obstacleEdges_[i], box, ts);
     std::sort(ts.begin(), ts.end());
     const double tolSq = BOUNDARY_TOL * BOUNDARY_TOL;
     for (size_t k = 0; k + 1 < ts.size(); k++) {

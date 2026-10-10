@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SocketState } from "../../stores/socket";
   import MowAreaToggles from "../MowAreaToggles.svelte";
+  import type { MowerCapacity } from "../services/mower-capacity";
 
   export let compassRotation: number;
   export let socketState: SocketState;
@@ -9,6 +10,8 @@
   export let dockpointsPoints: number;
   export let waypointsPoints: number;
   export let totalPoints: number;
+  export let mowerCapacity: MowerCapacity | null = null;
+  export let mowerCapacityExceeded = false;
   export let needsUpload: boolean;
   export let onUploadMap: (() => void) | null = null;
   export let selectedExclusionIndex: number | null = null;
@@ -44,7 +47,20 @@
     </div>
   {/if}
   <div class="map-point-counts">
-    <div><strong>Total:</strong> {totalPoints}</div>
+    <div
+      class:capacity-warn={mowerCapacityExceeded}
+      title={mowerCapacity?.maxPoints != null
+        ? `${mowerCapacity.points} points go to the mower; its memory holds ${mowerCapacity.lowerBound ? "at least" : "about"} ${mowerCapacity.maxPoints}`
+        : undefined}
+    >
+      <strong>Total:</strong> {totalPoints}
+      {#if mowerCapacity?.maxPoints != null}
+        <span class="capacity">/ {mowerCapacity.lowerBound ? "≥" : "≈"}{mowerCapacity.maxPoints}</span>
+      {/if}
+    </div>
+    {#if mowerCapacityExceeded}
+      <div class="capacity-warn">⚠ too many points for the mower</div>
+    {/if}
     <div><strong>Area:</strong> {(socketState.currentMapMeta?.area ?? 0).toFixed(1)} m²</div>
     <div><strong>Perimeter:</strong> {perimeterPoints}</div>
     <div><strong>Dock:</strong> {dockpointsPoints}</div>
@@ -143,6 +159,14 @@
   }
   .sync-btn:hover {
     background: #f9d7d4;
+  }
+  .capacity {
+    color: #6f6f6f;
+  }
+  .capacity-warn,
+  .capacity-warn .capacity {
+    color: #c62828;
+    font-weight: 600;
   }
   .sync-ok {
     color: #2e7d32;

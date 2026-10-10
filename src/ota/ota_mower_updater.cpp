@@ -67,12 +67,55 @@ void MowerUpdater::startUpdate(String filename, UpdateComplete updateComplete)
         return;
     }
     
+    if (_pending) {
+        Log(ERR, "MowerUpdater::startUpdate update already pending");
+        updateComplete("error-busy");
+        return;
+    }
+
     _filename = filename;
     _updateComplete = updateComplete;
     _progress = 0; // Reset progress
+    _pending = true;
     
     Log(INFO, "MowerUpdater::startUpdate initiating update for: %s", filename.c_str());
     
+#ifdef MOWER_TERMINAL
+  _terminal.suspend([this] {
+    Log(INFO, "MowerUpdater::startUpdate terminal suspended successfully");
+    this->setSerialPortReady(true);
+  });
+#else
+  this->setSerialPortReady(true);
+#endif
+}
+
+void MowerUpdater::startUpdate(uint8_t *buffer, size_t length, UpdateComplete updateComplete)
+{
+    if (!buffer || length == 0) {
+        if (buffer) free(buffer);
+        Log(ERR, "MowerUpdater::startUpdate called with empty buffer");
+        updateComplete("error-file-empty");
+        return;
+    }
+
+    if (_pending) {
+        free(buffer);
+        Log(ERR, "MowerUpdater::startUpdate update already pending");
+        updateComplete("error-busy");
+        return;
+    }
+
+    _filename = "";
+    _buffer = buffer;
+    _bufferLength = length;
+    _bufferPos = 0;
+    _updateComplete = updateComplete;
+    _progress = 0;
+    _pending = true;
+
+    Log(INFO, "MowerUpdater::startUpdate initiating update from memory (%u bytes)", (unsigned)length);
+
 #ifdef MOWER_TERMINAL
   _terminal.suspend([this] {
     Log(INFO, "MowerUpdater::startUpdate terminal suspended successfully");
@@ -108,11 +151,18 @@ void MowerUpdater::updateStatus(byte progress)
 
 void MowerUpdater::loop()
 {
-  if (_serialPortReady && _filename != "") 
+  if (_serialPortReady && _pending) 
   {
     String result = handleFlash();
     _serialPortReady = false;
+    _pending = false;
     _filename = "";
+    if (_buffer) {
+      free(_buffer);
+      _buffer = nullptr;
+    }
+    _bufferLength = 0;
+    _bufferPos = 0;
 #ifdef MOWER_TERMINAL
   _terminal.resume();
 #endif
@@ -148,12 +198,24 @@ String MowerUpdater::handleFlash()
   static const byte PROGRESS_FLASH_END = 95;
   
   uint8_t binread[BLOCK_SIZE];
-  fsUploadFile = SPIFFS.open(_filename, "r");
-  
-  if (!fsUploadFile) {
-    Log(ERR, "MowerUpdater::handleFlash failed to open file: %s", _filename.c_str());
-    return "error-file-open";
+  const bool fromMemory = _buffer != nullptr;
+  if (!fromMemory) {
+    fsUploadFile = SPIFFS.open(_filename, "r");
+    if (!fsUploadFile) {
+      Log(ERR, "MowerUpdater::handleFlash failed to open file: %s", _filename.c_str());
+      return "error-file-open";
+    }
   }
+  const size_t sourceSize = fromMemory ? _bufferLength : fsUploadFile.size();
+
+  // Liest aus dem Speicher oder aus der SPIFFS-Datei
+  auto readSource = [&](uint8_t *dst, size_t n) -> size_t {
+    if (!fromMemory) return fsUploadFile.read(dst, n);
+    if (_bufferPos + n > _bufferLength) n = _bufferLength - _bufferPos;
+    memcpy(dst, _buffer + _bufferPos, n);
+    _bufferPos += n;
+    return n;
+  };
 
   // RAII-style cleanup helper
   auto cleanup = [this]() {
@@ -164,16 +226,17 @@ String MowerUpdater::handleFlash()
     firmwareWriter.switchToRunMode();
   };
 
-  Log(INFO, "MowerUpdater::handleFlash file opened, size: %u bytes", fsUploadFile.size());
+  Log(INFO, "MowerUpdater::handleFlash source ready (%s), size: %u bytes",
+      fromMemory ? "memory" : "SPIFFS", (unsigned)sourceSize);
 
-  if (fsUploadFile.size() == 0) {
+  if (sourceSize == 0) {
     cleanup();
     return "error-file-empty";
   }
 
   {
-    auto bini = fsUploadFile.size() / BLOCK_SIZE;
-    auto lastbuf = fsUploadFile.size() % BLOCK_SIZE;
+    auto bini = sourceSize / BLOCK_SIZE;
+    auto lastbuf = sourceSize % BLOCK_SIZE;
     
     Log(INFO, "MowerUpdater::handleFlash processing %u full blocks + %u remaining bytes", 
         (unsigned)bini, (unsigned)lastbuf);
@@ -203,7 +266,7 @@ String MowerUpdater::handleFlash()
     updateStatus(PROGRESS_FLASH_START);
 
     uint32_t currentAddress = STM32STADDR;
-    uint32_t totalBytes = fsUploadFile.size();
+    uint32_t totalBytes = sourceSize;
     uint32_t bytesWritten = 0;
 
     // Helper function to write a block with retries
@@ -255,7 +318,7 @@ String MowerUpdater::handleFlash()
     for (uint32_t i = 0; i < bini; i++) {
         unsigned long iterationStartTime = millis();
 
-        size_t bytesRead = fsUploadFile.read(binread, BLOCK_SIZE);
+        size_t bytesRead = readSource(binread, BLOCK_SIZE);
         if (bytesRead != BLOCK_SIZE) {
           Log(ERR, "Failed to read block %u, expected %u bytes, got %u", 
               (unsigned)i, (unsigned)BLOCK_SIZE, (unsigned)bytesRead);
@@ -278,7 +341,7 @@ String MowerUpdater::handleFlash()
 
     // Handle the last partial block
     if (lastbuf > 0) {
-        size_t bytesRead = fsUploadFile.read(binread, lastbuf);
+        size_t bytesRead = readSource(binread, lastbuf);
         if (bytesRead != lastbuf) {
           Log(ERR, "Failed to read last block, expected %u bytes, got %u", 
               (unsigned)lastbuf, (unsigned)bytesRead);
@@ -293,7 +356,7 @@ String MowerUpdater::handleFlash()
         }
     }
 
-    fsUploadFile.close();
+    if (fsUploadFile) fsUploadFile.close();
     Log(INFO, "MowerUpdater::handleFlash firmware written successfully");
     updateStatus(100);
   } // End of file handling scope

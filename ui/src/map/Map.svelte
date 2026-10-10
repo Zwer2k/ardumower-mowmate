@@ -16,7 +16,7 @@
   import { mowSettingsStore } from "./mow-settings";
   import { filterWaypointsByToggles } from "./core/waypoint-filter";
   import { openConfirm, openConfirmChoice } from "../stores/confirm-dialog";
-  import { mapWorkflowStore, isMapDirty } from "./map-workflow";
+  import { mapWorkflowStore, isMapDirty, generateUniqueName } from "./map-workflow";
   import { isMowerMapSynced, setMapDirty } from "./services/map-sync";
   import { get } from "svelte/store";
   import MowSettingsDialog from "./MowSettingsDialog.svelte";
@@ -60,6 +60,8 @@
   import { SaveSuccess } from "../stores/success";
   import { currentMapRotationStore, mapEditLock } from "./service";
   import MapLoadingOverlay from "./MapLoadingOverlay.svelte";
+  import { scheduleStore } from "../stores/schedule";
+  import { capacityExceeded, confirmUploadCapacity, mowerCapacityFor } from "./services/mower-capacity";
   import type { Point, MapArea } from "./model";
   import type { MowSettingsData, RouteFinding } from "../model";
   import { gamepadStore, GamepadButton } from "../stores/gamepad";
@@ -231,14 +233,23 @@
         text: `${name} ● (unsaved)`,
       });
     }
-    for (const m of $socketStore.maps) {
+    // Nach Namen sortiert (Zahlen numerisch: "Map 2" vor "Map 10").
+    const sorted = [...$socketStore.maps].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+    const mowerCrc = $socketStore.state?.map_crc ?? 0;
+    for (const m of sorted) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);
+      // Gespeicherte Karten haben ein Änderungsdatum (Unix-Zeit, 0 = unbekannt).
+      const modified = m.timestamp > 1600000000
+        ? ` · ${new Date(m.timestamp * 1000).toLocaleDateString()}`
+        : "";
       opts.push({
         id: m.id,
         // "●" marks a map with unsaved changes, so drafts stay recognizable
-        // after switching away from them.
-        text: `${m.name}${m.unsaved ? ' ●' : ''} (${m.area.toFixed(1)} m²)${m.id === $socketStore.activeMapId ? ' ★ default' : ''}`,
+        // after switching away from them. "on mower": its CRC matches the
+        // map the mower reports.
+        text: `${m.name}${m.unsaved ? ' ●' : ''} (${m.area.toFixed(1)} m²)${mowerCrc !== 0 && m.crc === mowerCrc ? ' ⇡ on mower' : ''}${m.id === $socketStore.activeMapId ? ' ★ default' : ''}${modified}`,
       });
     }
     return opts;
@@ -411,10 +422,20 @@
     socketService.sendSaveMap(name, compassRotation);
   }
 
-  function onUploadMap() {
+  async function onUploadMap() {
+    if (!(await confirmUploadCapacity())) return;
+    const syncPending = mapSyncTimer !== null;
     if (mapSyncTimer) {
       clearTimeout(mapSyncTimer);
       mapSyncTimer = null;
+    }
+    // Der Editor gleicht Änderungen nach 250 ms selbst mit dem Modem ab. Ist
+    // nichts mehr offen, hat das Modem den Stand bereits: direkt hochladen wie
+    // der Upload-Knopf des Dashboards. Die ganze Karte vorher erneut zu senden
+    // blieb sonst oft ohne Bestätigung hängen, und der Knopf tat nichts.
+    if (!syncPending && !socketService.hasUnsyncedEdits()) {
+      socketService.sendUploadMap();
+      return;
     }
     const mapData = buildMapSetData(get(MapStore).map, compassRotation);
     lastSyncedMap = JSON.stringify(mapData);
@@ -516,9 +537,14 @@
   async function onDeleteMap() {
     const target = dropdownSelectedId || effectiveMapId;
     if (!target || target === "__unsaved__") return;
+    // Zeitplan-Einträge dieser Karte deaktiviert das Modem beim Löschen.
+    const scheduled = (get(scheduleStore).entries ?? []).filter((e) => e.mapId === target && e.enabled);
+    const scheduleNote = scheduled.length > 0
+      ? ` It is used by ${scheduled.length} scheduled mowing ${scheduled.length === 1 ? "entry" : "entries"} (${scheduled.map((e) => e.name).join(", ")}), which will be disabled.`
+      : "";
     const choice = await openConfirm({
       title: "Delete map",
-      message: "Really delete this map? This cannot be undone.",
+      message: `Really delete this map? This cannot be undone.${scheduleNote}`,
       confirmText: "Delete",
       cancelText: "Cancel",
       kind: "danger",
@@ -544,11 +570,11 @@
     source?: string,
     settings?: Partial<import("../model").MowSettingsData>,
   ) {
+    // Karte und Einstellungen erst übernehmen, wenn das Modem den Import
+    // bestätigt (mapOpResult): Es legt eine neue Karte an und schickt sie
+    // zurück. Vorher landeten Geometrie und Einstellungen bei einem Fehler in
+    // der gerade aktuellen Karte.
     currentMapRotationStore.set(((rotation % 360) + 360) % 360);
-    MapStore.set({ map, presentation: calculatePresentation(map, 0) });
-    if (settings) {
-      socketService.sendMowSettings(settings as MowSettingsData);
-    }
     // MowerMap::fromJson() (backend) expects the same X/Y convention as the
     // persisted map format (Y not flipped), unlike the setMap handler which
     // flips Y itself. Convert frontend points (Y-up) back to that convention
@@ -565,8 +591,9 @@
         waypoints: map.waypoints.points.map(toBackendPoint),
         rotation,
       }),
-      $mapWorkflowStore.pendingName || effectiveMapName || defaultMapName(),
+      generateUniqueName(source ? `Import ${source}` : "Imported map"),
       rotation,
+      settings,
     );
   }
 
@@ -582,6 +609,9 @@
     .map((i) => rawWaypoints[i])
     .filter((p): p is Point => !!p);
   $: totalPoints = perimeterPoints + dockpointsPoints + waypointsPoints + exclusionPoints.reduce((a, b) => a + b, 0);
+  // Schätzung, wie viele Punkte in den Speicher des Mähers passen.
+  $: mowerCapacity = mowerCapacityFor($socketStore, $MapStore?.map, $mowSettingsStore);
+  $: mowerCapacityExceeded = capacityExceeded(mowerCapacity);
 
   // ─── Edit/draw state ───────────────────────────────────────────────────────
   let drawActive = false;
@@ -1233,6 +1263,8 @@
       {dockpointsPoints}
       {waypointsPoints}
       {totalPoints}
+      {mowerCapacity}
+      {mowerCapacityExceeded}
       needsUpload={sync.needsUpload}
       onUploadMap={onUploadMap}
       {selectedExclusionIndex}

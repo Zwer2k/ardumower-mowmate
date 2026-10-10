@@ -106,13 +106,18 @@ void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
     Log(WARN, "%ssetMap: Map-Lesevorgang läuft noch, ignoriere", _LOG_);
     return;
   }
+  const bool wasUnsaved = _currentMapUnsaved;
+  const double oldArea = _currentMapArea;
   _map = map;
   _map.timestamp = millis();
   _lastUploadedMapId = "";
   _lastUploadedMapCrc = 0;
   _currentMapUnsaved = true;
-  _mapListDirty = true;
   updateCurrentMapMeta();
+  // Die Kartenliste zeigt nur "ungespeichert" und die Fläche. Sie ging früher
+  // bei jeder Bearbeitung (alle 250 ms) an alle Browser.
+  if (!wasUnsaved || fabs(oldArea - _currentMapArea) >= 0.05)
+    _mapListDirty = true;
   if (_currentMapId.startsWith("__t_")) {
     updateTransientMapMeta(_currentMapId, _map, _map.rotation);
   } else {
@@ -157,7 +162,10 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   _map.doMowExclusionBorder = _mowSettings.doMowExclusionBorder;
   _map.simplifyEpsilon = _mowSettings.simplifyEpsilon;
   _map.checkTurnRadius = _mowSettings.checkTurnRadius;
-  _map.timestamp = millis();
+  // _map.timestamp bleibt unverändert: Er steuert die Übertragung der Karte an
+  // den Browser, und die Geometrie hat sich nicht geändert. Jedes Umschalten
+  // eines Mäh-Toggles schickte sonst die ganze Karte (tausende Wegpunkte)
+  // erneut; die Einstellungen selbst gehen per mowSettings-Nachricht hinaus.
   _currentMapUnsaved = true;
   _mapListDirty = true;
 
@@ -439,64 +447,39 @@ bool MowerAdapter::renameMap(const String &id, const String &name) {
 }
 
 bool MowerAdapter::deleteMap(const String &id) {
+  const bool wasCurrent = (_currentMapId == id);
   if (id.startsWith("__t_")) {
     // Transiente (RAM-only) Karte direkt aus dem RAM entfernen.
     if (!removeTransientMap(id)) {
       Log(WARN, "%sdeleteMap: transiente Karte %s nicht gefunden", _LOG_, id.c_str());
       return false;
     }
-    if (_currentMapId == id) {
-      // Gelöschte Karte war gerade geladen: auf die erste gespeicherte Karte
-      // umschalten, falls vorhanden, sonst auf leere Karte zurücksetzen.
-      const auto &maps = _mapManager.list();
-      if (!maps.empty()) {
-        _currentMapId = maps.front().id;
-        if (!_mapManager.load(_currentMapId, _map)) {
-          _currentMapId = "";
-          _map = ArduMower::Domain::Robot::MowerMap();
-          _map.timestamp = millis();
-        }
-      } else {
-        _currentMapId = "";
-        _map = ArduMower::Domain::Robot::MowerMap();
-        _map.timestamp = millis();
-      }
-      _currentMapUnsaved = false;
-      _pendingRenameId = "";
-      _pendingRenameName = "";
-      updateCurrentMapMeta();
-    }
-    _mapListDirty = true;
-    Log(INFO, "%sdeleteMap: transiente Karte %s gelöscht", _LOG_, id.c_str());
-    return true;
+  } else {
+    if (!_mapManager.remove(id)) return false;
+    removeMapDraft(id);
   }
-
-  if (!_mapManager.remove(id)) return false;
-  removeMapDraft(id);
-  if (_currentMapId == id) {
-    // Gelöschte Karte war gerade geladen: aktiv gespeicherte Karte wieder
-    // herstellen, falls möglich, sonst auf leere Karte zurücksetzen.
-    ArduMower::Domain::Robot::MowerMap loaded;
-    if (_mapManager.loadActive(loaded)) {
-      _currentMapId = _mapManager.activeId();
-      _map = loaded;
-      _currentMapCrc = _mapManager.getCrc(_currentMapId);
-      syncMowSettingsFromMap();
-    } else {
-      _currentMapId = "";
-      _map = ArduMower::Domain::Robot::MowerMap();
-      _map.timestamp = millis();
-    }
-    // Der Unsaved-/Rename-Zustand gehörte zur gelöschten Karte; sonst wurde
-    // die Ersatzkarte als "unsaved" angezeigt.
-    _currentMapUnsaved = false;
-    _pendingRenameId = "";
-    _pendingRenameName = "";
-    updateCurrentMapMeta();
-  }
+  if (wasCurrent) loadReplacementMap();
   _mapListDirty = true;
   Log(INFO, "%sdeleteMap: Karte %s gelöscht", _LOG_, id.c_str());
   return true;
+}
+
+// Nach dem Löschen der aktuellen Karte: wie beim Start die Standardkarte laden,
+// sonst die erste gespeicherte, sonst eine leere Karte. Über loadMap(), damit
+// ein Entwurf, die CRC aus SPIFFS und die Mäh-Einstellungen gelten. Früher
+// nahm der Transient-Zweig die erste Karte statt der Standardkarte, und der
+// andere Zweig ignorierte Entwürfe und überschrieb die gespeicherte CRC.
+void MowerAdapter::loadReplacementMap() {
+  _currentMapId = "";
+  _currentMapUnsaved = false;
+  _pendingRenameId = "";
+  _pendingRenameName = "";
+  String target = _mapManager.activeId();
+  if (target.length() == 0 && !_mapManager.list().empty()) target = _mapManager.list().front().id;
+  if (target.length() > 0 && loadMap(target)) return;
+  _map = ArduMower::Domain::Robot::MowerMap();
+  _map.timestamp = millis();
+  updateCurrentMapMeta();
 }
 
 bool MowerAdapter::discardMap() {
@@ -561,21 +544,9 @@ bool MowerAdapter::importMowerMap(const String &json, ArduMower::Domain::Robot::
     Log(WARN, "%simportMowerMap: invalid map geometry", _LOG_);
     return false;
   }
-  // Importierte Mäh-Einstellungen in den aktuellen Settings übernehmen.
-  _mowSettings.pattern = outMap.pattern;
-  _mowSettings.width = outMap.mowOfs;
-  _mowSettings.angle = outMap.patternAngle;
-  _mowSettings.distanceToBorder = outMap.distanceToBorder;
-  _mowSettings.borderLaps = outMap.borderLaps;
-  _mowSettings.doMowArea = outMap.doMowArea;
-  _mowSettings.doMowPerimeter = outMap.doMowPerimeter;
-  _mowSettings.doMowBorder = outMap.doMowBorder;
-  _mowSettings.doMowExclusions = outMap.doMowExclusions;
-  _mowSettings.doMowExclusionBorder = outMap.doMowExclusionBorder;
-  _mowSettings.mowBorderCcw = outMap.mowBorderCcw;
-  _mowSettings.simplifyEpsilon = outMap.simplifyEpsilon;
-  _mowSettings.checkTurnRadius = outMap.checkTurnRadius;
-  _mowSettings.timestamp = millis();
+  // Nur prüfen und einlesen, keine Seiteneffekte: Die Mäh-Einstellungen
+  // überträgt der Browser nach erfolgreichem Import für die neue Karte.
+  // Früher landeten sie in der Karte, die zum Zeitpunkt des Imports aktuell war.
   return true;
 }
 
@@ -743,6 +714,7 @@ void MowerAdapter::parseArduMowerCommand(const char* line)
 // Die Exclusion-Polygone werden über anschließende AT+X-Befehle mitgeteilt.
 void MowerAdapter::parseATNCommand(const char* line) {
   Log(DBG, "%sparseATNCommand (map counts)", _LOG_);
+  if (ownMapUploadRunning()) return;
   int waitCount = 0;
   while (_map.isReading() && waitCount < 10) {
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -779,6 +751,7 @@ void MowerAdapter::parseATNCommand(const char* line) {
 // AT+X Kommando: AT+X,<startIdx>,<len1>,<len2>,...
 void MowerAdapter::parseATXCommand(const char* line) {
   Log(DBG, "%sparseATXCommand (exclusion sizes)", _LOG_);
+  if (ownMapUploadRunning()) return;
   int waitCount = 0;
   while (_map.isReading() && waitCount < 10) {
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -819,15 +792,17 @@ void MowerAdapter::finalizeInterceptedMap() {
   Log(DBG, "%sfinalizeInterceptedMap: perimeter=%d exclusions=%d dock=%d waypoints=%d",
       _LOG_, tempNPerimeter, tempNExclusions, tempNDockpoints, tempNWaypoints);
 
-  _map.perimeter.clear();
-  _map.exclusions.clear();
-  _map.dockpoints.clear();
-  _map.waypoints.clear();
+  // Erst in lokale Listen aufbauen und prüfen, dann übernehmen: Früher wurde
+  // _map vor der Prüfung geleert und gefüllt; bei einem Fehler blieb eine
+  // halbe Karte unter der alten ID stehen, die Speichern, Upload und Export
+  // dann weiterverwendeten.
+  std::vector<MapPoint> perimeter, dockpoints, waypoints;
+  std::vector<std::vector<MapPoint>> exclusions;
 
   int idx = 0;
   // Perimeter
   for (int i = 0; i < tempNPerimeter && idx < (int)tempWaypointsBuffer.size(); i++, idx++) {
-    _map.perimeter.push_back(tempWaypointsBuffer[idx]);
+    perimeter.push_back(tempWaypointsBuffer[idx]);
   }
   // Exclusions anhand der AT+X-Längen aufteilen
   for (size_t ex = 0; ex < tempExclusionSizes.size(); ex++) {
@@ -835,47 +810,51 @@ void MowerAdapter::finalizeInterceptedMap() {
     for (int j = 0; j < tempExclusionSizes[ex] && idx < (int)tempWaypointsBuffer.size(); j++, idx++) {
       excl.push_back(tempWaypointsBuffer[idx]);
     }
-    _map.exclusions.push_back(excl);
+    exclusions.push_back(excl);
   }
   // Dockpoints
   for (int i = 0; i < tempNDockpoints && idx < (int)tempWaypointsBuffer.size(); i++, idx++) {
-    _map.dockpoints.push_back(tempWaypointsBuffer[idx]);
+    dockpoints.push_back(tempWaypointsBuffer[idx]);
   }
   // Waypoints
   for (int i = 0; i < tempNWaypoints && idx < (int)tempWaypointsBuffer.size(); i++, idx++) {
-    _map.waypoints.push_back(tempWaypointsBuffer[idx]);
+    waypoints.push_back(tempWaypointsBuffer[idx]);
   }
 
   // Summen prüfen
   bool ok = true;
   int totalExclPoints = 0;
-  for (const auto &ex : _map.exclusions) totalExclPoints += ex.size();
-  if ((int)_map.perimeter.size() != tempNPerimeter) {
-    Log(ERR, "%sfinalizeInterceptedMap: perimeter count mismatch %d != %d", _LOG_, _map.perimeter.size(), tempNPerimeter);
+  for (const auto &ex : exclusions) totalExclPoints += ex.size();
+  if ((int)perimeter.size() != tempNPerimeter) {
+    Log(ERR, "%sfinalizeInterceptedMap: perimeter count mismatch %d != %d", _LOG_, perimeter.size(), tempNPerimeter);
     ok = false;
   }
   if (totalExclPoints != tempNExclusions) {
     Log(ERR, "%sfinalizeInterceptedMap: exclusion point count mismatch %d != %d", _LOG_, totalExclPoints, tempNExclusions);
     ok = false;
   }
-  if ((int)_map.exclusions.size() != (int)tempExclusionSizes.size()) {
-    Log(ERR, "%sfinalizeInterceptedMap: exclusion polygon count mismatch %d != %d", _LOG_, _map.exclusions.size(), tempExclusionSizes.size());
+  if ((int)exclusions.size() != (int)tempExclusionSizes.size()) {
+    Log(ERR, "%sfinalizeInterceptedMap: exclusion polygon count mismatch %d != %d", _LOG_, exclusions.size(), tempExclusionSizes.size());
     ok = false;
   }
-  if ((int)_map.dockpoints.size() != tempNDockpoints) {
-    Log(ERR, "%sfinalizeInterceptedMap: dockpoints count mismatch %d != %d", _LOG_, _map.dockpoints.size(), tempNDockpoints);
+  if ((int)dockpoints.size() != tempNDockpoints) {
+    Log(ERR, "%sfinalizeInterceptedMap: dockpoints count mismatch %d != %d", _LOG_, dockpoints.size(), tempNDockpoints);
     ok = false;
   }
-  if ((int)_map.waypoints.size() != tempNWaypoints) {
-    Log(ERR, "%sfinalizeInterceptedMap: waypoints count mismatch %d != %d", _LOG_, _map.waypoints.size(), tempNWaypoints);
+  if ((int)waypoints.size() != tempNWaypoints) {
+    Log(ERR, "%sfinalizeInterceptedMap: waypoints count mismatch %d != %d", _LOG_, waypoints.size(), tempNWaypoints);
     ok = false;
   }
   if (!ok) {
-    Log(ERR, "%sfinalizeInterceptedMap: Map-Übertragung fehlerhaft, Abbruch", _LOG_);
+    Log(ERR, "%sfinalizeInterceptedMap: Map-Übertragung fehlerhaft, Abbruch (Karte unverändert)", _LOG_);
     tempMapCountsReceived = false;
     tempExclusionSizes.clear();
     return;
   }
+  _map.perimeter = std::move(perimeter);
+  _map.exclusions = std::move(exclusions);
+  _map.dockpoints = std::move(dockpoints);
+  _map.waypoints = std::move(waypoints);
   Log(DBG, "%sfinalizeInterceptedMap: Map vollständig, sende an Client", _LOG_);
   _map.timestamp = millis();
   _mapListDirty = true;
@@ -1778,6 +1757,7 @@ void MowerAdapter::parseStateResponse(const char* line)
 void MowerAdapter::parseATWCommand(const char* line)
 {
   Log(DBG, "%sparseATWCommand (waypoint-list)", _LOG_);
+  if (ownMapUploadRunning()) return;
   if (_map.isReading()) {
     Log(DBG, "%sparseATWCommand: Map-Lesevorgang läuft, ignoriere", _LOG_);
     return;
@@ -2228,6 +2208,15 @@ void MowerAdapter::processMapUpload()
         Log(WARN, "%sprocessMapUpload: response index mismatch in phase %d (expected %d, got %d)",
             _LOG_, _mapUploadState.phase, _mapUploadState.lastExpectedNextIdx, respIdx);
         responseValid = false;
+        // Sunray bestätigt mit W,<Index> den Punkt, an dem setPoint() abbrach
+        // (zu wenig Speicher oder gesperrt nach einem früheren Speicherfehler).
+        // Denselben Chunk erneut zu senden ändert daran nichts.
+        if (respIdx < _mapUploadState.lastExpectedNextIdx) {
+          _mapUploadError = "The mower stopped accepting map points at point " + String(respIdx) +
+              " of " + String(uploadProgress().totalTotal) +
+              ". It most likely ran out of memory: reduce the number of points (e.g. Lines instead of Rings, a larger track width). If even small maps fail, restart the mower.";
+          _mapUploadState.chunkRetry = 2; // sofort abbrechen (unten +1 = 3)
+        }
       }
     }
     if (!responseValid) {
@@ -2235,6 +2224,8 @@ void MowerAdapter::processMapUpload()
       Log(WARN, "%sprocessMapUpload: command failed in phase %d (retry %d/3)", _LOG_, _mapUploadState.phase, _mapUploadState.chunkRetry);
       if (_mapUploadState.chunkRetry >= 3) {
         Log(ERR, "%sprocessMapUpload: command failed in phase %d after 3 retries", _LOG_, _mapUploadState.phase);
+        if (_mapUploadError.length() == 0)
+          _mapUploadError = "The mower did not confirm the map transfer.";
         if (_mapUploadLockedMap) _map.endRead();
         _mapUploadLockedMap = false;
         _mapUploadState.snapshot = ArduMower::Domain::Robot::MowerMap();
@@ -2265,6 +2256,7 @@ void MowerAdapter::processMapUpload()
   switch (_mapUploadState.phase) {
     case MapUploadState::start:
       Log(INFO, "%sprocessMapUpload: uploading map...", _LOG_);
+      _mapUploadError = "";
       _mapUploadState.phase = MapUploadState::perimeter;
       _mapUploadState.pointIdx = 0;
       _mapUploadState.chunkRetry = 0;
@@ -2407,6 +2399,7 @@ void MowerAdapter::processMapUpload()
 
 void MowerAdapter::loop()
 {
+  flushCommandQueue();
   startMapUploadFromLoop();
   processPendingCommand();
   processMapUpload();
@@ -2461,7 +2454,40 @@ bool MowerAdapter::sendCommand(const String& command, bool encrypt)
   if (encrypt)
     enc.encrypt(buf, strlen(buf));
 
-  return router.sendWithoutResponse(buf);
+  // Sunray beantwortet jeden AT-Befehl. Bis die Antwort da ist, bleibt der
+  // Router belegt: Ein HTTP-Client (z. B. CaSSAndRA) bekam sonst die Antwort
+  // auf unsere letzte Abfrage zugestellt, hielt sie für falsch und schickte
+  // seinen Befehl (z. B. AT+P) im Sekundentakt erneut.
+  //
+  // Ist der Router belegt, wird der Befehl eingereiht statt verworfen: Viele
+  // Aufrufer (z. B. Stop aus der Oberfläche) werten den Rückgabewert nicht aus,
+  // ein Stop ging dann unbemerkt verloren. Reihenfolge bleibt erhalten,
+  // identische Befehle werden nicht doppelt eingereiht.
+  if (_commandQueue.empty() && router.sendAwaitingAnswer(buf))
+    return true;
+
+  const String queued(buf);
+  for (const auto &q : _commandQueue)
+    if (q == queued)
+      return true;
+  static const size_t maxQueuedCommands = 8;
+  if (_commandQueue.size() >= maxQueuedCommands)
+  {
+    Log(WARN, "%ssendCommand: queue full, dropping %s", _LOG_, command.c_str());
+    return false;
+  }
+  _commandQueue.push_back(queued);
+  Log(DBG, "%ssendCommand: router busy, queued %s (%u waiting)", _LOG_, command.c_str(),
+      (unsigned)_commandQueue.size());
+  return true;
+}
+
+void MowerAdapter::flushCommandQueue()
+{
+  if (_commandQueue.empty())
+    return;
+  if (router.sendAwaitingAnswer(_commandQueue.front()))
+    _commandQueue.pop_front();
 }
 
 bool MowerAdapter::sendCommandWithResponseAsync(const String& command, std::function<void(const char*, bool)> callback, bool encrypt, int timeoutMs)

@@ -19,6 +19,7 @@
     resetFlashProgress,
     socketService,
   } from "../stores/socket";
+  import { BackendSettings } from "../stores/backend";
 
   export let open: boolean = false;
 
@@ -75,10 +76,17 @@
   const githubSourceOption = { id: "github", text: "GitHub Release" };
   const fileSourceOption = { id: "file", text: "Local file" };
 
-  const uploadTypeOptions = [
-    { id: FirmwareUploadType.modem, text: "Modem Firmware" },
-    { id: FirmwareUploadType.mower, text: "Mower Firmware" }
-  ];
+  // Mäher-Firmware nur anbieten, wenn sie in den Mower capabilities erlaubt ist.
+  $: mowerUploadAllowed = $BackendSettings?.mower?.support_firmware_upload ?? true;
+  $: uploadTypeOptions = mowerUploadAllowed
+    ? [
+        { id: FirmwareUploadType.modem, text: "Modem Firmware" },
+        { id: FirmwareUploadType.mower, text: "Mower Firmware" },
+      ]
+    : [{ id: FirmwareUploadType.modem, text: "Modem Firmware" }];
+  $: if (!mowerUploadAllowed && uploadType === FirmwareUploadType.mower && !activeJob) {
+    uploadType = FirmwareUploadType.modem;
+  }
 
   let fileSize = 0;
 

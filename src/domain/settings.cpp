@@ -39,6 +39,7 @@ const char * _t_mower_mow_height = "mow_height";
 const char * _t_mower_support_cutter_speed = "support_cutter_speed";
 const char * _t_mower_support_cutter_height = "support_cutter_height";
 const char * _t_mower_has_sonar = "has_sonar";
+const char * _t_mower_support_firmware_upload = "support_firmware_upload";
 
 const char * _t_sta_ssid = "sta_ssid";
 const char * _t_sta_psk = "sta_psk";
@@ -410,6 +411,7 @@ void Mower::marshal(JsonObject o) const
   o[_t_mower_support_cutter_speed] = supportCutterSpeed;
   o[_t_mower_support_cutter_height] = supportCutterHeight;
   o[_t_mower_has_sonar] = hasSonar;
+  o[_t_mower_support_firmware_upload] = supportFirmwareUpload;
 }
 
 bool Mower::unmarshal(JsonObject o)
@@ -432,6 +434,8 @@ bool Mower::unmarshal(JsonObject o)
     supportCutterHeight = o[_t_mower_support_cutter_height].as<bool>();
   if (o[_t_mower_has_sonar].is<JsonVariant>())
     hasSonar = o[_t_mower_has_sonar].as<bool>();
+  if (o[_t_mower_support_firmware_upload].is<JsonVariant>())
+    supportFirmwareUpload = o[_t_mower_support_firmware_upload].as<bool>();
   return true;
 }
 

@@ -38,6 +38,9 @@ namespace ArduMower
   #endif
 
         void startUpdate(String filename, UpdateComplete updateComplete);
+        // Flasht direkt aus dem Speicher (PSRAM), ohne Umweg über SPIFFS.
+        // Übernimmt buffer und gibt ihn nach dem Flashen mit free() frei.
+        void startUpdate(uint8_t *buffer, size_t length, UpdateComplete updateComplete);
         String handleFlash();
         void addStatusHandler(StatusHandler handler);
         void addIdleCallback(IdleCallback cb);
@@ -52,6 +55,10 @@ namespace ArduMower
         String _filename;
         FirmwareWriterSTM32 firmwareWriter;
         File fsUploadFile;
+        uint8_t *_buffer = nullptr;
+        size_t _bufferLength = 0;
+        size_t _bufferPos = 0;
+        bool _pending = false;
 
         bool _serialPortReady = false;
         bool _fileUploaded = false;

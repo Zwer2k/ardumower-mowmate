@@ -337,9 +337,30 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       for (JsonObject p : searchWire) {
         map.searchWire.push_back(readPoint(p));
       }
-      JsonArray waypoints = jsonData["waypoints"];
-      for (JsonObject p : waypoints) {
-        map.waypoints.push_back(readPoint(p));
+      // keepWaypoints: Der Editor schickt die Wegpunkte nur mit, wenn sie sich
+      // seit dem letzten bestätigten Abgleich geändert haben. Sonst blieben bei
+      // jeder Änderung tausende Wegpunkte (~200 KB JSON) zu übertragen und zu
+      // parsen. Stimmt die Anzahl nicht, wird abgelehnt; der Editor schickt
+      // dann alles.
+      const bool keepWaypoints = jsonData["keepWaypoints"] | false;
+      bool keepMismatch = false;
+      if (keepWaypoints) {
+        if (requestedMapId.length() > 0 && requestedMapId == _source.currentMapId()) {
+          const int expected = jsonData["waypointCount"] | -1;
+          auto current = _source.mowerMap();
+          if (expected >= 0 && current.waypoints.size() == (size_t)expected) {
+            map.waypoints = std::move(current.waypoints);
+          } else {
+            keepMismatch = true;
+            Log(WARN, "%s setMap: keepWaypoints with %d, modem has %u waypoints - rejected", _LOG_,
+                expected, (unsigned)current.waypoints.size());
+          }
+        }
+      } else {
+        JsonArray waypoints = jsonData["waypoints"];
+        for (JsonObject p : waypoints) {
+          map.waypoints.push_back(readPoint(p));
+        }
       }
       map.rotation = jsonData["rotation"] | 0.0;
       const MowSettings settings = _source.mowSettings();
@@ -359,7 +380,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
         Log(DBG, "%s setMap: parsed perimeter=%d exclusions=%d dockpoints=%d searchWire=%d waypoints=%d rotation=%.1f", _LOG_,
           map.perimeter.size(), map.exclusions.size(), map.dockpoints.size(), map.searchWire.size(), map.waypoints.size(), map.rotation);
       const bool mapIdMatches = requestedMapId.length() > 0 && requestedMapId == _source.currentMapId();
-      const bool accepted = mapIdMatches && !_source.isMowerMapReading();
+      const bool accepted = mapIdMatches && !_source.isMowerMapReading() && !keepMismatch;
       if (accepted) {
         _socketHandler->setMap(map);
       } else if (!mapIdMatches) {
@@ -420,11 +441,17 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
 
    case RequestDataType::createMap: {
     String name = jsonData["name"] | "";
+    // Ein laufender Transfer zum Browser hält die Lesesperre; ohne Abbruch
+    // vorher scheiterte die Operation still (z. B. "Verwerfen -> Neue Karte").
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     if (_source.createMap(name)) {
-      _socketHandler->abortMapChunkSend();
-      yield();
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "create", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "create", false, "The map could not be created. The name may already be in use.");
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -432,11 +459,15 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
 
    case RequestDataType::copyMap: {
     String name = jsonData["name"] | "";
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     if (_source.copyMap(name)) {
-      _socketHandler->abortMapChunkSend();
-      yield();
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "copy", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "copy", false, "The map could not be copied. The name may already be in use.");
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -456,11 +487,13 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "load", true);
     } else {
       // Die aktuelle Karte bei einem Ladefehler behalten. Die Map-Liste
       // liefert dem Frontend wieder die weiterhin autoritative currentId.
       _socketHandler->abortMapChunkSend();
       yield();
+      _socketHandler->sendMapOpResult(this, "load", false, "The map could not be loaded.");
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -475,6 +508,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     if (requestedMapId != _source.currentMapId()) {
       Log(WARN, "%s saveMap: request for map %s rejected; current map is %s", _LOG_,
           requestedMapId.c_str(), _source.currentMapId().c_str());
+      _socketHandler->sendMapOpResult(this, "save", false, "The map was not saved: the modem switched to another map.");
       _socketHandler->sendMapList(NULL);
       break;
     }
@@ -490,6 +524,9 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     _socketHandler->sendData(ResponseDataType::mowerState, NULL, true);
     if (saved) {
       _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "save", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "save", false, "The map was not saved. The name may already be in use, or the storage is full.");
     }
     break;
   }
@@ -499,30 +536,44 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     String name = jsonData["name"] | "";
     _socketHandler->abortMapChunkSend();
     yield();
-    if (_source.renameMap(id, name)) {
-      _socketHandler->sendMapList(NULL);
+    const bool renamed = _source.renameMap(id, name);
+    if (!renamed) {
+      _socketHandler->sendMapOpResult(this, "rename", false, "The map was not renamed. The name may already be in use.");
+    } else {
+      _socketHandler->onMapRenamed(id, name);
     }
+    _socketHandler->sendMapList(NULL);
+    if (renamed) _socketHandler->sendMapOpResult(this, "rename", true);
     break;
   }
 
    case RequestDataType::deleteMap: {
     String id = jsonData["id"] | "";
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     if (_source.deleteMap(id)) {
-      _socketHandler->abortMapChunkSend();
-      yield();
+      _socketHandler->onMapDeleted(id);
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "delete", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "delete", false, "The map could not be deleted.");
       _socketHandler->sendMapList(NULL);
     }
     break;
   }
 
    case RequestDataType::discardMap: {
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     if (_source.discardMap()) {
-      _socketHandler->abortMapChunkSend();
-      yield();
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "discard", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "discard", false, "The changes could not be discarded.");
       _socketHandler->sendMapList(NULL);
     }
     break;
@@ -530,9 +581,12 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
 
    case RequestDataType::setActiveMap: {
     String id = jsonData["id"] | "";
-    if (_source.setActiveMap(id)) {
+    const bool ok = _source.setActiveMap(id);
+    if (ok) {
       _socketHandler->sendMapList(NULL);
     }
+    _socketHandler->sendMapOpResult(this, "setActive", ok,
+        ok ? "" : "Only saved maps can be the default map. Save the map first.");
     break;
   }
 
@@ -540,18 +594,27 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     String json = jsonData["json"] | "";
     String name = jsonData["name"] | "";
     double rotation = jsonData["rotation"] | 0.0;
+    // Erst prüfen (ohne Seiteneffekte), dann neue Karte anlegen, dann füllen.
+    // Früher schrieb der Import die Mäh-Einstellungen in die aktuelle Karte,
+    // bevor createMap am vergebenen Namen scheiterte.
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
     ArduMower::Domain::Robot::MowerMap imported;
-    if (_source.importMowerMap(json, imported)) {
-      imported.rotation = rotation;
-      if (_source.createMap(name)) {
-        _socketHandler->setMap(imported);
-        _socketHandler->abortMapChunkSend();
-        yield();
-        _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
-        _socketHandler->sendData(ResponseDataType::map, NULL, true);
-        _socketHandler->sendMapList(NULL);
-      }
+    if (!_source.importMowerMap(json, imported)) {
+      _socketHandler->sendMapOpResult(this, "import", false, "The file does not contain a valid map.");
+      break;
     }
+    imported.rotation = rotation;
+    if (!_source.createMap(name)) {
+      _socketHandler->sendMapOpResult(this, "import", false, "The imported map could not be created. The name may already be in use.");
+      _socketHandler->sendMapList(NULL);
+      break;
+    }
+    _socketHandler->setMap(imported);
+    _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+    _socketHandler->sendData(ResponseDataType::map, NULL, true);
+    _socketHandler->sendMapList(NULL);
+    _socketHandler->sendMapOpResult(this, "import", true);
     break;
   }
 
@@ -1048,6 +1111,8 @@ void UiSocketHandler::loop()
 
   _ws->cleanupClients();
 
+  pumpMapChunkSend();
+
   // Kartenliste bei Änderungen broadcasten, sobald mindestens ein Client verbunden ist
   if (_source.mapListDirty() && countConnectedClients() > 0) {
     _source.clearMapListDirty();
@@ -1438,8 +1503,8 @@ void UiSocketHandler::startMapChunkSend(UiSocketItem* sendTo, bool force) {
 }
 
 // Pro loop() einen Chunk versenden – Snapshot aus mapChunkSendState verwenden
-void UiSocketHandler::processMapChunkSend() {
-  if (!mapChunkSendState.active) return;
+bool UiSocketHandler::processMapChunkSend() {
+  if (!mapChunkSendState.active) return false;
   // Stall-Watchdog: ein Transfer, der längere Zeit keinen einzigen Chunk
   // loswird (Client-Queue voll, Client hängt in WS_DISCONNECTING, ...),
   // blockiert sonst dauerhaft ALLE anderen Nachrichten (sendData() kehrt bei
@@ -1453,20 +1518,22 @@ void UiSocketHandler::processMapChunkSend() {
     // Retry later; by then cleanupClients()/the TCP ACK timeout have usually
     // removed the client that caused the stall.
     _mapSendPendingUntil = millis() + 5000;
-    return;
+    return false;
   }
   // Retry-Delay: bei fehlgeschlagenem Senden 100ms warten
-  if (mapChunkSendState.lastRetryMs && millis() - mapChunkSendState.lastRetryMs < 100) return;
+  if (mapChunkSendState.lastRetryMs && millis() - mapChunkSendState.lastRetryMs < 100) return false;
   // Keine Clients → Chunk-Versand abbrechen
   if (countConnectedClients() == 0) {
     Log(DBG, "%s processMapChunkSend: no connected clients, aborting", _LOG_);
     mapChunkSendState.active = false;
     _source.endMowerMapRead();
-    return;
+    return false;
   }
   // Snapshot verwenden: einmalig beim Start gespeichert, bleibt konsistent
   auto& map = mapChunkSendState.snapshot;
-  const size_t blockSize = 30;
+  // Bis 256 Punkte bzw. ~4 KB JSON pro Chunk (sendMapChunk); Puffer ab 512 Byte
+  // liegen im PSRAM. Früher 30 Punkte/1 KB: ~16 Punkte pro Chunk.
+  const size_t blockSize = 256;
   bool chunkSent = false;
   bool stalled = false;
   size_t nextIdx = 0;
@@ -1594,7 +1661,22 @@ void UiSocketHandler::processMapChunkSend() {
   if (mapChunkSendState.active && !stalled) {
     mapChunkSendState.lastProgressMs = millis();
   }
+  // true: ein Chunk ging hinaus und der Transfer läuft weiter
+  return mapChunkSendState.active && !stalled;
 }
+
+// Mehrere Chunks pro loop(), solange der Client aufnimmt: Früher ging nur in
+// jeder ~12. loop()-Runde ein Chunk hinaus (Round-Robin mit allen anderen
+// Aufgaben), die WLAN-Verbindung lag damit weitgehend brach.
+void UiSocketHandler::pumpMapChunkSend() {
+  if (!mapChunkSendState.active) return;
+  const uint32_t start = millis();
+  for (int i = 0; i < 8 && millis() - start < 20; i++) {
+    if (!processMapChunkSend()) break;
+  }
+}
+
+
 
 // End the current chunk transfer (completed or aborted) and flush the
 // non-map messages that were held back while it was running, so the frame
@@ -1632,7 +1714,7 @@ void UiSocketHandler::finishMapChunkSend() {
 
 // Hilfsfunktion: Sende einen Chunk eines MapPoint-Vektors
 bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<ArduMower::Domain::Robot::MapPoint>& points, uint32_t timestamp, uint32_t clientId, int exclusionIdx, size_t startIdx, size_t blockSize, bool reset, size_t &nextIdx) {
-  const size_t maxJsonSize = 1024;
+  const size_t maxJsonSize = 4096;
   size_t total = points.size();
   nextIdx = 0;
   if (!reset && (startIdx > total || (startIdx == total && total > 0))) return false;
@@ -1896,6 +1978,11 @@ void UiSocketHandler::processUploadToMower() {
   } else {
     sendProgress("upload", 100, "Upload failed");
     Log(WARN, "%s processUploadToMower: upload failed", _LOG_);
+    // Die Fortschrittsanzeige verschwindet bei 100 %; der Grund kommt als
+    // Fehlermeldung an alle Browser.
+    String reason = _cmd.uploadMapToMowerError();
+    if (reason.length() == 0) reason = "The map upload to the mower failed.";
+    sendMapOpResult(NULL, "upload", false, reason.c_str());
   }
   sendData(ResponseDataType::mowerState, NULL, true);
   _cmd.requestStatusNow(); // refresh state/crc immediately after upload
@@ -2245,18 +2332,41 @@ void UiSocketHandler::sendMapList(UiSocketItem *sendTo)
   }
 }
 
+void UiSocketHandler::sendMapOpResult(UiSocketItem *sendTo, const char *op, bool ok, const char *error)
+{
+  JsonDocument doc;
+  doc["type"] = ResponseDataType::mapOpResult;
+  auto data = doc["data"].to<JsonObject>();
+  data["op"] = op;
+  data["ok"] = ok;
+  if (!ok && error && *error) data["error"] = error;
+  data["mapId"] = _source.currentMapId();
+  String json;
+  serializeJson(doc, json);
+  if (sendTo) {
+    sendTo->sendText(json);
+  } else if (countConnectedClients() > 0) {
+    sendTextAllWithRetry(json);
+  }
+  if (!ok) Log(WARN, "%s map operation %s failed: %s", _LOG_, op, error ? error : "");
+}
+
 void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted)
 {
-  const auto map = _source.mowerMap();
+  // Jede Bearbeitung (alle 250 ms) bestätigt hier: Früher kostete das eine
+  // Kopie der ganzen Karte nur für den Zeitstempel und einen MD5 über die
+  // komplette Geometrie. Der Browser speichert den Hash nur, entscheidet aber
+  // nichts damit; die Kartenliste liefert ihn bei Bedarf.
+  const uint32_t mapTimestamp = _source.mowerMapTimestamp();
   if (accepted) {
-    oldDataTimestamp[ResponseDataType::map] = map.timestamp;
+    oldDataTimestamp[ResponseDataType::map] = mapTimestamp;
   }
 
   JsonDocument doc;
   doc["type"] = ResponseDataType::mapAck;
-  doc["timestamp"] = map.timestamp;
+  doc["timestamp"] = mapTimestamp;
   auto data = doc["data"].to<JsonObject>();
-  data["hash"] = _source.currentMapHash();
+  data["hash"] = "";
   data["crc"] = _source.currentMapCrc();
   data["area"] = _source.currentMapArea();
   data["rotation"] = _source.currentMapRotation();
@@ -2278,6 +2388,40 @@ bool UiSocketHandler::setSchedule(bool enabled, const std::vector<ArduMower::Mod
     _scheduleDirty = true;
   }
   return ok;
+}
+
+// Zeitplan-Einträge speichern Karten-ID und -Name. Beim Umbenennen zeigte der
+// Zeitplan sonst den alten Namen; nach dem Löschen startete ein Eintrag still
+// gar nicht mehr ("could not be started"). Gelöschte Karten deaktivieren den
+// Eintrag, statt ihn zu entfernen: der Nutzer sieht ihn und wählt neu.
+void UiSocketHandler::onMapRenamed(const String &id, const String &name)
+{
+  auto entries = _scheduleManager.entries();
+  bool changed = false;
+  for (auto &e : entries) {
+    if (e.mapId == id && e.mapName != name) { e.mapName = name; changed = true; }
+  }
+  if (!changed) return;
+  _scheduleManager.setConfig(_scheduleManager.enabled(), entries);
+  _scheduleManager.save();
+  sendSchedule(NULL);
+}
+
+void UiSocketHandler::onMapDeleted(const String &id)
+{
+  auto entries = _scheduleManager.entries();
+  bool changed = false;
+  for (auto &e : entries) {
+    if (e.mapId == id && e.enabled) {
+      e.enabled = false;
+      changed = true;
+      Log(WARN, "%s schedule entry %s disabled: its map was deleted", _LOG_, e.name.c_str());
+    }
+  }
+  if (!changed) return;
+  _scheduleManager.setConfig(_scheduleManager.enabled(), entries);
+  _scheduleManager.save();
+  sendSchedule(NULL);
 }
 
 bool UiSocketHandler::saveSchedule()

@@ -93,6 +93,7 @@ namespace ArduMower
         responsePong,
         firmwareStatus,
         routeReport,
+        mapOpResult,
         responseDataTypeLength
       };
 
@@ -201,6 +202,12 @@ namespace ArduMower
         void sendData(ResponseDataType dataType, UiSocketItem *sendTo = NULL, bool force = false);
         void sendMapList(UiSocketItem *sendTo = NULL);
         void sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted);
+        // Ergebnis einer Kartenoperation (create, copy, load, save, rename,
+        // delete, discard, setActive, import) an den anfragenden Browser.
+        void sendMapOpResult(UiSocketItem *sendTo, const char *op, bool ok, const char *error = "");
+        // Zeitplan an umbenannte oder gelöschte Karten anpassen.
+        void onMapRenamed(const String &id, const String &name);
+        void onMapDeleted(const String &id);
         // Ergebnis der Routenprüfung der letzten Wegpunktberechnung.
         void sendRouteReport(UiSocketItem *sendTo = NULL);
         void sendSchedule(UiSocketItem *sendTo = NULL);
@@ -313,7 +320,8 @@ namespace ArduMower
 
       private:
         void startMapChunkSend(UiSocketItem* sendTo, bool force);
-        void processMapChunkSend();
+        bool processMapChunkSend();
+        void pumpMapChunkSend();
         void finishMapChunkSend();
         void processScheduleTriggerStateMachine();
         bool sendMapChunk(MapPointType pointType, const std::vector<ArduMower::Domain::Robot::MapPoint>& points, uint32_t timestamp, uint32_t clientId, int exclusionIdx, size_t startIdx, size_t blockSize, bool reset, size_t &nextIdx);

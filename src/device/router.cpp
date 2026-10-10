@@ -22,8 +22,8 @@ void Router::loop()
 
 void Router::loopStuckRecovery()
 {
-  // Nur Befehle mit erwarteter Antwort (router.send) brauchen Recovery.
-  // sendWithoutResponse ist fire-and-forget und setzt expectResponse nicht.
+  // Nur Befehle mit erwarteter Antwort (send, sendAwaitingAnswer) brauchen
+  // Recovery. sendWithoutResponse ist fire-and-forget und setzt expectResponse nicht.
   if (!expectResponse) return;
 
   // expectResponseSince wird genau einmal pro Befehl gesetzt und nicht
@@ -75,6 +75,16 @@ bool Router::sendWithoutResponse(const String& line)
   sendCommand = true;
   expectResponseSince = _millis();
 
+  return true;
+}
+
+bool Router::sendAwaitingAnswer(const String& line)
+{
+  if (!sendWithoutResponse(line))
+    return false;
+  // Die Antwort wird nur von den RxDrains ausgewertet (MowerAdapter); der
+  // Router hält sie aber von einem nachfolgenden send() fern.
+  expectResponse = true;
   return true;
 }
 

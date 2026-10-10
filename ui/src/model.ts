@@ -74,6 +74,7 @@ export namespace Settings {
     support_cutter_speed: boolean;
     support_cutter_height: boolean;
     has_sonar: boolean;
+    support_firmware_upload: boolean;
   }
 }
 
@@ -101,6 +102,16 @@ export interface Info {
   bt_mac: string;
   firmware_target: "esp32" | "esp32-s3";
   memory?: MemoryInfo;
+}
+
+export interface NetworkInfo {
+  connected: boolean;
+  rssi: number;
+  channel: number;
+  ip: string;
+  tx_power: number;
+  power_save: boolean;
+  bluetooth: boolean;
 }
 
 export interface MemoryInfo {
@@ -402,6 +413,7 @@ export enum ResponseDataType {
   pong,
   firmwareStatus,
   routeReport,
+  mapOpResult,
 }
 
 export interface ScheduleEntry {
@@ -577,6 +589,9 @@ export interface MapSetData {
   source?: string;
   syncId?: number;
   mapId?: string;
+  /** Wegpunkte weggelassen: das Modem behält seine (Anzahl zur Kontrolle). */
+  keepWaypoints?: boolean;
+  waypointCount?: number;
 }
 
 export interface RequestSocketMessage {

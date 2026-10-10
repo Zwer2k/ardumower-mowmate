@@ -1,4 +1,5 @@
 #include "map_manager.h"
+#include <time.h>
 #include "log.h"
 #include "atomic_file.h"
 #include <MD5Builder.h>
@@ -88,6 +89,14 @@ namespace ArduMower {
             }
             Log(INFO, "%s loadIndex: %d Karten geladen, aktiv=%s", _LOG_, _index.maps.size(), _index.activeId.c_str());
             return true;
+        }
+
+        // Änderungsdatum einer Karte als Unix-Zeit. Früher millis(): die
+        // Laufzeit seit dem Start, nach einem Neustart bedeutungslos. Ohne
+        // gültige Uhrzeit (kein NTP) 0 = unbekannt.
+        static uint32_t metaTimestampNow() {
+            const time_t now = time(nullptr);
+            return now > 1600000000 ? (uint32_t)now : 0;
         }
 
         bool MapManager::saveIndex() {
@@ -198,6 +207,11 @@ namespace ArduMower {
                                 const std::function<void(int percent)> &progress) {
             if (!_initialized && !begin()) return "";
             auto report = [&](int percent) { if (progress) progress(percent); };
+            // Alle Änderungen am Index erst nach erfolgreichem Schreiben gelten
+            // lassen: Früher blieben bei vollem Speicher oder Schreibfehler
+            // Geister-Karten bzw. falsche Prüfsummen im Index zurück.
+            const auto indexBackup = _index;
+            auto rollback = [&]() { _index = indexBackup; return String(""); };
             report(0);
 
             if (!isMapValid(map)) {
@@ -228,7 +242,7 @@ namespace ArduMower {
                     meta->crc = crc;
                     meta->area = area;
                     meta->rotation = rotation;
-                    meta->timestamp = millis();
+                    meta->timestamp = metaTimestampNow();
                     if (name.length() > 0) meta->name = displayName;
                     Log(INFO, "%s save: Karte '%s' (%s) aktualisiert", _LOG_, meta->name.c_str(), meta->id.c_str());
                 } else {
@@ -257,7 +271,7 @@ namespace ArduMower {
                     newMeta.hash = hash;
                     newMeta.crc = crc;
                     newMeta.rotation = rotation;
-                    newMeta.timestamp = millis();
+                    newMeta.timestamp = metaTimestampNow();
                     newMeta.file = fileName;
                     _index.maps.push_back(newMeta);
                     meta = &_index.maps.back();
@@ -287,7 +301,7 @@ namespace ArduMower {
             if (required > freeBytes) {
                 Log(ERR, "%s save: Nicht genug SPIFFS-Speicher (benötigt ~%u, frei %u)",
                     _LOG_, (unsigned)required, (unsigned)freeBytes);
-                return "";
+                return rollback();
             }
 
             // Map-Datei schreiben (10..90 %, nach geschriebenen Bytes)
@@ -297,7 +311,7 @@ namespace ArduMower {
             };
             if (!ArduMower::Util::writeJsonAtomic(SPIFFS, fileName, mapDoc, writeProgress)) {
                 Log(ERR, "%s save: Datei %s konnte nicht geschrieben werden", _LOG_, fileName.c_str());
-                return "";
+                return rollback();
             }
 
             // Aktiv setzen und Index speichern
@@ -312,7 +326,17 @@ namespace ArduMower {
               }
             }
             report(92);
-            saveIndex();
+            if (!saveIndex()) {
+                // Neue Karte: Datei wieder entfernen, sonst bleibt sie verwaist.
+                // Aktualisierte Karte: Datei und Index im RAM passen zusammen;
+                // der Index auf SPIFFS holt das beim nächsten Schreiben nach.
+                const bool isNew = indexBackup.maps.size() != _index.maps.size();
+                if (isNew) {
+                    SPIFFS.remove(fileName);
+                    return rollback();
+                }
+                return "";
+            }
             report(100);
 
             return meta ? meta->id : "";
@@ -355,32 +379,19 @@ namespace ArduMower {
             if (!meta) return false;
             String newName = name;
             if (newName.length() == 0) newName = generateDefaultName();
+            const String oldName = meta->name;
+            const uint32_t oldTimestamp = meta->timestamp;
             meta->name = newName;
-            meta->timestamp = millis();
-
-            // Meta-Bereich in der Map-Datei ebenfalls aktualisieren
-            ArduMower::Util::recoverAtomicFile(SPIFFS, meta->file);
-            File file = SPIFFS.open(meta->file);
-            if (!file || file.isDirectory()) {
-                saveIndex();
-                return true;
+            meta->timestamp = metaTimestampNow();
+            // Nur der Index: Laden und Start lesen den Namen ausschließlich von
+            // dort. Früher wurde die ganze Kartendatei (tausende Wegpunkte)
+            // eingelesen und neu geschrieben, nur für den doppelten meta-Block;
+            // bei großen Karten scheiterte das am Heap.
+            if (!saveIndex()) {
+                meta->name = oldName;
+                meta->timestamp = oldTimestamp;
+                return false;
             }
-            JsonDocument doc;
-            auto err = deserializeJson(doc, file);
-            file.close();
-            // An unreadable file must stay as it is: writing the document back
-            // would replace the whole map with nothing but its meta block.
-            if (!err) {
-                JsonObject root = doc.as<JsonObject>();
-                JsonObject metaObj = root["meta"].to<JsonObject>();
-                meta->marshal(metaObj);
-                if (!ArduMower::Util::writeJsonAtomic(SPIFFS, meta->file, doc)) {
-                    Log(ERR, "%s rename: Datei %s konnte nicht geschrieben werden", _LOG_, meta->file.c_str());
-                }
-            } else {
-                Log(ERR, "%s rename: Datei %s nicht lesbar (%s), nur Index aktualisiert", _LOG_, meta->file.c_str(), err.c_str());
-            }
-            saveIndex();
             return true;
         }
 
@@ -388,9 +399,10 @@ namespace ArduMower {
             if (!_initialized && !begin()) return false;
             for (auto it = _index.maps.begin(); it != _index.maps.end(); ++it) {
                 if (it->id == id) {
-                    if (SPIFFS.exists(it->file)) SPIFFS.remove(it->file);
-                    const String tmp = ArduMower::Util::atomicTmpPath(it->file);
-                    if (SPIFFS.exists(tmp)) SPIFFS.remove(tmp);
+                    // Erst den Index schreiben, dann die Dateien löschen: Schlägt
+                    // der Index fehl, bleibt die Karte vollständig erhalten.
+                    const auto indexBackup = _index;
+                    const String file = it->file;
                     const bool wasActive = (_index.activeId == id);
                     _index.maps.erase(it);
                     // Beim Löschen der Default-Karte sofort auf die erste
@@ -400,7 +412,13 @@ namespace ArduMower {
                     if (wasActive) {
                         _index.activeId = _index.maps.empty() ? "" : _index.maps.front().id;
                     }
-                    saveIndex();
+                    if (!saveIndex()) {
+                        _index = indexBackup;
+                        return false;
+                    }
+                    if (SPIFFS.exists(file)) SPIFFS.remove(file);
+                    const String tmp = ArduMower::Util::atomicTmpPath(file);
+                    if (SPIFFS.exists(tmp)) SPIFFS.remove(tmp);
                     return true;
                 }
             }

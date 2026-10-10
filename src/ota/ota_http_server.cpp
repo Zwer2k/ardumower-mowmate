@@ -44,7 +44,7 @@ static const uint32_t GITHUB_CHECK_READY_DELAY_MS = 60 * 1000UL;
 static const time_t GITHUB_MIN_VALID_EPOCH = 1609459200;
 
 HttpServer::HttpServer(Settings::Settings &settings, AsyncWebServer &server, MowerUpdater &mowerUpdater)
-    : ArduMower::Modem::Http::Common(settings), _server(server), _mowerUpdater(mowerUpdater),
+    : ArduMower::Modem::Http::Common(settings), _server(server), _appSettings(settings), _mowerUpdater(mowerUpdater),
   _active(false), _failed(false), _restart(false), _restartTime(0), _flashSession(NULL),
   _githubUpdateActive(false), _githubUpdateSucceeded(false), _githubUpdateErrorLogged(false),
   _githubUpdateBuffered(false), _githubDownloadProgress(0), _githubDownloadTotal(0),
@@ -859,6 +859,7 @@ void HttpServer::runGithubUpdate(const String &version)
 void HttpServer::loop()
 {
   loopFlash();
+  loopMowerFirmware();
   loopGithubCheck();
   loopRestart();
 }
@@ -866,6 +867,39 @@ void HttpServer::loop()
 void HttpServer::queueFlash(Http::ModemUploadSession *session)
 {
   _flashSession = session;
+}
+
+void HttpServer::queueMowerFirmware(uint8_t *buffer, size_t length, const String &filename)
+{
+  if (_mowerFirmware) free(_mowerFirmware); // ein älterer, noch nicht geschriebener Upload
+  _mowerFirmware = buffer;
+  _mowerFirmwareLength = length;
+  _mowerFirmwareFile = filename;
+}
+
+// Übergibt die gepufferte Mäher-Firmware in loop() (Kern 1) an den Updater,
+// der direkt aus dem PSRAM flasht. Früher landete jedes Stück sofort im
+// async_tcp-Task auf Kern 0 im SPIFFS. Muss SPIFFS beim Löschen der alten
+// Datei oder beim Schreiben aufräumen, dauert ein Aufruf Sekunden; IDLE0 kam
+// nicht dran, der Task-Watchdog startete das Modem mitten im Upload neu.
+void HttpServer::loopMowerFirmware()
+{
+  if (!_mowerFirmware) return;
+  uint8_t *buffer = _mowerFirmware;
+  const size_t length = _mowerFirmwareLength;
+  _mowerFirmware = nullptr;
+  _mowerFirmwareLength = 0;
+
+  Log(INFO, "Ota::HttpServer::mower-firmware::flash(%s, %u bytes from memory)",
+      _mowerFirmwareFile.c_str(), (unsigned)length);
+  // Der Updater übernimmt den Puffer und gibt ihn nach dem Flashen frei
+  _mowerUpdater.startUpdate(buffer, length, [](String updateResult) {
+    if (updateResult == "") {
+      Log(INFO, "Ota::HttpServer::mower-firmware::flash success");
+    } else {
+      Log(ERR, "Ota::HttpServer::mower-firmware::flash failed with error %s", updateResult.c_str());
+    }
+  });
 }
 
 void HttpServer::loopFlash()
@@ -997,6 +1031,12 @@ void HttpServer::beginMowerUpdate(AsyncWebServerRequest *request, String filenam
 {
   if (!auth(request))
     return;
+  if (!_appSettings.mower.supportFirmwareUpload)
+  {
+    Log(WARN, "Ota::Http::beginMowerUpdate::disabled in mower capabilities");
+    reject(request, 403, "upload", "mower-firmware-upload-disabled");
+    return;
+  }
 
   auto session = new Http::MowerUploadSession(this, filename, _mowerUpdater);
   request->_tempObject = session;
@@ -1337,6 +1377,12 @@ Http::MowerUploadSession::MowerUploadSession(HttpServer *server, String filename
   if (!_filename.startsWith("/")) _filename = "/" + _filename;
 }
 
+Http::MowerUploadSession::~MowerUploadSession()
+{
+  if (_buffer) free(_buffer);
+  if (fsUploadFile) fsUploadFile.close();
+}
+
 void Http::MowerUploadSession::respond(AsyncWebServerRequest *request)
 {
   auto res = new AsyncJsonResponse();
@@ -1369,23 +1415,42 @@ void Http::MowerUploadSession::handle(size_t index, uint8_t *data, size_t len, b
 
   if (index == 0)
   {
-    handleListFiles();
-
-    if (SPIFFS.exists(_filename)) {
-      Log(DBG, "Ota::Http::MowerUploadSession::handle remove file");
-      SPIFFS.remove(_filename);
-    }
-
-    fsUploadFile = SPIFFS.open(_filename, "w");
-    
     if (!verifyHeader(data, len))
     {
       result = Result::VERIFY_HEADER_FAILED;
       return;
     }
 
-    Log(DBG, "Ota::Http::MowerUploadSession::handle::upload-begin %s", _filename.c_str());
+    // Wie die Modem-Firmware: während des Uploads nur ins PSRAM kopieren.
+    _buffer = (uint8_t*)ps_malloc(MAX_MOWER_FIRMWARE);
+    if (_buffer) {
+      Log(INFO, "Ota::Http::MowerUploadSession::handle::buffered-begin %s", _filename.c_str());
+    } else {
+      // Ohne PSRAM wie bisher direkt in den SPIFFS schreiben.
+      Log(WARN, "Ota::Http::MowerUploadSession::handle::no-psram, writing directly");
+      handleListFiles();
+      if (SPIFFS.exists(_filename)) SPIFFS.remove(_filename);
+      fsUploadFile = SPIFFS.open(_filename, "w");
+    }
     result = Result::STARTED;
+  }
+
+  if (_buffer)
+  {
+    if (_index + len > MAX_MOWER_FIRMWARE)
+    {
+      Log(ERR, "Ota::Http::MowerUploadSession::handle::too-large(%u+%u > %u)", (unsigned)_index, (unsigned)len, (unsigned)MAX_MOWER_FIRMWARE);
+      result = Result::ERROR;
+      return;
+    }
+    memcpy(_buffer + _index, data, len);
+    _index += len;
+    if (!final) return;
+    Log(INFO, "Ota::Http::MowerUploadSession::handle::buffered-end(size=%u)", (unsigned)_index);
+    _server->queueMowerFirmware(_buffer, _index, _filename);
+    _buffer = nullptr; // gehört jetzt dem HttpServer
+    result = Result::FLASH_FILE;
+    return;
   }
 
   if (!fsUploadFile) 
@@ -1404,22 +1469,37 @@ void Http::MowerUploadSession::handle(size_t index, uint8_t *data, size_t len, b
     return;
   }
   _index += len;
+  // Läuft im async_tcp-Task auf Kern 0. SPIFFS räumt beim Schreiben gelöschte
+  // Seiten auf (GC); bei vielen Schreibvorgängen zuvor (Karten) dauerte der
+  // Upload Sekunden ohne Pause, IDLE0 kam nicht dran und der Task-Watchdog
+  // startete das Modem mitten im Upload neu ("Upload request failed").
+  vTaskDelay(1);
 
   if (!final)
     return;
 
   fsUploadFile.close();
+  // startUpdate() meldet einen fehlenden Dateinamen oder eine fehlende Datei
+  // sofort über den Callback; der setzt result nicht mehr (siehe unten).
+  if (_filename.isEmpty() || !SPIFFS.exists(_filename))
+  {
+    Log(ERR, "Ota::Http::MowerUploadSession::handle::file-missing(%s)", _filename.c_str());
+    result = Result::UPDATE_END_FAILED;
+    return;
+  }
   result = Result::FLASH_FILE;
   
   Log(DBG, "Ota::Http::MowerUploadSession::handle written %u", _index);
   
-  _mowerUpdater.startUpdate(_filename, [this](String updateResult) {
+  // Der Callback kommt erst nach dem Flashen, lange nachdem respond() die
+  // Sitzung gelöscht hat: Er darf sie nicht anfassen (kein this). Den
+  // Fortschritt und das Ergebnis meldet der MowerUpdater selbst an den Browser.
+  _mowerUpdater.startUpdate(_filename, [](String updateResult) {
     if (updateResult == "") {
       Log(INFO, "Ota::Http::MowerUploadSession::handle success");
     } else {
       Log(ERR, "Ota::Http::MowerUploadSession::handle faild with error %s", updateResult.c_str());
     }
-    result = updateResult == "" ? Result::SUCCESS : Result::UPDATE_END_FAILED;
   });
 }
 

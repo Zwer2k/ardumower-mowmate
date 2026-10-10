@@ -128,8 +128,14 @@ let pendingOperationTimer: ReturnType<typeof setTimeout> | null = null;
 function startPendingOperation(op: string, label: string) {
   if (pendingOperationTimer) clearTimeout(pendingOperationTimer);
   pendingOperationStore.set({ op, label });
-  // Sicherheitsnetz, falls das Modem die Anfrage nie beantwortet.
-  pendingOperationTimer = setTimeout(() => clearPendingOperation(), 30000);
+  // Sicherheitsnetz, falls das Modem die Anfrage nie beantwortet (z. B. weil
+  // es sie für eine andere Karte hält): Anzeige beenden und Bescheid geben.
+  pendingOperationTimer = setTimeout(() => {
+    pendingOperationTimer = null;
+    if (get(pendingOperationStore)?.op !== op) return;
+    pendingOperationStore.set(null);
+    toastStore.set({ msg: `The modem did not respond: "${label.replace(/\.+$/, "")}" did not start. Try again.`, type: "error" });
+  }, 30000);
 }
 
 function clearPendingOperation(op?: string) {
@@ -258,11 +264,16 @@ class SocketService {
   private nextMapSyncId = 1;
   private pendingUpload: { mapData: import("../model").MapSetData; syncId: number; mapId: string } | null = null;
   private pendingUploadRetry: ReturnType<typeof setTimeout> | null = null;
+  private pendingUploadAttempts = 0;
+  private pendingUploadDeadline: ReturnType<typeof setTimeout> | null = null;
   // Last plain setMap() (editor sync). The backend rejects setMap while it is
   // streaming the map to clients (mapAck.accepted=false); without a retry the
   // edit was silently lost, because the editor only resends when the map
   // changed again.
-  private lastSetMap: { mapData: import("../model").MapSetData; syncId: number; mapId: string; attempts: number } | null = null;
+  private lastSetMap: { mapData: import("../model").MapSetData; syncId: number; mapId: string; attempts: number; waypointsJson?: string } | null = null;
+  // Wegpunkte, die das Modem zuletzt bestätigt hat. Sind sie unverändert,
+  // schickt der Editor sie nicht erneut mit (keepWaypoints).
+  private ackedWaypoints: { mapId: string; json: string } | null = null;
   private setMapRetry: ReturnType<typeof setTimeout> | null = null;
   // The modem rejects setMap while it streams the map to a browser, which after
   // a reconnect can take well over the old 6 s. Give it a minute.
@@ -364,6 +375,8 @@ class SocketService {
           // zurückgesetzten Transfer-IDs.
           resetMapTransferTracking();
           this.firstMapListAfterConnect = true;
+          // Nach einem Neustart des Modems sind dessen Wegpunkte ungewiss.
+          this.ackedWaypoints = null;
           // A restore interrupted by this reconnect starts over with the next map list.
           this.editRecoveryId = null;
 
@@ -443,6 +456,11 @@ class SocketService {
               typeof jsonData.status.progress === "number"
             ) {
               setFlashProgress(jsonData.status.progress, "modem");
+              return;
+            }
+
+            if (msgType === ResponseDataType.mapOpResult) {
+              this.handleMapOpResult(jsonData.data as { op: string; ok: boolean; error?: string; mapId?: string });
               return;
             }
 
@@ -617,6 +635,8 @@ class SocketService {
                         this.pendingUpload = null;
                       }
                     } else if (this.lastSetMap?.syncId === data.syncId) {
+                      // Abgelehnt: beim nächsten Versuch die Wegpunkte wieder mitschicken.
+                      this.ackedWaypoints = null;
                       if (this.lastSetMap.mapId === data.mapId && data.mapId === newState.currentMapId) {
                         this.scheduleSetMapRetry();
                       } else {
@@ -628,6 +648,9 @@ class SocketService {
                     break;
                   }
                   if (this.lastSetMap?.syncId === data.syncId) {
+                    if (this.lastSetMap.waypointsJson !== undefined) {
+                      this.ackedWaypoints = { mapId: this.lastSetMap.mapId, json: this.lastSetMap.waypointsJson };
+                    }
                     this.lastSetMap = null;
                   }
                   if (!this.lastSetMap && (!this.pendingUpload || this.pendingUpload.syncId === data.syncId)) {
@@ -1085,10 +1108,14 @@ class SocketService {
   private sendLastSetMap() {
     const last = this.lastSetMap;
     if (!last) return;
-    const req: RequestSocketMessage = {
-      type: RequestDataType.setMap,
-      data: { ...last.mapData, syncId: last.syncId, mapId: last.mapId },
-    };
+    last.waypointsJson ??= JSON.stringify(last.mapData.waypoints);
+    const data: import("../model").MapSetData = { ...last.mapData, syncId: last.syncId, mapId: last.mapId };
+    if (this.ackedWaypoints?.mapId === last.mapId && this.ackedWaypoints.json === last.waypointsJson) {
+      data.waypoints = [];
+      data.keepWaypoints = true;
+      data.waypointCount = last.mapData.waypoints.length;
+    }
+    const req: RequestSocketMessage = { type: RequestDataType.setMap, data };
     this.sendMessage(req);
   }
 
@@ -1116,13 +1143,38 @@ class SocketService {
     }
   }
 
+  /** Editor-Änderungen, die das Modem noch nicht bestätigt hat. */
+  hasUnsyncedEdits(): boolean {
+    return this.lastSetMap !== null || this.unsyncedMapId !== null;
+  }
+
   sendMapAndUpload(mapData: import("../model").MapSetData) {
     if (this.editRecoveryId) return;
     const syncId = this.nextMapSyncId++;
     const mapId = this.mapWriteTargetId();
     this.unsyncedMapId = mapId;
     this.pendingUpload = { mapData, syncId, mapId };
+    this.pendingUploadAttempts = 0;
+    startPendingOperation("upload", "Uploading map...");
+    // Ohne Bestätigung des Modems startet der Upload nie; statt still zu
+    // hängen, gibt es nach 15 s eine Meldung.
+    if (this.pendingUploadDeadline) clearTimeout(this.pendingUploadDeadline);
+    this.pendingUploadDeadline = setTimeout(() => {
+      this.pendingUploadDeadline = null;
+      if (this.pendingUpload?.syncId !== syncId) return;
+      this.abandonPendingUpload("The modem did not accept the map, so the upload did not start. Try again.");
+    }, 15000);
     this.sendPendingUploadMap();
+  }
+
+  private abandonPendingUpload(message: string) {
+    this.pendingUpload = null;
+    if (this.pendingUploadRetry) {
+      clearTimeout(this.pendingUploadRetry);
+      this.pendingUploadRetry = null;
+    }
+    clearPendingOperation("upload");
+    toastStore.set({ msg: message, type: "error" });
   }
 
   private sendPendingUploadMap() {
@@ -1140,6 +1192,11 @@ class SocketService {
   }
 
   private schedulePendingUploadRetry() {
+    // Lehnt das Modem dauerhaft ab, nicht endlos alle 150 ms neu senden.
+    if (++this.pendingUploadAttempts > 20) {
+      this.abandonPendingUpload("The modem kept rejecting the map, so the upload did not start. Try again.");
+      return;
+    }
     if (this.pendingUploadRetry) clearTimeout(this.pendingUploadRetry);
     this.pendingUploadRetry = setTimeout(() => {
       this.pendingUploadRetry = null;
@@ -1148,6 +1205,11 @@ class SocketService {
   }
 
   sendUploadMap(mapId = get(socketStore).currentMapId) {
+    if (this.pendingUploadDeadline) {
+      clearTimeout(this.pendingUploadDeadline);
+      this.pendingUploadDeadline = null;
+    }
+    startPendingOperation("upload", "Uploading map...");
     const req: RequestSocketMessage = {
       type: RequestDataType.uploadMap,
       data: { mapId },
@@ -1217,6 +1279,7 @@ class SocketService {
   }
 
   sendLoadMap(id: string, discardCurrent = false) {
+    this.ackedWaypoints = null;
     this.pendingUpload = null;
     if (this.pendingUploadRetry) {
       clearTimeout(this.pendingUploadRetry);
@@ -1292,7 +1355,34 @@ class SocketService {
     this.sendMessage(req);
   }
 
-  sendImportMap(json: string, name: string, rotation: number = 0) {
+  // Mäh-Einstellungen eines Imports: erst nach erfolgreichem Import für die
+  // neue Karte senden, nicht vorher an die gerade aktuelle.
+  private pendingImportSettings: Partial<import("../model").MowSettingsData> | null = null;
+
+  /** Ergebnis einer Kartenoperation vom Modem (create, copy, load, save, rename, delete, discard, setActive, import). */
+  private handleMapOpResult(result: { op: string; ok: boolean; error?: string; mapId?: string }) {
+    if (result.op === "import") {
+      const settings = this.pendingImportSettings;
+      this.pendingImportSettings = null;
+      if (result.ok && settings) this.sendMowSettings(settings as import("../model").MowSettingsData);
+    }
+    if (result.ok) {
+      if (result.op === "import") toastStore.set({ msg: "Map imported", type: "success" });
+      return;
+    }
+    if (result.op === "save") {
+      this.pendingSaveMapId = null;
+      clearPendingOperation("save");
+    }
+    const message = result.error || `The map operation "${result.op}" failed.`;
+    // Workflow beenden, sonst wertet die nächste Kartenliste den Vorgang als erfolgreich.
+    mapWorkflowStore.setError(message);
+    toastStore.set({ msg: message, type: "error" });
+  }
+
+  sendImportMap(json: string, name: string, rotation: number = 0,
+                settings?: Partial<import("../model").MowSettingsData>) {
+    this.pendingImportSettings = settings ?? null;
     const req: RequestSocketMessage = {
       type: RequestDataType.importMap,
       data: { json, name, rotation },

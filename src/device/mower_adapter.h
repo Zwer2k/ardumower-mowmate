@@ -5,6 +5,7 @@
 #include "mower_map.h"
 #include "map_manager.h"
 #include "router.h"
+#include <deque>
 #include "encrypt.h"
 #include "settings.h"
 
@@ -82,6 +83,11 @@ namespace ArduMower
       PendingCommand _pendingCommand;
       MapUploadState _mapUploadState;
       volatile bool _mapUploadPending = false;
+      // Eigener Upload zum Mäher läuft: dessen AT+W/N/X-Befehle laufen über
+      // drainTx durch parseArduMowerCommand und dürfen nicht als von einem
+      // anderen Client hochgeladene Karte abgefangen werden.
+      void loadReplacementMap();
+      bool ownMapUploadRunning() const { return _mapUploadState.active || _mapUploadPending; }
       // Track last applied position settings to avoid redundant AT+P commands
       bool _lastPosApplied = false;
       bool _lastMowerSettingsApplied = false;
@@ -173,6 +179,9 @@ namespace ArduMower
       void parseATXCommand(const char* line);
 
       bool sendCommand(const String& command, bool encrypt = true);
+      // Fertig verschlüsselte Befehle, die warten, bis der Router frei ist.
+      std::deque<String> _commandQueue;
+      void flushCommandQueue();
       bool sendCommandWithResponse(const String& command, char* response, size_t responseLen, bool encrypt = true, int timeoutMs = 3000);
       bool sendCommandWithResponseAsync(const String& command, std::function<void(const char*, bool)> callback, bool encrypt = true, int timeoutMs = 3000);
       void processPendingCommand();
@@ -203,6 +212,7 @@ namespace ArduMower
       virtual ArduMower::Domain::Robot::Obstacles *obstaclesP() { return &_obstacles; }
       virtual ArduMower::Domain::Robot::MowerMap mowerMap() { return _map; }
       virtual std::vector<ArduMower::Domain::Robot::MapPoint> dockpoints() override { return _map.dockpoints; }
+      virtual uint32_t mowerMapTimestamp() override { return _map.timestamp; }
       virtual void beginMowerMapRead() override { _map.beginRead(); }
       virtual void endMowerMapRead() override { _map.endRead(); }
       virtual bool isMowerMapReading() override { return _map.isReading(); }
@@ -282,6 +292,8 @@ namespace ArduMower
       virtual bool uploadSavedMapToMower(const String &id) override;
       virtual bool uploadMapToMowerActive() override { return _mapUploadState.active; }
       virtual bool uploadMapToMowerSuccess() override { return _mapUploadState.phase == MapUploadState::done; }
+      virtual String uploadMapToMowerError() override { return _mapUploadError; }
+      String _mapUploadError;
       virtual ArduMower::Domain::Robot::UploadProgress uploadProgress() override;
       virtual bool customCmd(String cmd);
       virtual void drainRx(const char* line, bool &stop) override;

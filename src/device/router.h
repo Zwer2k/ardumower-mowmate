@@ -68,6 +68,11 @@ namespace ArduMower
       void loop();
       bool send(const String& _command, responseCb _cb);
       bool sendWithoutResponse(const String& line);
+      // Wie sendWithoutResponse, aber der Router bleibt belegt, bis die
+      // Antwortzeile eingetroffen ist (oder der Timeout greift). Für Befehle,
+      // die die Gegenseite immer beantwortet (Sunray-AT-Befehle): Sonst landet
+      // ihre Antwort beim nächsten send() eines anderen Aufrufers.
+      bool sendAwaitingAnswer(const String& line);
       bool inAction();
     };
 

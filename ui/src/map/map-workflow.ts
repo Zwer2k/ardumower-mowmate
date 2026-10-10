@@ -25,10 +25,13 @@ function isNameUsed(name: string, excludeId?: string): boolean {
   const socketState = getSocketState ? getSocketState() : null;
   if (!socketState) return false;
   const maps = socketState.maps || [];
-  return maps.some((m) => m.name === name && (!excludeId || m.id !== excludeId));
+  // Wie im Modem ohne Unterscheidung von Groß-/Kleinschreibung: sonst schlug
+  // "map 1" neben "Map 1" im Modem fehl, obwohl die Oberfläche es erlaubte.
+  const wanted = name.trim().toLowerCase();
+  return maps.some((m) => m.name.trim().toLowerCase() === wanted && (!excludeId || m.id !== excludeId));
 }
 
-function generateUniqueName(baseName: string, excludeId?: string): string {
+export function generateUniqueName(baseName: string, excludeId?: string): string {
   if (!isNameUsed(baseName, excludeId)) return baseName;
   // Versuche "Karte X" aus dem Basisnamen zu extrahieren, um den Zähler
   // hochzusetzen, anstatt jedes Mal ein Suffix anzuhängen.

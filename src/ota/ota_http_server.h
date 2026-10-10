@@ -93,13 +93,18 @@ namespace ArduMower
           File fsUploadFile;
           Result result;
           size_t _index;
-          
+          // Upload zuerst ins PSRAM puffern (wie die Modem-Firmware); geschrieben
+          // wird erst in loop() (siehe HttpServer::queueMowerFirmware).
+          static const size_t MAX_MOWER_FIRMWARE = 0x200000; // 2 MB
+          uint8_t *_buffer = nullptr;
+
           bool verifyHeader(uint8_t *data, size_t len);
           String handleFlash();
           void handleListFiles();
 
         public:
           MowerUploadSession(HttpServer *_s, String filename, MowerUpdater &mowerUpdater);
+          ~MowerUploadSession();
 
           void handle(size_t index, uint8_t *data, size_t len, bool final);
           void respond(AsyncWebServerRequest *request);
@@ -110,6 +115,11 @@ namespace ArduMower
       {
       private:
         AsyncWebServer &_server;
+        Settings::Settings &_appSettings;
+        uint8_t *_mowerFirmware = nullptr;
+        size_t _mowerFirmwareLength = 0;
+        String _mowerFirmwareFile;
+        void loopMowerFirmware();
         MowerUpdater &_mowerUpdater;
         bool _active;
         bool _failed;
@@ -172,6 +182,9 @@ namespace ArduMower
 
         void requestRestart(uint32_t delayMs = 100);
         void queueFlash(Http::ModemUploadSession *session);
+        // Übernimmt den PSRAM-Puffer einer hochgeladenen Mäher-Firmware: loop()
+        // schreibt ihn in den SPIFFS und startet das Flashen.
+        void queueMowerFirmware(uint8_t *buffer, size_t length, const String &filename);
         std::function<void(size_t, size_t)> onFlashProgress;
 
         // Fragt den zuletzt im Hintergrund ermittelten Firmware-Stand ab. Mit

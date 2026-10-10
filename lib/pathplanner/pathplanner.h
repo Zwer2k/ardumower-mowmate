@@ -122,8 +122,14 @@ public:
 
 private:
     struct Box { double minX, minY, maxX, maxY; };
+    // Umgebendes Rechteck einer Polygonkante in float: Der ESP32-S3 rechnet
+    // float in Hardware, double nur in Software. Die Vorprüfung verwirft damit
+    // billig die meisten Kanten, bevor die genaue Prüfung in double läuft.
+    struct EdgeBox { float minX, minY, maxX, maxY; };
     std::vector<Point> container_;
     std::vector<std::vector<Point>> obstacles_;
+    std::vector<EdgeBox> containerEdges_;
+    std::vector<std::vector<EdgeBox>> obstacleEdges_;
     Box containerBox_;
     std::vector<Box> obstacleBoxes_;
     std::vector<Point> nodes_;
@@ -138,13 +144,25 @@ private:
     size_t primaryCount_ = 0;
     std::vector<std::vector<size_t>> preferred_;   // bevorzugte Kanten (Suchdraht)
     mutable std::vector<signed char> visibility_;  // -1 unbekannt, 0/1
+    // Arbeitsspeicher für segmentFree(): wird bei jedem Aufruf wiederverwendet,
+    // statt zehntausende Male neu angelegt zu werden.
+    mutable std::vector<size_t> nearScratch_;
+    mutable std::vector<double> touchScratch_;
 
     bool nodeVisible(size_t a, size_t b) const;
     bool tangentAt(size_t node, const Point &other) const;
     void addNode(const Point &p, const Point *prev, const Point *next);
     bool search(const Point &from, const Point &to, size_t nodeCount, bool tangentOnly,
         std::vector<Point> &path) const;
-    bool crossesProperly(const Point &a, const Point &b, const std::vector<Point> &poly) const;
+    bool crossesProperly(const Point &a, const Point &b, const std::vector<Point> &poly,
+        const std::vector<EdgeBox> &edges, const EdgeBox &box) const;
+    static std::vector<EdgeBox> edgeBoxes(const std::vector<Point> &poly);
+    static EdgeBox segmentBox(const Point &a, const Point &b);
+    static bool boxesApart(const EdgeBox &e, const EdgeBox &s) {
+        return e.maxX < s.minX || e.minX > s.maxX || e.maxY < s.minY || e.minY > s.maxY;
+    }
+    static void collectTouchParams(const Point &a, const Point &b, const std::vector<Point> &poly,
+        const std::vector<EdgeBox> &edges, const EdgeBox &box, std::vector<double> &ts);
 };
 
 // Verbindungen innerhalb eines Mähmusters: zuerst innerhalb der Mähfläche
