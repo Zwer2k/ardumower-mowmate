@@ -39,6 +39,14 @@ const texts: { language: { [language: string]: any } } = {
           success: "Settings saved",
           error: "Failed to save settings"
         },
+        "save-mower-defaults": {
+          success: "Current values saved as defaults",
+          error: "Failed to save the defaults"
+        },
+        "reset-mower-defaults": {
+          success: "Saved defaults restored",
+          error: "Failed to restore the defaults"
+        },
         "clear-pairings": {
           success: "Bluetooth Pairings cleared",
           error: "Failed clear Bluetooth Pairings"

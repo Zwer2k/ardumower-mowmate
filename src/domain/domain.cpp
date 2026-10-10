@@ -358,6 +358,7 @@ void GpsSatellite::marshal(JsonObject o) const
 
 void GpsDetails::marshal(JsonObject o) const
 {
+  o["timestamp"] = timestamp;
   o["numSV"] = numSV;
   o["numSVdgps"] = numSVdgps;
   o["solution"] = solution;

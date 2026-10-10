@@ -8,6 +8,8 @@
         hexDump,
         getParserForFrame,
         gnssName,
+        cfgValgetKeys,
+        parseCfgValgetEntries,
         type UbxFrameResult,
     } from './ubxCommands';
     import type { GpsDetails, GpsSatellite } from '../../../model';
@@ -107,7 +109,24 @@
         for (const frame of frames) {
             if (!frame.valid) continue;
 
+            // Parse only this frame's bytes (a response may contain several frames).
+            const frameHex = cleanHex.substring(
+                (frame.payloadStart - 6) * 2,
+                (frame.payloadEnd + 2) * 2,
+            );
+
+            // CFG-VALGET: all cfg-valget-* cards share one parser, so route by
+            // the key IDs echoed in the response instead of by message type.
+            const isValget = frame.classId === 0x06 && frame.msgId === 0x8b;
+            const valgetKeys = isValget
+                ? new Set((parseCfgValgetEntries(frameHex)?.entries ?? []).map(e => e.key))
+                : null;
+
             for (const card of cards) {
+                if (valgetKeys) {
+                    const wanted = cfgValgetKeys[card.commandId];
+                    if (!wanted || !wanted.some(k => valgetKeys.has(k))) continue;
+                }
                 // Process data for ALL cards, not just visible ones.
                 // The backend sends each UBX response only once; if we
                 // skip it because the card is hidden, the data is lost
@@ -116,7 +135,7 @@
                 const actualParser = getParserForFrame(frame.classId, frame.msgId);
                 if (expectedParser === actualParser && actualParser) {
                     try {
-                        const data = actualParser(cleanHex);
+                        const data = actualParser(frameHex);
                         card.data = data;
                         card.timestamp = Date.now();
                         card.loading = false;
@@ -171,7 +190,17 @@
     // Die S4-Daten enthalten dieselben Satelliten-Infos und sind zuverlässig.
 
     function s4SatToTableRow(sat: GpsSatellite): Record<string, string | number> {
-        const quals = ['searching', 'locked', 'locked+time', 'q3', 'q4', 'q5', 'q6', 'q7'];
+        // u-blox qualityInd
+        const quals = [
+            'no signal',
+            'searching',
+            'acquired',
+            'unusable',
+            'code locked',
+            'code+carrier locked',
+            'code+carrier locked',
+            'code+carrier locked',
+        ];
         return {
             GNSS: gnssName(sat.gnssId),
             SV: sat.svId,
@@ -179,7 +208,8 @@
             Quality: quals[sat.qualityInd] ?? `q${sat.qualityInd}`,
             Used: sat.prUsed ? '✓' : '—',
             DGPS: sat.crCorrUsed ? '✓' : '—',
-            'PR Res': `${(sat.prRes * 0.01).toFixed(2)} m`,
+            // S4 prRes is already in metres (Sunray scales NAV-SIG I2 by 0.1)
+            'PR Res': `${sat.prRes.toFixed(1)} m`,
         };
     }
 
@@ -272,7 +302,7 @@
                 All ({totalCount})
             </button>
             {#each ['receiver', 'navigation', 'satellites', 'ports', 'gnss', 'rate'] as cat}
-                <button class:active={activeCategory === cat} onclick={() => { activeCategory = cat; refreshAll(); }}>
+                <button class:active={activeCategory === cat} onclick={() => { activeCategory = cat as ConfigCategory; refreshAll(); }}>
                     {categoryLabel(cat as ConfigCategory)}
                 </button>
             {/each}

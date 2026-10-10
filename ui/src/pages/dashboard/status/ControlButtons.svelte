@@ -35,8 +35,16 @@
         return now.toLocaleTimeString('de-DE', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
+    // Gesendeten Wert im Protokoll zeigen, sonst sehen "an" und "aus" gleich aus
+    function describe(action: string, payload?: Record<string, any>): string {
+        if (!payload) return action;
+        const values = Object.values(payload).map(v =>
+            typeof v === 'boolean' ? (v ? 'on' : 'off') : String(v));
+        return values.length ? `${action}: ${values.join(', ')}` : action;
+    }
+
     async function send(action: string, payload?: Record<string, any>) {
-        let entry = { time: formatTime(), action, success: false, error: undefined as string | undefined };
+        let entry = { time: formatTime(), action: describe(action, payload), success: false, error: undefined as string | undefined };
         try {
             const res = await RobotCommandService.send(action as any, payload);
             entry.success = res.success;
@@ -58,6 +66,30 @@
     let cutterSpeedVal = $state(100);  // percent; converted to 0..255 PWM on send
     // svelte-ignore state_referenced_locally
     if (desiredState?.mow_pwm != null) cutterSpeedVal = Math.round(desiredState.mow_pwm * 100 / 255);
+
+    // Änderungen von außen übernehmen ("Reset to Defaults", andere Clients).
+    // Nur bei geändertem Wert, damit ein gerade bewegter Regler nicht springt.
+    const seenDesired: { speed?: number; fixTimeout?: number; mowHeight?: number; mowPwm?: number } = {};
+    $effect(() => {
+        const d = desiredState;
+        if (!d) return;
+        if (d.speed != null && d.speed !== seenDesired.speed) {
+            if (seenDesired.speed !== undefined) speedVal = d.speed;
+            seenDesired.speed = d.speed;
+        }
+        if (d.fix_timeout != null && d.fix_timeout !== seenDesired.fixTimeout) {
+            if (seenDesired.fixTimeout !== undefined) fixTimeoutVal = d.fix_timeout;
+            seenDesired.fixTimeout = d.fix_timeout;
+        }
+        if (d.mow_height != null && d.mow_height !== seenDesired.mowHeight) {
+            if (seenDesired.mowHeight !== undefined) mowHeightVal = d.mow_height;
+            seenDesired.mowHeight = d.mow_height;
+        }
+        if (d.mow_pwm != null && d.mow_pwm !== seenDesired.mowPwm) {
+            if (seenDesired.mowPwm !== undefined) cutterSpeedVal = Math.round(d.mow_pwm * 100 / 255);
+            seenDesired.mowPwm = d.mow_pwm;
+        }
+    });
     let wayPercManuallySetAt = $state<number | null>(null);
     let wayEditing = $state(false);   // true while the waypoint field is open
 

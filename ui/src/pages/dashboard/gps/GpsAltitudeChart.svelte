@@ -26,7 +26,6 @@
         if (d.length === 0) return 0;
         let min = Infinity;
         for (const p of d) {
-            if (p.height < min) min = p.height;
             if (p.hMSL < min) min = p.hMSL;
         }
         return min;
@@ -37,7 +36,6 @@
         if (d.length === 0) return 10;
         let max = -Infinity;
         for (const p of d) {
-            if (p.height > max) max = p.height;
             if (p.hMSL > max) max = p.hMSL;
         }
         return max;
@@ -109,25 +107,18 @@
             <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={HEIGHT - PAD_B} stroke="#ccc" stroke-width="0.5" />
             <line x1={PAD_L} y1={HEIGHT - PAD_B} x2={WIDTH - PAD_R} y2={HEIGHT - PAD_B} stroke="#ccc" stroke-width="0.5" />
 
-            <!-- Ellipsoid height line -->
-            {#if pathEllip()}
-                <path d={pathEllip()} fill="none" stroke="#1565c0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-            {/if}
-
+            <!-- Only MSL: the ellipsoid height differs by the geoid separation
+                 (tens of metres) and would flatten both curves on one axis -->
             <!-- MSL height line -->
             {#if pathMSL()}
-                <path d={pathMSL()} fill="none" stroke="#2e7d32" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3,2" />
+                <path d={pathMSL()} fill="none" stroke="#2e7d32" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
             {/if}
         </svg>
 
         <div class="alt-legend">
             <div class="alt-legend-item">
-                <span class="alt-legend-line" style="background: #1565c0"></span>
-                <span>Ellipsoid</span>
-            </div>
-            <div class="alt-legend-item">
-                <span class="alt-legend-line" style="background: #2e7d32; border-style: dashed"></span>
-                <span>MSL</span>
+                <span class="alt-legend-line" style="background: #2e7d32"></span>
+                <span>Height above sea level (MSL)</span>
             </div>
         </div>
     </div>

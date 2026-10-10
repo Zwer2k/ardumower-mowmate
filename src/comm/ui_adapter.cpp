@@ -365,29 +365,21 @@ void UiAdapter::handleApiPostRobotCommand(AsyncWebServerRequest *request, JsonVa
     ok = _settings.save();
   }
   else if (action == "resetMowerDefaults") {
-    // capability flags describe the hardware and must survive a defaults reset
-    const bool keepCutterSpeed = _settings.mower.supportCutterSpeed;
-    const bool keepCutterHeight = _settings.mower.supportCutterHeight;
-    const bool keepSonar = _settings.mower.hasSonar;
-    _settings.mower = ArduMower::Modem::Settings::Mower();
-    _settings.mower.supportCutterSpeed = keepCutterSpeed;
-    _settings.mower.supportCutterHeight = keepCutterHeight;
-    _settings.mower.hasSonar = keepSonar;
-    ok = _settings.save();
-    if (ok) {
-      auto *desired = _source.desiredStateP();
-      desired->speed = _settings.mower.mowSpeed;
-      desired->fixTimeout = _settings.mower.fixTimeout;
-      desired->finishAndRestart = _settings.mower.finishAndRestart;
-      desired->mowPwm = _settings.mower.cutterPwm;
-      desired->mowHeight = _settings.mower.mowHeight;
-      // Apply to mower immediately
-      _cmd.changeSpeed(_settings.mower.mowSpeed);
-      _cmd.setFixTimeout(_settings.mower.fixTimeout);
-      _cmd.finishAndRestartEnabled(_settings.mower.finishAndRestart);
-      _cmd.changeMowPwm(_settings.mower.cutterPwm);
-      _cmd.changeMowHeight(_settings.mower.mowHeight);
-    }
+    // Zurück auf die mit "Set as Default" gespeicherten Werte. Die Einstellungen
+    // bleiben unverändert; früher wurden sie auf Werkswerte gesetzt und
+    // gespeichert, das überschrieb die eigenen Vorgaben (Cutter speed 100 %).
+    auto *desired = _source.desiredStateP();
+    desired->speed = _settings.mower.mowSpeed;
+    desired->fixTimeout = _settings.mower.fixTimeout;
+    desired->finishAndRestart = _settings.mower.finishAndRestart;
+    desired->mowPwm = _settings.mower.cutterPwm;
+    desired->mowHeight = _settings.mower.mowHeight;
+    // Apply to mower immediately
+    ok = _cmd.changeSpeed(_settings.mower.mowSpeed);
+    ok &= _cmd.setFixTimeout(_settings.mower.fixTimeout);
+    ok &= _cmd.finishAndRestartEnabled(_settings.mower.finishAndRestart);
+    ok &= _cmd.changeMowPwm(_settings.mower.cutterPwm);
+    ok &= _cmd.changeMowHeight(_settings.mower.mowHeight);
   }
   else {
     reject(request, 400, "command", "unknown action: " + action);

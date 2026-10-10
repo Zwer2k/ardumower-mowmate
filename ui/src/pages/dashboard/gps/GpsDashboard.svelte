@@ -1,9 +1,9 @@
 <script lang="ts">
     import { page } from '$app/stores';
     import { afterNavigate } from '$app/navigation';
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
     import { browser } from '$app/environment';
-    import { socketStore, socketService } from '../../../stores/socket';
+    import { socketStore } from '../../../stores/socket';
     import { gpsStore } from '../../../stores/gpsStore';
 
     import GpsSkyplot from './GpsSkyplot.svelte';
@@ -11,6 +11,7 @@
     import GpsAltitudeChart from './GpsAltitudeChart.svelte';
     import GpsNavStatus from './GpsNavStatus.svelte';
     import GpsAdvancedConfig from './GpsAdvancedConfig.svelte';
+    import GpsFixTimeline from './GpsFixTimeline.svelte';
 
     function gnssName(gnssId: number): string {
         switch (gnssId) {
@@ -25,15 +26,30 @@
         }
     }
 
+    // u-blox qualityInd (NAV-SIG/NAV-SAT)
     function qualityName(qi: number): string {
         switch (qi) {
             case 0: return "no signal";
             case 1: return "searching";
             case 2: return "acquired";
-            case 3: return "locked";
-            case 4: return "locked+time";
+            case 3: return "unusable";
+            case 4: return "code locked";
+            case 5: case 6: case 7: return "carrier locked";
             default: return `q${qi}`;
         }
+    }
+
+    // u-blox sigId je GNSS (NAV-SIG) als Bandname
+    function signalName(gnssId: number, sigId: number): string {
+        const names: Record<number, Record<number, string>> = {
+            0: { 0: 'L1', 3: 'L2CL', 4: 'L2CM', 6: 'L5I', 7: 'L5Q' },
+            1: { 0: 'L1' },
+            2: { 0: 'E1C', 1: 'E1B', 3: 'E5aI', 4: 'E5aQ', 5: 'E5bI', 6: 'E5bQ' },
+            3: { 0: 'B1I', 1: 'B1I', 2: 'B2I', 3: 'B2I', 5: 'B1C', 7: 'B2a' },
+            5: { 0: 'L1', 1: 'L1S', 4: 'L2CM', 5: 'L2CL', 8: 'L5I', 9: 'L5Q' },
+            6: { 0: 'L1', 2: 'L2' },
+        };
+        return names[gnssId]?.[sigId] ?? `sig ${sigId}`;
     }
 
     function solutionName(sol: number): string {
@@ -46,48 +62,75 @@
     }
 
     // Reagiere auf Sichtbarkeit (Dashboard ist immer im DOM, nur CSS hidden)
-    // afterNavigate funktioniert zuverlässiger als $effect für Query-Param-Änderungen
+    // afterNavigate funktioniert zuverlässiger als $effect für Query-Param-Änderungen.
+    // Das Abo beim Modem (auch nach einem Reconnect) verwaltet gpsStore.
     let lastGpsActive = false;
     function syncGpsPolling() {
         if (!browser) return;
-        const dashboard = $page.url.searchParams.get('dashboard');
-        const isGps = dashboard === 'gps';
+        const isGps = $page.url.searchParams.get('dashboard') === 'gps';
         if (isGps && !lastGpsActive) {
-            console.log('[GpsDashboard] Activating GPS polling');
-            socketService.requestGpsDetails();
             gpsStore.connect();
             lastGpsActive = true;
         } else if (!isGps && lastGpsActive) {
-            console.log('[GpsDashboard] Deactivating GPS polling');
-            socketService.stopGpsDetails();
             gpsStore.disconnect();
             lastGpsActive = false;
         }
     }
     onMount(syncGpsPolling);
     afterNavigate(syncGpsPolling);
-
-    let satellites = $derived($socketStore.gpsDetails?.satellites ?? []);
-    let sortedSats = $derived([...satellites].sort((a, b) => b.cno - a.cno));
-    let usedCount = $derived(satellites.filter(s => s.prUsed).length);
-    let dgpsCount = $derived(satellites.filter(s => s.crCorrUsed).length);
-    let lastUpdate = $derived($socketStore.gpsDetails?.timestamp ?? 0);
-
-    // Skyplot: prefer UBX NAV-SAT data, fall back to S4-derived positions
-    let skyplotSats = $derived.by(() => {
-        const navSat = $gpsStore.navSat;
-        if (navSat.length > 0) return navSat;
-        return $socketStore.gpsDetails?.satellites?.map(s => ({
-            gnssId: s.gnssId,
-            svId: s.svId,
-            elev: s.elevation,
-            azim: s.azimuth,
-            cno: s.cno,
-            used: s.prUsed,
-            health: 0,
-            quality: s.qualityInd,
-        })) ?? [];
+    onDestroy(() => {
+        if (lastGpsActive) {
+            gpsStore.disconnect();
+            lastGpsActive = false;
+        }
     });
+
+    // Alter der Daten, damit veraltete Werte nicht als aktuell erscheinen
+    const STALE_MS = 15000;
+    let now = $state(Date.now());
+    $effect(() => {
+        const t = setInterval(() => (now = Date.now()), 1000);
+        return () => clearInterval(t);
+    });
+    let gps = $derived($gpsStore);
+    let d = $derived($socketStore.gpsDetails);
+    let pvt = $derived(gps.navPvt);
+    let lastDataAt = $derived(Math.max(gps.gpsDetailsReceivedAt ?? 0, pvt?.timestamp ?? 0));
+    let dataAge = $derived(lastDataAt > 0 ? now - lastDataAt : null);
+    let stale = $derived(dataAge !== null && dataAge > STALE_MS);
+
+    function ageText(ms: number | null): string {
+        if (ms === null) return '—';
+        const s = Math.round(ms / 1000);
+        return s < 60 ? `${s} s ago` : `${Math.floor(s / 60)} min ago`;
+    }
+
+    // S4 liefert je Signal einen Eintrag (L1 und L2 eines Satelliten getrennt)
+    let signals = $derived(d?.satellites ?? []);
+    let sortedSignals = $derived([...signals].sort((a, b) => b.cno - a.cno));
+    let usedSignals = $derived(signals.filter(s => s.prUsed).length);
+    let satCount = $derived(new Set(signals.map(s => `${s.gnssId}:${s.svId}`)).size);
+
+    // Tabelle: eine Zeile je Satellit, Signale als Bänder
+    let satelliteRows = $derived.by(() => {
+        const rows = new Map<string, { gnssId: number; svId: number; sigs: typeof signals }>();
+        for (const sig of signals) {
+            const key = `${sig.gnssId}:${sig.svId}`;
+            if (!rows.has(key)) rows.set(key, { gnssId: sig.gnssId, svId: sig.svId, sigs: [] });
+            rows.get(key)!.sigs.push(sig);
+        }
+        return [...rows.values()]
+            .map(r => ({ ...r, sigs: [...r.sigs].sort((a, b) => a.sigId - b.sigId), maxCno: Math.max(...r.sigs.map(x => x.cno)) }))
+            .sort((a, b) => a.gnssId - b.gnssId || b.maxCno - a.maxCno);
+    });
+
+    // Status: S4 wenn vorhanden, sonst NAV-PVT
+    let solution = $derived(d ? d.solution : pvt ? (pvt.fixOk ? pvt.carrSoln : 0) : 0);
+    let hAcc = $derived(d?.hAccuracy ?? pvt?.hAcc ?? null);
+    let vAcc = $derived(d?.vAccuracy ?? pvt?.vAcc ?? null);
+
+    // Skyplot nur aus NAV-SAT: S4 (NAV-SIG) enthält keine Elevation/Azimut
+    let skyplotSats = $derived(gps.navSat);
 
     let mode = $state<'simple' | 'advanced'>('simple');
 </script>
@@ -103,47 +146,63 @@
     {/if}
 
     {#if mode === 'simple'}
-    {#if $socketStore.gpsDetails != null}
-        {@const d = $socketStore.gpsDetails}
-        {@const gps = $gpsStore}
+    {#if !$socketStore.connected}
+        <div class="gps-banner offline">Not connected to the modem — the values below are not updated.</div>
+    {:else if stale}
+        <div class="gps-banner stale">No GPS data for {ageText(dataAge)}. The receiver or the mower may not be responding.</div>
+    {/if}
+    {#if d != null || pvt != null}
         <!-- u-Center-style Status Bar -->
         <div class="uc-status-bar">
-            <div class="uc-status-item solution-{d.solution}">
+            <div class="uc-status-item solution-{solution}">
                 <div class="uc-status-icon">📡</div>
                 <div class="uc-status-label">Fix</div>
-                <div class="uc-status-value">{solutionName(d.solution)}</div>
+                <div class="uc-status-value">{solutionName(solution)}</div>
             </div>
             <div class="uc-status-item">
                 <div class="uc-status-icon">🛰️</div>
                 <div class="uc-status-label">Satellites</div>
-                <div class="uc-status-value">{d.numSV} <span class="uc-status-sub">{usedCount} used</span></div>
+                <div class="uc-status-value">{d ? satCount : (pvt?.numSV ?? 0)}
+                    {#if d}<span class="uc-status-sub" title="Signals used for the solution (L1 and L2 count separately)">{d.numSV} signals used</span>{/if}
+                </div>
             </div>
             <div class="uc-status-item">
                 <div class="uc-status-icon">↔️</div>
                 <div class="uc-status-label">H-Accuracy</div>
-                <div class="uc-status-value">{(d.hAccuracy ?? 0).toFixed(2)} m</div>
+                <div class="uc-status-value">{hAcc === null ? '—' : hAcc.toFixed(2) + ' m'}</div>
             </div>
             <div class="uc-status-item">
                 <div class="uc-status-icon">↕️</div>
                 <div class="uc-status-label">V-Accuracy</div>
-                <div class="uc-status-value">{(d.vAccuracy ?? 0).toFixed(2)} m</div>
+                <div class="uc-status-value">{vAcc === null ? '—' : vAcc.toFixed(2) + ' m'}</div>
             </div>
             <div class="uc-status-item">
                 <div class="uc-status-icon">⏱️</div>
                 <div class="uc-status-label">DGPS Age</div>
-                <div class="uc-status-value">{d.dgpsAge} ms</div>
+                <div class="uc-status-value">{d ? `${d.dgpsAge} ms` : '—'}</div>
             </div>
             <div class="uc-status-item">
                 <div class="uc-status-icon">📶</div>
-                <div class="uc-status-label">DGPS Sats</div>
-                <div class="uc-status-value">{d.numSVdgps}</div>
+                <div class="uc-status-label">DGPS Signals</div>
+                <div class="uc-status-value">{d ? d.numSVdgps : '—'}</div>
+            </div>
+            <div class="uc-status-item" class:stale-item={stale}>
+                <div class="uc-status-icon">🕒</div>
+                <div class="uc-status-label">Updated</div>
+                <div class="uc-status-value">{ageText(dataAge)}</div>
             </div>
         </div>
+
+        <GpsFixTimeline history={gps.fixHistory} />
 
         <!-- New u-Center Style Visualizations -->
         <div class="uc-visual-grid">
             <div class="uc-visual-col">
-                <GpsSkyplot satellites={skyplotSats} />
+                {#if skyplotSats.length > 0}
+                    <GpsSkyplot satellites={skyplotSats} />
+                {:else}
+                    <div class="skyplot-wait">Sky plot: waiting for NAV-SAT from the receiver…</div>
+                {/if}
                 <GpsDeviationMap positionHistory={gps.positionHistory} refLat={gps.refLat} refLon={gps.refLon} />
             </div>
             <div class="uc-visual-col">
@@ -153,22 +212,23 @@
         </div>
 
         <!-- CN0 Chart like u-Center -->
+        {#if d}
         <div class="uc-cn0-panel">
             <div class="uc-panel-header">
                 <span class="uc-panel-title">Signal Strength (C/N₀)</span>
-                <span class="uc-panel-sub">{satellites.length} satellites tracked</span>
+                <span class="uc-panel-sub">{satCount} satellites, {signals.length} signals{signals.length >= 40 ? ' (first 40 reported)' : ''}</span>
             </div>
             <div class="uc-cn0-grid">
                 {#each [0,1,2,3,4,5,6] as gnssId}
-                    {@const gnssSats = sortedSats.filter(s => s.gnssId === gnssId)}
-                    {#if gnssSats.length > 0}
+                    {@const gnssSigs = sortedSignals.filter(s => s.gnssId === gnssId)}
+                    {#if gnssSigs.length > 0}
                         <div class="uc-cn0-group">
                             <div class="uc-cn0-group-label">{gnssName(gnssId)}</div>
-                            {#each gnssSats as sat}
+                            {#each gnssSigs as sat}
                                 {@const pct = Math.min(100, (sat.cno / 55) * 100)}
                                 {@const barColor = sat.cno >= 40 ? '#00c853' : sat.cno >= 30 ? '#ffab00' : '#ff1744'}
                                 <div class="uc-cn0-bar-row">
-                                    <div class="uc-cn0-sv">{sat.svId}</div>
+                                    <div class="uc-cn0-sv">{sat.svId} <span class="uc-cn0-band">{signalName(sat.gnssId, sat.sigId)}</span></div>
                                     <div class="uc-cn0-bar-wrap">
                                         <div class="uc-cn0-bar-bg">
                                             <div class="uc-cn0-bar-fill" style="width: {pct}%; background: {barColor};"></div>
@@ -186,11 +246,14 @@
                 {/each}
             </div>
         </div>
+        {/if}
 
         <!-- Satellite Table -->
+        {#if d}
         <div class="uc-table-panel">
             <div class="uc-panel-header">
                 <span class="uc-panel-title">Satellite Details</span>
+                <span class="uc-panel-sub">one row per satellite</span>
             </div>
             <div class="sat-table-wrapper">
                 <table class="sat-table">
@@ -207,37 +270,37 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {#each sortedSats as sat}
-                            <tr class:used-row={sat.prUsed} class:dgps-row={sat.crCorrUsed}>
-                                <td><span class="gnss-tag gnss-{sat.gnssId}">{gnssName(sat.gnssId)}</span></td>
-                                <td>{sat.svId}</td>
-                                <td>{sat.sigId}</td>
-                                <td class:good={sat.cno >= 40} class:weak={sat.cno < 30}>{sat.cno}</td>
-                                <td>{qualityName(sat.qualityInd)}</td>
-                                <td>{(sat.prRes ?? 0).toFixed(1)} m</td>
-                                <td>{sat.prUsed ? "✓" : "—"}</td>
-                                <td>{sat.crCorrUsed ? "✓" : "—"}</td>
-                            </tr>
+                        {#each satelliteRows as row}
+                            {#each row.sigs as sat, i}
+                                <tr class:used-row={sat.prUsed} class:dgps-row={sat.crCorrUsed} class:sat-first={i === 0}>
+                                    {#if i === 0}
+                                        <td rowspan={row.sigs.length}><span class="gnss-tag gnss-{sat.gnssId}">{gnssName(sat.gnssId)}</span></td>
+                                        <td rowspan={row.sigs.length}>{sat.svId}</td>
+                                    {/if}
+                                    <td>{signalName(sat.gnssId, sat.sigId)}</td>
+                                    <td class:good={sat.cno >= 40} class:weak={sat.cno < 30}>{sat.cno}</td>
+                                    <td>{qualityName(sat.qualityInd)}</td>
+                                    <td>{(sat.prRes ?? 0).toFixed(1)} m</td>
+                                    <td>{sat.prUsed ? "✓" : "—"}</td>
+                                    <td>{sat.crCorrUsed ? "✓" : "—"}</td>
+                                </tr>
+                            {/each}
                         {/each}
                     </tbody>
                 </table>
             </div>
         </div>
+        {/if}
     {:else}
         <div class="no-data">
-            {#if !$socketStore.connected}
-                <div class="no-data-title">Not connected</div>
-                <div class="no-data-text">WebSocket connection lost. Trying to reconnect...</div>
-            {:else}
-                <div class="no-data-title">No GPS data</div>
-                <div class="no-data-text">
-                    GPS receiver is not responding or has no signal.<br>
-                    Make sure the rover is powered on and has GPS reception.
-                </div>
-                <div class="no-data-hint">
-                    Last known state: {$socketStore.state ? ($socketStore.state.position.solution === 0 ? 'Invalid' : $socketStore.state.position.solution === 1 ? 'Float' : 'Fixed') : 'Unknown'}
-                </div>
-            {/if}
+            <div class="no-data-title">No GPS data</div>
+            <div class="no-data-text">
+                GPS receiver is not responding or has no signal.<br>
+                Make sure the rover is powered on and has GPS reception.
+            </div>
+            <div class="no-data-hint">
+                Last known state: {$socketStore.state ? ($socketStore.state.position.solution === 0 ? 'Invalid' : $socketStore.state.position.solution === 1 ? 'Float' : 'Fixed') : 'Unknown'}
+            </div>
         </div>
     {/if}
     {/if}
@@ -1039,6 +1102,40 @@
         font-size: 0.75em;
         font-weight: normal;
         color: #888;
+    }
+
+    .gps-banner {
+        padding: 8px 12px;
+        font-size: 0.85em;
+        border-bottom: 1px solid #ddd;
+    }
+
+    .gps-banner.offline {
+        background: #ffebee;
+        color: #b71c1c;
+    }
+
+    .gps-banner.stale {
+        background: #fff8e1;
+        color: #8d6e00;
+    }
+
+    .stale-item .uc-status-value {
+        color: #e65100;
+    }
+
+    .skyplot-wait {
+        padding: 24px 12px;
+        text-align: center;
+        color: #888;
+        font-size: 0.85em;
+        background: white;
+        border-bottom: 1px solid #ddd;
+    }
+
+    .uc-cn0-band {
+        color: #888;
+        font-size: 0.85em;
     }
 
     .uc-panel-header {

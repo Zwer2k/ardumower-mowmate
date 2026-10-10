@@ -3,7 +3,7 @@
     import { page } from '$app/stores';
     import { afterNavigate } from '$app/navigation';
     import { browser } from '$app/environment';
-    import { socketService, socketStore } from '../../../stores/socket';
+    import { socketStore } from '../../../stores/socket';
     import { gpsStore } from '../../../stores/gpsStore';
     import type { PositionSample } from '../../../stores/gpsStore';
     import { MapStore } from '../../../map/service';
@@ -322,7 +322,6 @@
         const dashboard = $page.url.searchParams.get('dashboard');
         const isLivemap = dashboard === 'livemap';
         if (isLivemap && !lastLivemapActive) {
-            socketService.requestGpsDetails();
             gpsStore.connect();
             initMap();
             // If initMap was skipped because the container was still hidden,
@@ -338,7 +337,6 @@
             });
             lastLivemapActive = true;
         } else if (!isLivemap && lastLivemapActive) {
-            socketService.stopGpsDetails();
             gpsStore.disconnect();
             lastLivemapActive = false;
         }
@@ -350,7 +348,6 @@
 
     onDestroy(() => {
         if (lastLivemapActive) {
-            socketService.stopGpsDetails();
             gpsStore.disconnect();
             lastLivemapActive = false;
         }

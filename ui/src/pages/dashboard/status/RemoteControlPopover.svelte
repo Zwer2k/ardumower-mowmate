@@ -9,6 +9,9 @@
     import IconMenuDots from "carbon-icons-svelte/lib/OverflowMenuVertical.svelte";
     import { remoteControlOpen } from '../../../stores/remote-control';
     import { RobotCommandService } from '../../../service';
+    import { BackendSettings } from '../../../stores/backend';
+    import { SaveSuccess } from '../../../stores/success';
+    import { Error as ErrorStore } from '../../../stores/error';
 
     let open = $state(false);
     let overlayOpen = $state(false);
@@ -51,14 +54,28 @@
         settingsOpen = !settingsOpen;
     }
 
-    async function saveDefaults() {
-        await RobotCommandService.send('saveMowerDefaults' as any);
+    // Das Menü schließt sofort; das Ergebnis kommt als Meldung. Das Speichern
+    // im Flash dauert auf dem Modem 1-2 s.
+    async function runDefaultsAction(action: 'saveMowerDefaults' | 'resetMowerDefaults', resultAction: string) {
         settingsOpen = false;
+        try {
+            const result = await RobotCommandService.send(action as any);
+            if (result && (result as any).success === false) throw new Error(`${resultAction} failed`);
+            SaveSuccess.set({ action: resultAction, date: new Date() });
+            // Die Einstellungsseite zeigt sonst die alten Vorgaben und würde sie
+            // beim nächsten Speichern zurückschreiben.
+            if (action === 'saveMowerDefaults') BackendSettings.load();
+        } catch (err) {
+            ErrorStore.set(err as any);
+        }
     }
 
-    async function resetDefaults() {
-        await RobotCommandService.send('resetMowerDefaults' as any);
-        settingsOpen = false;
+    function saveDefaults() {
+        runDefaultsAction('saveMowerDefaults', 'save-mower-defaults');
+    }
+
+    function resetDefaults() {
+        runDefaultsAction('resetMowerDefaults', 'reset-mower-defaults');
     }
 
     // Close when clicking outside the wrapper.
