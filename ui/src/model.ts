@@ -267,6 +267,8 @@ export interface DesiredState {
   sonar_enabled?: boolean;
   op: number;
   fix_timeout: number;
+  mow_pwm?: number;     // max cutter PWM 0..255
+  mow_height?: number;  // mm
 }
 
 export interface ModemLog {
