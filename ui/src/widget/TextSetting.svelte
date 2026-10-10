@@ -41,6 +41,13 @@
   $: invalid = $Invalid === key;
   $: invalidText = !invalid ? undefined : TextService.invalidTextFor(key);
 
+  // Gespeicherte Geheimnisse kommen nie vom Modem zurück; die UI zeigt dafür
+  // einen Platzhalter (999999 bzw. "(unchanged)", siehe fillSecrets). Den soll
+  // "Show password" nicht aufdecken: Die Schaltfläche gibt es erst, wenn ein
+  // neuer Wert eingegeben wird, und nach dem Speichern wieder nicht.
+  let passwordType: "password" | "text" = "password";
+  $: if (!dirty) passwordType = "password";
+
   function revert() {
     value = original;
     Invalid.set("");
@@ -60,8 +67,10 @@
       {invalidText}
     />
   {:else if kind === "password"}
+    <div class="password-field" class:secret-unchanged={!dirty}>
     <PasswordInput
       bind:value
+      bind:type={passwordType}
       labelText={labelMod}
       {placeholder}
       {required}
@@ -70,6 +79,7 @@
       helperText={help}
       disabled={disabled || $Busy}
     />
+    </div>
   {/if}
   {#if dirty}
     <Button
@@ -86,5 +96,13 @@
   main {
     display: flex;
     flex-direction: row;
+  }
+
+  .password-field {
+    flex: 1;
+  }
+
+  .secret-unchanged :global(.bx--text-input--password__visibility__toggle) {
+    display: none;
   }
 </style>
