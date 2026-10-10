@@ -464,6 +464,8 @@ namespace ArduMower
         int angle;
         float distanceToBorder;
         int borderLaps;
+        float distanceToExclusions;  // Spurbreiten Abstand zu den Exclusions
+        int exclusionLaps;           // Runden um die Exclusions
         bool mowBorderCcw;
         // Neue Laufzeit-Toggles: Karte wird berechnet, diese Schalter entscheiden,
         // welche bereits berechneten Bereiche tatsächlich gemäht werden.
@@ -482,7 +484,8 @@ namespace ArduMower
 
         MowSettings()
             : timestamp(0), pattern(0), width(0.3f), angle(0),
-              distanceToBorder(0.0f), borderLaps(0), mowBorderCcw(false),
+              distanceToBorder(0.0f), borderLaps(0),
+              distanceToExclusions(0.0f), exclusionLaps(0), mowBorderCcw(false),
               doMowArea(true), doMowPerimeter(true), doMowBorder(false),
               doMowExclusions(true), doMowExclusionBorder(false),
               simplifyEpsilon(0.02f), checkTurnRadius(0.30f) {}
@@ -494,6 +497,8 @@ namespace ArduMower
               && angle == other.angle
               && distanceToBorder == other.distanceToBorder
               && borderLaps == other.borderLaps
+              && distanceToExclusions == other.distanceToExclusions
+              && exclusionLaps == other.exclusionLaps
               && mowBorderCcw == other.mowBorderCcw
               && doMowArea == other.doMowArea
               && doMowPerimeter == other.doMowPerimeter

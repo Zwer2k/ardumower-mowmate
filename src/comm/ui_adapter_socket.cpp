@@ -369,6 +369,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       map.patternAngle = settings.angle;
       map.distanceToBorder = settings.distanceToBorder;
       map.borderLaps = settings.borderLaps;
+      map.distanceToExclusions = settings.distanceToExclusions;
+      map.exclusionLaps = settings.exclusionLaps;
       map.mowBorderCcw = settings.mowBorderCcw;
       map.doMowArea = settings.doMowArea;
       map.doMowPerimeter = settings.doMowPerimeter;
@@ -406,6 +408,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       if (!jsonData["angle"].isNull()) s.angle = jsonData["angle"];
       if (!jsonData["distanceToBorder"].isNull()) s.distanceToBorder = jsonData["distanceToBorder"];
       if (!jsonData["borderLaps"].isNull()) s.borderLaps = jsonData["borderLaps"];
+      if (!jsonData["distanceToExclusions"].isNull()) s.distanceToExclusions = jsonData["distanceToExclusions"];
+      if (!jsonData["exclusionLaps"].isNull()) s.exclusionLaps = jsonData["exclusionLaps"];
       if (!jsonData["mowBorderCcw"].isNull()) s.mowBorderCcw = jsonData["mowBorderCcw"];
       if (!jsonData["doMowArea"].isNull()) s.doMowArea = jsonData["doMowArea"];
       if (!jsonData["doMowPerimeter"].isNull()) s.doMowPerimeter = jsonData["doMowPerimeter"];

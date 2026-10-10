@@ -23,7 +23,8 @@ TESTS = \
 	test_user_map \
 	test_user_map2 \
 	test_route_report \
-	test_cassandra_map
+	test_cassandra_map \
+	test_exclusion_laps
 
 BINS = $(addprefix $(BIN_DIR)/,$(TESTS))
 

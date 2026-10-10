@@ -10,6 +10,8 @@
   let angle: number = 0;
   let distanceToBorder: number = 0;
   let borderLaps: number = 0;
+  let distanceToExclusions: number = 0;
+  let exclusionLaps: number = 0;
   let mowBorderCcw: boolean = false;
   let simplifyEpsilon: number = 0.02;
   let checkTurnRadius: number = 0.3;
@@ -30,6 +32,10 @@
     distanceToBorder = Math.max(0, Math.round(distanceToBorder || 0));
   }
 
+  function roundDistanceToExclusions() {
+    distanceToExclusions = Math.max(0, Math.round(distanceToExclusions || 0));
+  }
+
   function handleOpen() {
     const s = $mowSettingsStore;
     pattern = s.pattern;
@@ -37,6 +43,8 @@
     angle = s.angle;
     distanceToBorder = s.distanceToBorder;
     borderLaps = s.borderLaps;
+    distanceToExclusions = s.distanceToExclusions ?? 0;
+    exclusionLaps = s.exclusionLaps ?? s.borderLaps;
     mowBorderCcw = s.mowBorderCcw;
     simplifyEpsilon = s.simplifyEpsilon ?? 0.02;
     checkTurnRadius = s.checkTurnRadius ?? 0.3;
@@ -44,12 +52,15 @@
 
   function handleOk() {
     roundDistanceToBorder();
+    roundDistanceToExclusions();
     socketService.sendMowSettings({
       pattern,
       width,
       angle,
       distanceToBorder,
       borderLaps,
+      distanceToExclusions,
+      exclusionLaps,
       mowBorderCcw,
       simplifyEpsilon,
       checkTurnRadius,
@@ -116,7 +127,27 @@
 
     <NumberInput
       label="Border laps"
+      helperText="Laps along the perimeter."
       bind:value={borderLaps}
+      min={0}
+      max={6}
+      step={1}
+    />
+
+    <NumberInput
+      label="Distance to exclusions"
+      helperText="Number of track widths the mow area is kept away from the exclusions."
+      bind:value={distanceToExclusions}
+      min={0}
+      max={5}
+      step={1}
+      on:change={roundDistanceToExclusions}
+    />
+
+    <NumberInput
+      label="Exclusion laps"
+      helperText="Laps around each exclusion, each one track width further out. Switched on and off with Mow Excl. border."
+      bind:value={exclusionLaps}
       min={0}
       max={6}
       step={1}

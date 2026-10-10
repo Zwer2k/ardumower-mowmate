@@ -325,6 +325,10 @@ export interface MowSettings {
   angle: number;
   distanceToBorder: number;
   borderLaps: number;
+  /** Track widths the mow area keeps away from the exclusions. */
+  distanceToExclusions?: number;
+  /** Laps around each exclusion. */
+  exclusionLaps?: number;
   mowBorderCcw: boolean;
   // Runtime toggles: already calculated areas can be switched on/off at runtime
   doMowArea: boolean;
@@ -552,6 +556,8 @@ export interface MowSettingsData {
   angle: number;
   distanceToBorder: number;
   borderLaps: number;
+  distanceToExclusions?: number;
+  exclusionLaps?: number;
   mowBorderCcw: boolean;
   doMowArea: boolean;
   doMowPerimeter: boolean;

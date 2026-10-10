@@ -386,6 +386,8 @@ void MowSettings::marshal(JsonObject o) const
   o["angle"] = angle;
   o["distanceToBorder"] = distanceToBorder;
   o["borderLaps"] = borderLaps;
+  o["distanceToExclusions"] = distanceToExclusions;
+  o["exclusionLaps"] = exclusionLaps;
   o["mowBorderCcw"] = mowBorderCcw;
   o["doMowArea"] = doMowArea;
   o["doMowPerimeter"] = doMowPerimeter;

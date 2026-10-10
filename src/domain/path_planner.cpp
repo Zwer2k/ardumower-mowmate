@@ -67,6 +67,8 @@ static PPC::Settings toPlannerSettings(const ArduMower::Domain::Robot::MowSettin
     ps.mowBorderCcw = settings.mowBorderCcw;
     ps.distanceToBorder = settings.distanceToBorder;
     ps.borderLaps = settings.borderLaps;
+    ps.distanceToExclusions = (int)lroundf(settings.distanceToExclusions);
+    ps.exclusionLaps = settings.exclusionLaps;
     ps.simplifyEpsilon = settings.simplifyEpsilon;
     // checkTurnRadius geht bewusst NICHT in die Planer-Settings: der Wert
     // dient nur der Routenprüfung und darf die Route nicht verändern.
@@ -199,8 +201,9 @@ Polygon calculateWaypoints(ArduMower::Domain::Robot::MowerMap &map,
     float mowSpeed,
     const std::function<void(int percent)> &progress)
 {
-    Log(INFO, "%scalculateWaypoints: width=%.2f angle=%d distToBorder=%.2f borderLaps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
+    Log(INFO, "%scalculateWaypoints: width=%.2f angle=%d distToBorder=%.2f borderLaps=%d distToExclusions=%.0f exclusionLaps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
         _LOG_, settings.width, settings.angle, settings.distanceToBorder, settings.borderLaps,
+        settings.distanceToExclusions, settings.exclusionLaps,
         settings.doMowArea, settings.doMowBorder, settings.doMowExclusionBorder);
     // Berechne immer die vollständige Route; die Runtime-Toggles in settings
     // filtern anschließend, welche Bereiche tatsächlich gemäht werden.

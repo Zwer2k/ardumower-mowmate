@@ -8,6 +8,8 @@ const defaultSettings: MowSettings = {
   angle: 0,
   distanceToBorder: 0,
   borderLaps: 0,
+  distanceToExclusions: 0,
+  exclusionLaps: 0,
   mowBorderCcw: false,
   doMowArea: true,
   doMowPerimeter: true,
