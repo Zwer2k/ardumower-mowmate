@@ -68,7 +68,8 @@ function absoluteToRelative(arr: number[], reference: GeoJsonReference): Point {
   return { x: x === 0 ? 0 : x, y: y === 0 ? 0 : -y };
 }
 
-function relativeToAbsolute(point: Point, reference: GeoJsonReference): number[] {
+/** Kartenpunkt (Meter, y wie im Editor nach unten) in [lon, lat] umrechnen. */
+export function relativeToAbsolute(point: Point, reference: GeoJsonReference): number[] {
   const metersPerDegree = METERS_PER_DEGREE;
   const lon = point.x / (metersPerDegree * Math.cos(reference.lat * Math.PI / 180)) + reference.lon;
   const lat = -point.y / metersPerDegree + reference.lat;
