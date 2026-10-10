@@ -87,7 +87,7 @@
                     <span class="navstatus-val">{(navPvt.heading ?? 0).toFixed(2)}°</span>
                 </div>
                 <div class="navstatus-item">
-                    <span class="navstatus-key">3D Acc</span>
+                    <span class="navstatus-key">H-Acc</span>
                     <span class="navstatus-val {(navPvt.hAcc ?? 999) < 0.1 ? 'good' : (navPvt.hAcc ?? 999) < 1.0 ? 'ok' : 'warn'}">{(navPvt.hAcc ?? 0).toFixed(2)} m</span>
                 </div>
                 <div class="navstatus-item">

@@ -1,11 +1,8 @@
-import { writable, derived } from "svelte/store";
-import { browser } from "$app/environment";
-import { socketStore } from "./socket";
-import {
-  parseUbxFrames,
-  getParserForFrame,
-} from "../pages/dashboard/gps/ubxCommands";
-import type { GpsDetails, GpsSatellite } from "../model";
+import { writable } from "svelte/store";
+import { socketStore, socketService } from "./socket";
+import type { GpsDetails } from "../model";
+
+export type { GpsDetails };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -60,18 +57,28 @@ export interface PositionSample {
   hAcc: number;
 }
 
+/** Lösungsart je NAV-PVT, für den RTK-Verlauf. */
+export interface FixSample {
+  time: number;
+  carrSoln: number; // 0=none, 1=float, 2=fixed
+  fixOk: boolean;
+}
+
 export interface GpsStoreState {
   // From S4 CSV
   gpsDetails: GpsDetails | null;
+  /** Browserzeit (ms), zu der die letzten S4-Daten ankamen. */
+  gpsDetailsReceivedAt: number | null;
 
   // From UBX responses (polled by modem backend)
   navSat: NavSatInfo[];
   navPvt: NavPvtInfo | null;
   navDop: NavDopInfo | null;
 
-  // History ring buffers
+  // History ring buffers (positions only from valid fixes)
   altitudeHistory: AltitudeSample[];
   positionHistory: PositionSample[];
+  fixHistory: FixSample[];
 
   // Reference position for deviation map (mean of first N valid fixes)
   refLat: number | null;
@@ -80,189 +87,176 @@ export interface GpsStoreState {
 
 const HISTORY_SIZE = 1000;
 const REF_FIX_COUNT = 20;
+/** RTK-Verlauf: so weit reicht die Zeitleiste zurück. */
+export const FIX_HISTORY_MS = 30 * 60 * 1000;
 
-const initialState: GpsStoreState = {
-  gpsDetails: null,
-  navSat: [],
-  navPvt: null,
-  navDop: null,
-  altitudeHistory: [],
-  positionHistory: [],
-  refLat: null,
-  refLon: null,
-};
+function initialState(): GpsStoreState {
+  return {
+    gpsDetails: null,
+    gpsDetailsReceivedAt: null,
+    navSat: [],
+    navPvt: null,
+    navDop: null,
+    altitudeHistory: [],
+    positionHistory: [],
+    fixHistory: [],
+    refLat: null,
+    refLon: null,
+  };
+}
+
+function pushCapped<T>(list: T[], item: T, max: number): T[] {
+  const next = list.length >= max ? list.slice(list.length - max + 1) : list.slice();
+  next.push(item);
+  return next;
+}
 
 function createGpsStore() {
-  const { subscribe, set, update } = writable<GpsStoreState>(initialState);
+  const { subscribe, update } = writable<GpsStoreState>(initialState());
 
   let refCount = 0;
   let unsubscribeSocket: (() => void) | null = null;
   let processedUbxTimestamp = 0;
+  let lastGpsDetails: GpsDetails | null = null;
+  // Abo auf dem Modem (requestGpsDetails). Das Modem vergisst es, wenn die
+  // WebSocket-Verbindung abreißt; nach dem Reconnect wird es erneuert.
+  let modemSubscribed = false;
+
+  function syncModemSubscription(connected: boolean) {
+    const wanted = refCount > 0 && connected;
+    if (wanted && !modemSubscribed) {
+      modemSubscribed = true;
+      queueMicrotask(() => socketService.requestGpsDetails());
+    } else if (!wanted && modemSubscribed) {
+      modemSubscribed = false;
+      if (connected) queueMicrotask(() => socketService.stopGpsDetails());
+    }
+  }
 
   function handleSocketState(state: {
+    connected: boolean;
     gpsDetails: GpsDetails | null;
     ubxResponse: { timestamp: number; hex: string } | null;
   }) {
-    update((s) => {
-      // Process S4 GPS details
-      if (state.gpsDetails && state.gpsDetails.timestamp) {
+    syncModemSubscription(state.connected);
+
+    const newDetails = state.gpsDetails && state.gpsDetails !== lastGpsDetails;
+    const newUbx =
+      !!state.ubxResponse &&
+      !!state.ubxResponse.timestamp &&
+      state.ubxResponse.timestamp !== processedUbxTimestamp;
+    if (!newDetails && !newUbx) return;
+
+    // Immer ein neues Objekt liefern: Svelte erkennt Änderungen per Identität.
+    update((prev) => {
+      let s: GpsStoreState = { ...prev };
+      if (newDetails) {
+        lastGpsDetails = state.gpsDetails;
         s.gpsDetails = state.gpsDetails;
+        s.gpsDetailsReceivedAt = Date.now();
       }
-
-      // Process UBX response
-      if (
-        state.ubxResponse &&
-        state.ubxResponse.timestamp &&
-        state.ubxResponse.timestamp !== processedUbxTimestamp
-      ) {
-        processedUbxTimestamp = state.ubxResponse.timestamp;
-        const cleanHex = (state.ubxResponse.hex || "").replace(
-          /[^0-9a-fA-F]/g,
-          "",
-        );
-        if (cleanHex.length > 0) {
-          parseUbxResponse(s, cleanHex);
-        }
+      if (newUbx) {
+        processedUbxTimestamp = state.ubxResponse!.timestamp;
+        const cleanHex = (state.ubxResponse!.hex || "").replace(/[^0-9a-fA-F]/g, "");
+        if (cleanHex.length > 0) s = applyUbx(s, hexToBytes(cleanHex));
       }
-
       return s;
     });
   }
 
-  function parseUbxResponse(s: GpsStoreState, hex: string) {
-    const frames = parseUbxFrames(hex);
-    for (const frame of frames) {
-      if (!frame.valid) continue;
-
-      if (frame.msgName === "NAV-SAT") {
-        s.navSat = parseNavSat(hex) || [];
-      } else if (frame.msgName === "NAV-PVT") {
-        const pvt = parseNavPvt(hex);
-        if (pvt) {
-          s.navPvt = pvt;
-
-          // Update altitude history
-          s.altitudeHistory.push({
-            time: pvt.timestamp,
-            height: pvt.height,
-            hMSL: pvt.hMSL,
-          });
-          if (s.altitudeHistory.length > HISTORY_SIZE) {
-            s.altitudeHistory.shift();
-          }
-
-          // Update position history
-          s.positionHistory.push({
-            time: pvt.timestamp,
-            lat: pvt.lat,
-            lon: pvt.lon,
-            hAcc: pvt.hAcc,
-          });
-          if (s.positionHistory.length > HISTORY_SIZE) {
-            s.positionHistory.shift();
-          }
-
-          // Update reference position
-          if (pvt.fixOk && pvt.fixType >= 2) {
-            if (s.refLat === null || s.refLon === null) {
-              // Use first valid fix as reference
-              if (s.positionHistory.length >= REF_FIX_COUNT) {
-                const validFixes = s.positionHistory.slice(-REF_FIX_COUNT);
-                s.refLat =
-                  validFixes.reduce((sum, p) => sum + p.lat, 0) /
-                  validFixes.length;
-                s.refLon =
-                  validFixes.reduce((sum, p) => sum + p.lon, 0) /
-                  validFixes.length;
-              }
-            }
-          }
-        }
-      } else if (frame.msgName === "NAV-DOP") {
-        const dop = parseNavDop(hex);
-        if (dop) {
-          s.navDop = dop;
-        }
+  function applyUbx(s: GpsStoreState, bytes: number[]): GpsStoreState {
+    for (const f of findUbxFrames(bytes)) {
+      if (f.classId === 0x01 && f.msgId === 0x35) {
+        const sats = parseNavSat(bytes, f);
+        if (sats) s.navSat = sats;
+      } else if (f.classId === 0x01 && f.msgId === 0x07) {
+        const pvt = parseNavPvt(bytes, f);
+        if (pvt) s = applyNavPvt(s, pvt);
+      } else if (f.classId === 0x01 && f.msgId === 0x04) {
+        const dop = parseNavDop(bytes, f);
+        if (dop) s.navDop = dop;
       }
     }
+    return s;
   }
 
-  function parseNavSat(hex: string): NavSatInfo[] | null {
-    const bytes = hexToBytes(hex);
-    const frames = findUbxFrames(hex);
-    const f = frames.find((x) => x.classId === 0x01 && x.msgId === 0x35);
-    if (!f || f.length < 8) return null;
-    const p = f.payloadStart;
-    // NAV-SAT: offset +0 = version (U1), +1 = numSvs (U1)
-    const numSats = bytes[p + 1];
-    const sats: NavSatInfo[] = [];
-    for (let i = 0; i < numSats && p + 8 + i * 12 + 11 < bytes.length; i++) {
-      const off = p + 8 + i * 12;
-      const gnssId = bytes[off];
-      const svId = bytes[off + 1];
-      const cno = bytes[off + 2];
-      const elev = bytesToSigned(bytes, off + 3);
-      const azim = bytes[off + 4] | (bytes[off + 5] << 8);
-      const flags =
-        bytes[off + 8] |
-        (bytes[off + 9] << 8) |
-        (bytes[off + 10] << 16) |
-        (bytes[off + 11] << 24);
-      const qual = flags & 0x07;
-      const used = (flags & 0x40) !== 0;
-      const health = (flags >> 8) & 0x03;
+  function applyNavPvt(s: GpsStoreState, pvt: NavPvtInfo): GpsStoreState {
+    s.navPvt = pvt;
+    s.fixHistory = pushCapped(
+      s.fixHistory.filter((f) => pvt.timestamp - f.time <= FIX_HISTORY_MS),
+      { time: pvt.timestamp, carrSoln: pvt.fixOk ? pvt.carrSoln : 0, fixOk: pvt.fixOk },
+      HISTORY_SIZE,
+    );
+    // Ohne gültige Lösung sind Position und Höhe Unsinn (oft 0/0): nicht in
+    // die Verläufe und nicht in den Bezugspunkt der Abweichungskarte.
+    const valid = pvt.fixOk && pvt.fixType >= 2 && (pvt.lat !== 0 || pvt.lon !== 0);
+    if (!valid) return s;
+    s.altitudeHistory = pushCapped(
+      s.altitudeHistory,
+      { time: pvt.timestamp, height: pvt.height, hMSL: pvt.hMSL },
+      HISTORY_SIZE,
+    );
+    s.positionHistory = pushCapped(
+      s.positionHistory,
+      { time: pvt.timestamp, lat: pvt.lat, lon: pvt.lon, hAcc: pvt.hAcc },
+      HISTORY_SIZE,
+    );
+    if ((s.refLat === null || s.refLon === null) && s.positionHistory.length >= REF_FIX_COUNT) {
+      const first = s.positionHistory.slice(0, REF_FIX_COUNT);
+      s.refLat = first.reduce((sum, p) => sum + p.lat, 0) / first.length;
+      s.refLon = first.reduce((sum, p) => sum + p.lon, 0) / first.length;
+    }
+    return s;
+  }
 
-      sats.push({ gnssId, svId, elev, azim, cno, used, health, quality: qual });
+  function parseNavSat(bytes: number[], f: UbxFrame): NavSatInfo[] | null {
+    if (f.length < 8) return null;
+    const p = f.payloadStart;
+    // NAV-SAT: +0 iTOW, +4 version, +5 numSvs, then 12 bytes per satellite
+    const numSats = bytes[p + 5];
+    const sats: NavSatInfo[] = [];
+    for (let i = 0; i < numSats && 8 + i * 12 + 12 <= f.length; i++) {
+      const off = p + 8 + i * 12;
+      const flags = readU4(bytes, off + 8);
+      sats.push({
+        gnssId: bytes[off],
+        svId: bytes[off + 1],
+        cno: bytes[off + 2],
+        elev: bytesToSigned(bytes, off + 3),
+        azim: readU2(bytes, off + 4),
+        // flags: qualityInd 0-2, svUsed 3, health 4-5, diffCorr 6
+        quality: flags & 0x07,
+        used: (flags & 0x08) !== 0,
+        health: (flags >> 4) & 0x03,
+      });
     }
     return sats;
   }
 
-  function parseNavPvt(hex: string): NavPvtInfo | null {
-    const bytes = hexToBytes(hex);
-    const frames = findUbxFrames(hex);
-    const f = frames.find((x) => x.classId === 0x01 && x.msgId === 0x07);
-    if (!f || f.length < 92) return null;
+  function parseNavPvt(bytes: number[], f: UbxFrame): NavPvtInfo | null {
+    if (f.length < 92) return null;
     const p = f.payloadStart;
-
-    const fixType = bytes[p + 20];
-    const fixOk = (bytes[p + 21] & 0x01) !== 0;
-    const carrSoln = (bytes[p + 21] >> 6) & 0x03;
-    const numSV = bytes[p + 23];
-    const lon = readI4(bytes, p + 24) * 1e-7;
-    const lat = readI4(bytes, p + 28) * 1e-7;
-    const height = readI4(bytes, p + 32) * 1e-3;
-    const hMSL = readI4(bytes, p + 36) * 1e-3;
-    const hAcc = readU4(bytes, p + 40) * 1e-3;
-    const vAcc = readU4(bytes, p + 44) * 1e-3;
-    const gSpeed = readI4(bytes, p + 60) * 1e-3;
-    const heading = readI4(bytes, p + 64) * 1e-5;
-    const pDOP = readU2(bytes, p + 76) * 0.01;
-
     return {
-      lat,
-      lon,
-      height,
-      hMSL,
-      hAcc,
-      vAcc,
-      gSpeed,
-      heading,
-      pDOP,
-      fixType,
-      fixOk,
-      numSV,
-      carrSoln,
+      fixType: bytes[p + 20],
+      fixOk: (bytes[p + 21] & 0x01) !== 0,
+      carrSoln: (bytes[p + 21] >> 6) & 0x03,
+      numSV: bytes[p + 23],
+      lon: readI4(bytes, p + 24) * 1e-7,
+      lat: readI4(bytes, p + 28) * 1e-7,
+      height: readI4(bytes, p + 32) * 1e-3,
+      hMSL: readI4(bytes, p + 36) * 1e-3,
+      hAcc: readU4(bytes, p + 40) * 1e-3,
+      vAcc: readU4(bytes, p + 44) * 1e-3,
+      gSpeed: readI4(bytes, p + 60) * 1e-3,
+      heading: readI4(bytes, p + 64) * 1e-5,
+      pDOP: readU2(bytes, p + 76) * 0.01,
       timestamp: Date.now(),
     };
   }
 
-  function parseNavDop(hex: string): NavDopInfo | null {
-    const bytes = hexToBytes(hex);
-    const frames = findUbxFrames(hex);
-    const f = frames.find((x) => x.classId === 0x01 && x.msgId === 0x04);
-    if (!f || f.length < 18) return null;
-    const p = f.payloadStart;
-
+  function parseNavDop(bytes: number[], f: UbxFrame): NavDopInfo | null {
+    if (f.length < 18) return null;
+    const p = f.payloadStart + 4; // after iTOW
     return {
       gDOP: readU2(bytes, p + 0) * 0.01,
       pDOP: readU2(bytes, p + 2) * 0.01,
@@ -282,15 +276,19 @@ function createGpsStore() {
   }
 
   function disconnect() {
+    if (refCount === 0) return;
     refCount--;
-    if (refCount <= 0) {
-      refCount = 0;
+    if (refCount === 0) {
+      let connected = false;
+      socketStore.subscribe((s) => (connected = s.connected))();
+      syncModemSubscription(connected);
       if (unsubscribeSocket) {
         unsubscribeSocket();
         unsubscribeSocket = null;
       }
       // Reset so next connect re-processes the cached ubxResponse
       processedUbxTimestamp = 0;
+      lastGpsDetails = null;
     }
   }
 
@@ -301,11 +299,17 @@ function createGpsStore() {
   };
 }
 
-// ─── Low-level helpers (duplicated from ubxCommands to avoid circular dep) ───
+// ─── Low-level helpers ───────────────────────────────────────────────────────
+
+interface UbxFrame {
+  classId: number;
+  msgId: number;
+  length: number;
+  payloadStart: number;
+}
 
 function hexToBytes(hex: string): number[] {
   const bytes: number[] = [];
-  hex = hex.replace(/\s/g, "");
   for (let i = 0; i + 1 < hex.length; i += 2) {
     bytes.push(parseInt(hex.substring(i, i + 2), 16));
   }
@@ -318,16 +322,16 @@ function readU2(bytes: number[], off: number): number {
 
 function readU4(bytes: number[], off: number): number {
   return (
-    bytes[off] |
-    (bytes[off + 1] << 8) |
-    (bytes[off + 2] << 16) |
-    (bytes[off + 3] << 24)
+    (bytes[off] |
+      (bytes[off + 1] << 8) |
+      (bytes[off + 2] << 16) |
+      (bytes[off + 3] << 24)) >>>
+    0
   );
 }
 
 function readI4(bytes: number[], off: number): number {
-  const v = readU4(bytes, off);
-  return v >= 0x80000000 ? v - 0x100000000 : v;
+  return readU4(bytes, off) | 0;
 }
 
 function bytesToSigned(bytes: number[], off: number): number {
@@ -335,54 +339,27 @@ function bytesToSigned(bytes: number[], off: number): number {
   return v >= 0x80 ? v - 0x100 : v;
 }
 
-function ubxChecksum(
-  bytes: number[],
-  start: number,
-  len: number,
-): { ckA: number; ckB: number } {
+function ubxChecksumOk(bytes: number[], start: number, len: number): boolean {
   let ckA = 0,
     ckB = 0;
   for (let i = 0; i < len; i++) {
     ckA = (ckA + bytes[start + i]) & 0xff;
     ckB = (ckB + ckA) & 0xff;
   }
-  return { ckA, ckB };
+  return bytes[start + len] === ckA && bytes[start + len + 1] === ckB;
 }
 
-function findUbxFrames(hex: string): Array<{
-  start: number;
-  classId: number;
-  msgId: number;
-  length: number;
-  payloadStart: number;
-  payloadEnd: number;
-  valid: boolean;
-}> {
-  const bytes = hexToBytes(hex);
-  const frames = [];
-  for (let i = 0; i < bytes.length - 8; i++) {
-    if (bytes[i] === 0xb5 && bytes[i + 1] === 0x62) {
-      const classId = bytes[i + 2];
-      const msgId = bytes[i + 3];
-      const length = bytes[i + 4] | (bytes[i + 5] << 8);
-      const payloadStart = i + 6;
-      const payloadEnd = payloadStart + length;
-      const ckPos = payloadEnd;
-      if (ckPos + 1 >= bytes.length) continue;
-      const ckA = bytes[ckPos];
-      const ckB = bytes[ckPos + 1];
-      const calc = ubxChecksum(bytes, i + 2, length + 4);
-      frames.push({
-        start: i,
-        classId,
-        msgId,
-        length,
-        payloadStart,
-        payloadEnd,
-        valid: ckA === calc.ckA && ckB === calc.ckB,
-      });
-      i = ckPos + 1;
-    }
+/** Nur Frames mit gültiger Prüfsumme. Eine falsche Sync-Folge (B5 62 in den
+ *  Nutzdaten) wird nur um ein Byte übersprungen, damit kein echter Frame fehlt. */
+function findUbxFrames(bytes: number[]): UbxFrame[] {
+  const frames: UbxFrame[] = [];
+  for (let i = 0; i + 8 <= bytes.length; i++) {
+    if (bytes[i] !== 0xb5 || bytes[i + 1] !== 0x62) continue;
+    const length = readU2(bytes, i + 4);
+    if (i + 8 + length > bytes.length) continue;
+    if (!ubxChecksumOk(bytes, i + 2, length + 4)) continue;
+    frames.push({ classId: bytes[i + 2], msgId: bytes[i + 3], length, payloadStart: i + 6 });
+    i += 7 + length;
   }
   return frames;
 }

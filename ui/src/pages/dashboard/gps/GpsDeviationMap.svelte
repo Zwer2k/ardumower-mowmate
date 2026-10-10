@@ -47,25 +47,25 @@
         return Math.max(max, 0.5);
     });
 
-    let scale = $derived(() => {
-        const md = maxDist();
-        // Round up to nice number
-        const step = md <= 0.5 ? 0.1 : md <= 1.0 ? 0.2 : md <= 2.0 ? 0.5 : md <= 5.0 ? 1.0 : 2.0;
-        const maxRing = Math.ceil(md / step) * step;
-        return MAX_R / maxRing;
-    });
+    // Ringabstand 1-2-5 so gewählt, dass höchstens etwa 6 Ringe entstehen
+    function niceStep(maxDistance: number): number {
+        const raw = maxDistance / 5;
+        const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+        const n = raw / mag;
+        return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+    }
 
-    let maxRing = $derived(() => {
-        const s = scale();
-        return MAX_R / s;
-    });
+    let ringStep = $derived(() => niceStep(maxDist()));
+
+    let maxRing = $derived(() => Math.ceil(maxDist() / ringStep()) * ringStep());
+
+    let scale = $derived(() => MAX_R / maxRing());
 
     let ringSteps = $derived(() => {
-        const mr = maxRing();
+        const step = ringStep();
         const steps: number[] = [];
-        const step = mr <= 1.0 ? 0.2 : mr <= 2.0 ? 0.5 : 1.0;
-        for (let r = step; r <= mr + 0.001; r += step) {
-            steps.push(parseFloat(r.toFixed(2)));
+        for (let i = 1; i * step <= maxRing() + step / 1000 && i <= 12; i++) {
+            steps.push(parseFloat((i * step).toPrecision(3)));
         }
         return steps;
     });

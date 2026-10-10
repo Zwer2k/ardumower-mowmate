@@ -1193,8 +1193,11 @@ void UiSocketHandler::loop()
       break;
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
     case 11:
-      gpsRequestLoop();
-      if (gpsDetailsActive) ubxPollLoop();
+      // only while the GPS dashboard or the live map is open
+      if (gpsDetailsActive) {
+        gpsRequestLoop();
+        ubxPollLoop();
+      }
       break;
     case 12:
       if (_source.gpsDetails().timestamp > 0) {
@@ -1292,12 +1295,16 @@ void UiSocketHandler::gpsRequestLoop()
   if (millis() - lastAttempt < 200) return;
   lastAttempt = millis();
 
-  if ((lastDataRequestTimestamp[ResponseDataType::gpsDetails] > 0) && ((millis() - lastDataRequestTimestamp[ResponseDataType::gpsDetails]) < 20000))
+  // AT+S4 is about 1 KB; every 5 s is enough for fix, accuracy and C/N0 bars
+  if ((lastDataRequestTimestamp[ResponseDataType::gpsDetails] > 0) && ((millis() - lastDataRequestTimestamp[ResponseDataType::gpsDetails]) < 5000))
     return;
   if (_cmd.requestGpsDetails()) {
     lastDataRequestTimestamp[ResponseDataType::gpsDetails] = millis();
   }
 }
+
+// Minimum time between two UBX queries of the dashboards (see ubxPollLoop)
+static const uint32_t UBX_POLL_INTERVAL_MS = 1000;
 
 void UiSocketHandler::ubxPollLoop()
 {
@@ -1310,6 +1317,12 @@ void UiSocketHandler::ubxPollLoop()
   // Safety: advance even without response after timeout
   if (_lastSentUbxTimestamp > 0 && millis() - _lastSentUbxTimestamp < 5000) return;
 
+  // At most one query per second. Every answer travels as hex over the mower
+  // UART (up to 4 KB) and also carries the receiver's regular messages.
+  static uint32_t lastPollIssued = 0;
+  if (lastPollIssued != 0 && millis() - lastPollIssued < UBX_POLL_INTERVAL_MS) return;
+  lastPollIssued = millis();
+
   // Fast commands: polled every cycle for responsive Simple Dashboard
   static const char* fastCmds[] = {
     "B562010700000819",                   // 0: NAV-PVT
@@ -1317,7 +1330,8 @@ void UiSocketHandler::ubxPollLoop()
   };
 
   // Slow config commands: one per cycle, cycled through.
-  // Hex strings computed with the ubxPoll() helper (layer=7 for CFG-VALGET).
+  // Hex strings computed with the ubxPoll() helper. CFG-VALGET uses layer 0 (RAM =
+  // active configuration) and the same keys as cfgValgetKeys in ubxCommands.ts.
   static const char* slowCmds[] = {
     "B562010400000510",                   // 0: NAV-DOP
     "B5620A0400000E34",                   // 1: MON-VER
@@ -1327,12 +1341,12 @@ void UiSocketHandler::ubxPollLoop()
     "B56201030000040D",                   // 5: NAV-STATUS
     "B562062400002A84",                   // 6: CFG-NAV5
     "B562060800000E30",                   // 7: CFG-RATE
-    "B562068B080000010000010070101B8C",   // 8: CFG-VALGET-PORT1 (UART1 baud)
-    "B562068B1C0000070000010073100200731003007310010074100200741004007410D6C0", // 9: CFG-VALGET-UART1-PROTO
-    "B562068B1400000700001F0031102500311021003110220031103766",   // 10: CFG-VALGET-GNSS
-    "B562068B08000001000001003A10E520",   // 11: CFG-VALGET-SBAS
-    "B562068B080000010000010076102198",   // 12: CFG-VALGET-RTCM
-    "B562068B0C0000070000010021300200213049B2",   // 13: CFG-VALGET-RATE
+    "B562068B080000000000010052402C79",   // 8: CFG-VALGET CFG-UART1-BAUDRATE
+    "B562068B1C0000000000010073100200731004007310010074100200741004007410D013", // 9: CFG-VALGET UART1 in/out protocols (UBX, NMEA, RTCM3)
+    "B562068B1400000000001F00311025003110210031102200311030E1",   // 10: CFG-VALGET GNSS enable (GPS, GLONASS, Galileo, BeiDou)
+    "B562068B08000000000020003110FA83",   // 11: CFG-VALGET CFG-SIGNAL-SBAS_ENA
+    "B562068B0C00000000000400731004007510AD59",   // 12: CFG-VALGET RTCM3 input on UART1/UART2
+    "B562068B0C000000000001002130020021304265",   // 13: CFG-VALGET CFG-RATE-MEAS/NAV
   };
   const uint8_t slowCount = sizeof(slowCmds) / sizeof(slowCmds[0]);
 

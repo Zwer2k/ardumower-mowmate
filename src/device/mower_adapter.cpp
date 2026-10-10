@@ -1179,12 +1179,14 @@ bool MowerAdapter::requestObstacles()
 #if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
 bool MowerAdapter::requestGpsDetails()
 {
+  // Safety throttle only; the interval comes from the caller (GPS dashboard).
   uint32_t now = millis();
-  if (_lastGpsDetailsRequest != 0 && now - _lastGpsDetailsRequest < 20000) return true;
-  _lastGpsDetailsRequest = now ? now : 1;
+  if (_lastGpsDetailsRequest != 0 && now - _lastGpsDetailsRequest < 2000) return true;
   Log(DBG, "%srequestGpsDetails", _LOG_);
   if (!assertSendIsInitialized())
     return false;
+  // Only count a request that went out, otherwise the next try waits for nothing
+  _lastGpsDetailsRequest = now ? now : 1;
   return sendCommand("AT+S4", true);
 }
 
@@ -2425,21 +2427,13 @@ void MowerAdapter::loop()
   case 4: // AT+S5 (motor speeds)
     requestMotorRpm();
     break;
-#if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
-  case 5: // AT+S4 (GPS details incl. satellites)
-    requestGpsDetails();
-    break;
-#endif
+  // AT+S4 (GPS details incl. satellites) is not polled here: only the GPS
+  // dashboard and the live map use it, and they request it while open
+  // (UiSocketHandler::gpsRequestLoop).
   }
-  // The wrap has to cover every case above. It did not before: the counter stopped one
-  // short, so the last slot never ran (GPS details with the map/GPS build, control state
-  // without it). Each request*() throttles itself, so a reachable slot only means the
-  // request now happens at the interval it already declares.
-#if defined(ENABLE_LIVE_MAP) || defined(ENABLE_GPS_DASHBOARD)
-  loopCase = (loopCase + 1) % 6;
-#else
+  // The wrap has to cover every case above. Each request*() throttles itself, so a
+  // reachable slot only means the request happens at the interval it declares.
   loopCase = (loopCase + 1) % 5;
-#endif
 }
 
 bool MowerAdapter::sendCommand(const String& command, bool encrypt)
