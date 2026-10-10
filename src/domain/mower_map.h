@@ -105,6 +105,10 @@ namespace ArduMower {
                 int patternAngle = 0;     // Musterwinkel in Grad
                 float distanceToBorder = 0.0f;
                 int borderLaps = 0;
+                // Abstand der Mähfläche zu den Exclusions (Spurbreiten) und
+                // Runden um die Exclusions; getrennt von distanceToBorder/borderLaps
+                float distanceToExclusions = 0.0f;
+                int exclusionLaps = 0;
                 bool mowBorderCcw = false;
                 // Runtime-Flags (können unterwegs ein-/ausgeschaltet werden)
                 bool doMowArea = true;
@@ -315,6 +319,11 @@ namespace ArduMower {
                         bool v = obj["doExclusionsBorder"];
                         doMowExclusionBorder = v;
                     }
+                    if (obj["distanceToExclusions"].is<JsonVariant>()) distanceToExclusions = obj["distanceToExclusions"];
+                    // Ältere Karten kennen keine eigenen Exclusion-Runden: Dort
+                    // lief um jede Exclusion so viele Runden wie um den Perimeter.
+                    if (obj["exclusionLaps"].is<JsonVariant>()) exclusionLaps = obj["exclusionLaps"];
+                    else exclusionLaps = borderLaps;
                     if (obj["simplifyEpsilon"].is<JsonVariant>()) simplifyEpsilon = obj["simplifyEpsilon"];
                     if (obj["checkTurnRadius"].is<JsonVariant>()) checkTurnRadius = obj["checkTurnRadius"];
                     return true;
@@ -349,6 +358,8 @@ namespace ArduMower {
                     obj["patternRings"] = (pattern == 2);
                     obj["distanceToBorder"] = distanceToBorder;
                     obj["borderLaps"] = borderLaps;
+                    obj["distanceToExclusions"] = distanceToExclusions;
+                    obj["exclusionLaps"] = exclusionLaps;
                     obj["mowBorderCcw"] = mowBorderCcw;
                     // Runtime-Flags (können unterwegs umgeschaltet werden)
                     obj["doMowExclusions"] = doMowExclusions;

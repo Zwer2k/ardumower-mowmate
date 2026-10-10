@@ -35,6 +35,11 @@ struct Settings {
     int angle;
     int distanceToBorder;
     int borderLaps;
+    // Abstand der Mähfläche zu den Exclusions in Spurbreiten und Anzahl der
+    // Runden um die Exclusions. exclusionLaps < 0: wie borderLaps (früheres
+    // Verhalten, als beide Rundenarten gemeinsam berechnet wurden).
+    int distanceToExclusions;
+    int exclusionLaps;
     // Berechnung ist immer aktiv; die Laufzeit-Toggles (doMow*) filtern später.
     bool mowArea;
     bool mowExclusionBorder;
@@ -47,6 +52,7 @@ struct Settings {
     Settings()
         : timestamp(0), pattern(0), width(0.3f), angle(0),
           distanceToBorder(0), borderLaps(0),
+          distanceToExclusions(0), exclusionLaps(-1),
           mowArea(true), mowExclusionBorder(true), mowBorderCcw(false),
           simplifyEpsilon(0.02f) {}
 };
@@ -193,10 +199,9 @@ std::vector<Intersection> intersectRayWithPolygon(double y, const Polygon &poly)
 
 std::vector<Polygon> offsetPolygonInward(const Polygon &poly, double distance);
 
-// Berechnet die mähbare Region (Perimeter minus Exclusions) und die davon um
-// distanceToBorder*width nach innen versetzte Mähfläche. Wird sowohl von
-// calculateWaypoints als auch für die Tag-Klassifizierung im Firmware-Layer
-// verwendet, damit beide Seiten exakt dieselbe Geometrie zugrunde legen.
+// Berechnet die mähbare Region (Perimeter minus der um distanceToExclusions*width
+// aufgeweiteten Exclusions) und die Mähfläche: Perimeter um distanceToBorder*width
+// nach innen versetzt, abzüglich derselben aufgeweiteten Exclusions.
 struct MowableAreas {
     std::vector<Polygon> areasToMow;     // nach distanceToBorder versetzte Mähfläche(n)
     std::vector<Polygon> mowableRegion;  // Perimeter minus Exclusions (Loecher als negative Flaeche)
@@ -205,20 +210,25 @@ struct MowableAreas {
 MowableAreas computeMowableAreas(const Polygon &perimeter, const std::vector<Polygon> &exclusions,
     const Settings &settings);
 
-// Berechnet für jede Border-Lap-Runde (0..laps-1) die Boundary-Polygone, auf
-// denen die Runde verläuft (Perimeter, bei jeder weiteren Runde um width nach
-// innen versetzt; ggf. um Exclusion-Löcher reduziert). Wird von addBorderLaps
-// und von der Tag-Klassifizierung im Firmware-Layer verwendet.
-std::vector<std::vector<Polygon>> computeBorderLapBoundaries(const Polygon &perimeter,
-    const std::vector<Polygon> &holes, int laps, double width);
+// Ringe der Randrunden. Runde k um den Perimeter liegt k*width innen, um
+// Ausbuchtungen durch randnahe Exclusions herum (Tag Border). Runde k um eine
+// Exclusion liegt k*width außerhalb davon (Tag ExclusionBorder); Exclusions,
+// die mit dem Perimeter verschmelzen, umfahren bereits die Perimeterrunden.
+struct LapRings {
+    std::vector<std::vector<Polygon>> perimeterLaps;
+    std::vector<std::vector<Polygon>> exclusionLaps;
+};
+LapRings computeLapRings(const Polygon &perimeter, const std::vector<Polygon> &exclusions,
+    int borderLaps, int exclusionLaps, double width);
 
 Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow,
     const std::vector<Polygon> &holes, double width, const Point &startNear,
     const ConnectorRouting *routing = nullptr, const Progress *progress = nullptr);
 // router (optional) verbindet die einzelnen Runden kollisionsfrei; ohne router
 // werden sie direkt aneinandergehängt.
-Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &holes,
-    int laps, bool ccw, const Point &startNear, double width,
+// Zuerst alle Perimeterrunden, dann alle Exclusion-Runden.
+Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &exclusions,
+    int borderLaps, int exclusionLaps, bool ccw, const Point &startNear, double width,
     const FreeSpaceRouter *router = nullptr);
 
 void sortSolutionPolygonsByDistance(std::vector<Polygon> &solution, const Point &startPt);

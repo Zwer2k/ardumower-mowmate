@@ -24,6 +24,7 @@ static const double DEG2RAD = _PI / 180.0;
 
 static const uint8_t RouteTagArea = 1;
 static const uint8_t RouteTagBorder = 3;
+static const uint8_t RouteTagExclusionBorder = 4;
 static const uint8_t RouteTagConnector = 6;
 
 // Tunable path-planner parameters.  These are expressed as factors of the
@@ -634,6 +635,11 @@ static Polygon pruneOutside(const Polygon &waypoints, const Polygon &area) {
 // that was already traversed earlier, forcing the mower to turn 180 degrees.
 // A point is only dropped when the resulting shortcut stays inside the
 // perimeter, so we never cut across concave corners or exclusion holes.
+// Randrunden (Perimeter und Exclusions) behalten jeden Punkt.
+static inline bool isLapTag(uint8_t tag) {
+    return tag == RouteTagBorder || tag == RouteTagExclusionBorder;
+}
+
 static Polygon simplifyRoute(const Polygon &route, const FreeSpaceRouter &router,
     double epsilon = 0.02) {
     if (route.size() < 3) return route;
@@ -650,15 +656,15 @@ static Polygon simplifyRoute(const Polygon &route, const FreeSpaceRouter &router
         // Skip near-duplicate consecutive points, unless the point is part of
         // a detour and the bypass to the next point would cut a corner.
         if (!out.empty() && distance(out.back(), route[i]) < epsilon &&
-            out.back().tag != RouteTagBorder && route[i].tag != RouteTagBorder &&
+            !isLapTag(out.back().tag) && !isLapTag(route[i].tag) &&
             (i + 1 >= route.size() || segmentInside(out.back(), route[i + 1])))
             continue;
         // Skip a point when it lies almost on the straight line between its
         // neighbours (collinear within epsilon).  This removes intermediate
         // points on long straight segments without changing the path shape.
         if (out.size() >= 1 && i + 1 < route.size() &&
-            out.back().tag != RouteTagBorder && route[i].tag != RouteTagBorder &&
-            route[i + 1].tag != RouteTagBorder) {
+            !isLapTag(out.back().tag) && !isLapTag(route[i].tag) &&
+            !isLapTag(route[i + 1].tag)) {
             const Point &prev = out.back();
             const Point &next = route[i + 1];
             double cross = std::abs(crossProduct(prev, route[i], next));
@@ -687,8 +693,7 @@ static Polygon simplifyRoute(const Polygon &route, const FreeSpaceRouter &router
 
             // A closed Border lap intentionally returns to its first point.
             // It is not redundant backtracking and must retain every edge.
-            if (a.tag == RouteTagBorder || b.tag == RouteTagBorder ||
-                out[i].tag == RouteTagBorder) {
+            if (isLapTag(a.tag) || isLapTag(b.tag) || isLapTag(out[i].tag)) {
                 cleaned.push_back(out[i]);
                 continue;
             }
@@ -923,59 +928,74 @@ Polygon calculateRingsPattern(const Polygon &perimeter, const Polygon &areaToMow
     return route;
 }
 
-std::vector<std::vector<Polygon>> computeBorderLapBoundaries(const Polygon &perimeter,
-    const std::vector<Polygon> &holes, int laps, double width)
+// Clipper behält beim Versetzen die Orientierung der Eingabe bei; für
+// Vergleiche über die Flächenvorzeichen werden Außenkonturen positiv gedreht.
+static Polygon positivelyOriented(const Polygon &p) {
+    return polygonArea(p) < 0.0 ? reversePolygon(p) : p;
+}
+
+// Exclusions um dist nach außen versetzt (positiv orientiert)
+static std::vector<Polygon> expandExclusions(const std::vector<Polygon> &exclusions, double dist) {
+    std::vector<Polygon> out;
+    for (const auto &excl : exclusions) {
+        if (excl.size() < 3) continue;
+        if (dist <= 0.0) { out.push_back(excl); continue; }
+        for (const auto &p : clipOffset(excl, dist))
+            out.push_back(polygonArea(p) > 0.0 ? p : reversePolygon(p));
+    }
+    return out;
+}
+
+LapRings computeLapRings(const Polygon &perimeter, const std::vector<Polygon> &exclusions,
+    int borderLaps, int exclusionLaps, double width)
 {
-    std::vector<std::vector<Polygon>> result;
-    if (laps <= 0 || perimeter.size() < 3) return result;
+    LapRings result;
+    if (perimeter.size() < 3) return result;
+    std::vector<Polygon> validExclusions;
+    for (const auto &e : exclusions) if (e.size() >= 3) validExclusions.push_back(e);
 
-    Polygon currentBoundary = perimeter;
-    for (int lap = 0; lap < laps; lap++) {
-        // If we are supposed to mow exclusion borders, the lap boundary is the
-        // outer perimeter with all exclusions cut out.  Offsetting this inward
-        // then gives us separate polygons: one for the outer perimeter and one
-        // for each exclusion, all at the correct lap distance.
-        std::vector<Polygon> boundaries;
-        if (!holes.empty()) {
-            auto diff = clipDifference(currentBoundary, holes);
-            for (const auto &p : diff) {
-                if (p.size() >= 3) boundaries.push_back(p);
-            }
+    // Perimeterrunden: Perimeter je Runde um width nach innen, minus Exclusions.
+    // Nur die Außenkonturen; die Löcher sind die Ringe der Exclusion-Runden.
+    std::vector<Polygon> current{positivelyOriented(perimeter)};
+    for (int lap = 0; lap < borderLaps && !current.empty(); lap++) {
+        std::vector<Polygon> rings;
+        for (const auto &boundary : current) {
+            if (validExclusions.empty()) { rings.push_back(boundary); continue; }
+            for (const auto &p : clipDifference(boundary, validExclusions))
+                if (p.size() >= 3 && polygonArea(p) > 0.0) rings.push_back(p);
         }
-        if (boundaries.empty()) boundaries.push_back(currentBoundary);
-        result.push_back(boundaries);
+        if (rings.empty()) break;
+        result.perimeterLaps.push_back(rings);
+        if (lap + 1 < borderLaps) {
+            std::vector<Polygon> next;
+            for (const auto &boundary : current)
+                for (const auto &p : clipOffset(boundary, -width))
+                    if (p.size() >= 3) next.push_back(positivelyOriented(p));
+            current = std::move(next);
+        }
+    }
 
-        // Prepare the next lap boundary by shrinking the current outer
-        // perimeter inward.  Holes stay fixed so the inner lap polygons keep the
-        // correct shape around the exclusions.
-        if (lap + 1 < laps) {
-            auto nextList = clipOffset(currentBoundary, -width);
-            if (nextList.empty() || nextList[0].size() < 3) break;
-            currentBoundary = nextList[0];
-        }
+    // Exclusion-Runden: Exclusions je Runde um width nach außen; die Löcher
+    // von Perimeter minus aufgeweiteten Exclusions sind die Ringe.
+    for (int lap = 0; lap < exclusionLaps && !validExclusions.empty(); lap++) {
+        std::vector<Polygon> rings;
+        for (const auto &p : clipDifference(perimeter, expandExclusions(validExclusions, lap * width)))
+            if (p.size() >= 3 && polygonArea(p) < 0.0) rings.push_back(p);
+        if (rings.empty()) break;
+        result.exclusionLaps.push_back(rings);
     }
     return result;
 }
 
-Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &holes,
-    int laps, bool ccw, const Point &startNear, double width,
+// Hängt die Ringe einer Rundenart an die Route an, jeweils beim nächstgelegenen
+// Ring und Punkt beginnend. Übergänge laufen über den Router.
+static void appendLapRings(Polygon &route, Point &near,
+    const std::vector<std::vector<Polygon>> &laps, uint8_t tag, bool ccw,
     const FreeSpaceRouter *router)
 {
-    PP_LOG(0, "%saddBorderLaps laps=%d ccw=%d width=%.3f", _LOG_, laps, ccw, width);
-    if (laps <= 0 || perimeter.size() < 3) return {};
-
-    auto lapBoundaries = computeBorderLapBoundaries(perimeter, holes, laps, width);
-
-    Polygon route;
-    Point near = startNear;
-
-    for (size_t lap = 0; lap < lapBoundaries.size(); lap++) {
-        std::vector<Polygon> boundaries = lapBoundaries[lap];
+    for (const auto &lapRings : laps) {
+        std::vector<Polygon> boundaries = lapRings;
         if (boundaries.empty()) break;
-
-        // Sort boundaries so we start each lap from the closest polygon and
-        // continue with the nearest remaining polygon.  This produces a
-        // continuous-ish lap route that stays within the mowable area.
         sortSolutionPolygonsByDistance(boundaries, near);
 
         for (size_t b = 0; b < boundaries.size(); b++) {
@@ -1000,10 +1020,10 @@ Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &hole
                 Polygon conn = router->route(route.back(), ordered[0]);
                 for (size_t k = 1; k + 1 < conn.size(); k++) {
                     if (distance(route.back(), conn[k]) <= 0.01) continue;
-                    // Umweg innerhalb der Randrunden gehört zur Kategorie Rand
-                    // (wie Umwege innerhalb eines Musters).
+                    // Umweg zur Runde gehört zu deren Kategorie (wie Umwege
+                    // innerhalb eines Musters).
                     Point connector = conn[k];
-                    connector.tag = RouteTagBorder;
+                    connector.tag = tag;
                     route.push_back(connector);
                 }
             }
@@ -1011,7 +1031,7 @@ Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &hole
             for (const auto &p : ordered) {
                 if (route.empty() || distance(route.back(), p) > 0.01) {
                     Point lapPoint = p;
-                    lapPoint.tag = RouteTagBorder;
+                    lapPoint.tag = tag;
                     route.push_back(lapPoint);
                 }
             }
@@ -1019,6 +1039,21 @@ Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &hole
             if (!route.empty()) near = route.back();
         }
     }
+}
+
+Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &exclusions,
+    int borderLaps, int exclusionLaps, bool ccw, const Point &startNear, double width,
+    const FreeSpaceRouter *router)
+{
+    PP_LOG(0, "%saddBorderLaps laps=%d exclusionLaps=%d ccw=%d width=%.3f", _LOG_,
+        borderLaps, exclusionLaps, ccw, width);
+    if ((borderLaps <= 0 && exclusionLaps <= 0) || perimeter.size() < 3) return {};
+
+    LapRings rings = computeLapRings(perimeter, exclusions, borderLaps, exclusionLaps, width);
+    Polygon route;
+    Point near = startNear;
+    appendLapRings(route, near, rings.perimeterLaps, RouteTagBorder, ccw, router);
+    appendLapRings(route, near, rings.exclusionLaps, RouteTagExclusionBorder, ccw, router);
 
     PP_LOG(0, "%saddBorderLaps done: %d points", _LOG_, route.size());
     return route;
@@ -1330,44 +1365,32 @@ MowableAreas computeMowableAreas(const Polygon &perimeter, const std::vector<Pol
     MowableAreas result;
     std::vector<Polygon> &areasToMow = result.areasToMow;
     std::vector<Polygon> &mowableRegion = result.mowableRegion;
+    const double borderDist = settings.distanceToBorder > 0 && settings.width > 0.001
+        ? settings.distanceToBorder * settings.width : 0.0;
 
     if (exclusions.empty()) {
-      if (settings.distanceToBorder > 0 && settings.width > 0.001) {
-        double offsetDist = settings.distanceToBorder * settings.width;
-        areasToMow = offsetPolygonInward(perimeter, offsetDist);
-      }
+      if (borderDist > 0) areasToMow = offsetPolygonInward(perimeter, borderDist);
       mowableRegion = areasToMow.empty() ? std::vector<Polygon>{perimeter} : areasToMow;
     } else {
-      // If the user does not want to mow the exclusion border, keep the
-      // mowable area one full mowing width away from each exclusion so the
-      // generated rings do not graze the exclusion boundary and so the
-      // unmowed buffer around each exclusion is at most one mower width wide.
-      std::vector<Polygon> effectiveExclusions = exclusions;
-      if (!settings.mowExclusionBorder) {
-        double exclusionMargin = settings.width * Tune::exclusionMarginFactor;
-        if (exclusionMargin < 1e-3) exclusionMargin = 1e-3;
-        std::vector<Polygon> expanded;
-        for (const auto &excl : exclusions) {
-          if (excl.size() < 3) continue;
-          auto e = clipOffset(excl, exclusionMargin);
-          for (const auto &p : e) {
-            if (polygonArea(p) > 0.0) expanded.push_back(p);
-            else expanded.push_back(reversePolygon(p));
-          }
-        }
-        if (!expanded.empty()) effectiveExclusions = std::move(expanded);
-      }
+      // Abstand zu den Exclusions: distanceToExclusions Spurbreiten. Wird der
+      // Exclusion-Rand nicht gemäht, bleibt mindestens eine Spurbreite frei,
+      // damit die Mählinien die Exclusion nicht streifen.
+      double exclusionMargin = settings.distanceToExclusions > 0
+          ? settings.distanceToExclusions * settings.width : 0.0;
+      if (!settings.mowExclusionBorder)
+        exclusionMargin = std::max(exclusionMargin, std::max(1e-3, settings.width * Tune::exclusionMarginFactor));
+      const std::vector<Polygon> effectiveExclusions = expandExclusions(exclusions, exclusionMargin);
       mowableRegion = clipDifference(perimeter, effectiveExclusions);
       if (mowableRegion.empty()) {
         PP_LOG(0, "%sExclusions removed entire perimeter, nothing to mow", _LOG_);
         return result;
       }
-      if (settings.distanceToBorder > 0 && settings.width > 0.001) {
-        double offsetDist = settings.distanceToBorder * settings.width;
-        for (const auto &area : mowableRegion) {
-          if (polygonArea(area) < 0.0) continue; // skip holes
-          auto offset = offsetPolygonInward(area, offsetDist);
-          areasToMow.insert(areasToMow.end(), offset.begin(), offset.end());
+      if (borderDist > 0) {
+        // Erst der Randabstand zum Perimeter, dann der Abstand zu den Exclusions:
+        // beide wirken unabhängig, auch bei Exclusions am Perimeter.
+        for (const auto &inset : offsetPolygonInward(perimeter, borderDist)) {
+          for (const auto &area : clipDifference(positivelyOriented(inset), effectiveExclusions))
+            if (polygonArea(area) > 0.0) areasToMow.push_back(area);
         }
       } else {
         for (const auto &area : mowableRegion)
@@ -1411,9 +1434,10 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
     const Progress safetyProgress = progress.sub(0.92, 0.99);
     progress.report(0.0);
 
-    PP_LOG(0, "%scalculateWaypoints pattern=%d width=%.3f angle=%d distToBorder=%d borderLaps=%d",
+    PP_LOG(0, "%scalculateWaypoints pattern=%d width=%.3f angle=%d distToBorder=%d borderLaps=%d distToExclusions=%d exclusionLaps=%d",
         _LOG_, settings.pattern, settings.width, settings.angle,
-        settings.distanceToBorder, settings.borderLaps);
+        settings.distanceToBorder, settings.borderLaps,
+        settings.distanceToExclusions, settings.exclusionLaps);
 
     Polygon perimeter = map.perimeter;
     if (perimeter.size() < 3) {
@@ -1463,16 +1487,18 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
     routing.perimeter = &router;
     for (const auto &r : areaRouters) routing.areas.push_back(&r);
 
-    if (settings.borderLaps > 0 && settings.mowBorderCcw) {
-        std::vector<Polygon> borderHoles;
-        if (settings.mowExclusionBorder) {
-            for (const auto &ex : map.exclusions) {
-                if (ex.size() >= 3) borderHoles.push_back(ex);
-            }
-        }
-        Polygon borderLaps = addBorderLaps(perimeter, borderHoles, settings.borderLaps, true, startNear,
-            settings.width, &router);
-        route = borderLaps;
+    std::vector<Polygon> lapExclusions;
+    for (const auto &ex : map.exclusions)
+        if (ex.size() >= 3) lapExclusions.push_back(ex);
+    const int borderLaps = std::max(0, settings.borderLaps);
+    const int exclusionLaps = !settings.mowExclusionBorder ? 0
+        : (settings.exclusionLaps < 0 ? borderLaps : settings.exclusionLaps);
+    const bool hasLaps = borderLaps > 0 || (exclusionLaps > 0 && !lapExclusions.empty());
+
+    if (hasLaps && settings.mowBorderCcw) {
+        Polygon laps = addBorderLaps(perimeter, lapExclusions, borderLaps, exclusionLaps, true,
+            startNear, settings.width, &router);
+        route = laps;
         if (!route.empty()) startNear = route.back();
     }
 
@@ -1588,25 +1614,19 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
     }
 
     patternProgress.report(1.0);
-    if (settings.borderLaps > 0 && !settings.mowBorderCcw) {
-        std::vector<Polygon> borderHoles;
-        if (settings.mowExclusionBorder) {
-            for (const auto &ex : map.exclusions) {
-                if (ex.size() >= 3) borderHoles.push_back(ex);
-            }
-        }
-        Polygon borderLaps = addBorderLaps(perimeter, borderHoles, settings.borderLaps, false, startNear,
-            settings.width, &router);
-        if (!route.empty() && !borderLaps.empty()) {
-            Polygon conn = router.route(route.back(), borderLaps[0]);
+    if (hasLaps && !settings.mowBorderCcw) {
+        Polygon lapsRoute = addBorderLaps(perimeter, lapExclusions, borderLaps, exclusionLaps, false,
+            startNear, settings.width, &router);
+        if (!route.empty() && !lapsRoute.empty()) {
+            Polygon conn = router.route(route.back(), lapsRoute[0]);
             for (size_t k = 0; k < conn.size(); k++) {
                 if (distance(route.back(), conn[k]) <= 0.01) continue;
                 Point connector = conn[k];
-                if (distance(connector, borderLaps[0]) > 0.01) connector.tag = RouteTagConnector;
+                if (distance(connector, lapsRoute[0]) > 0.01) connector.tag = RouteTagConnector;
                 route.push_back(connector);
             }
         }
-        route.insert(route.end(), borderLaps.begin(), borderLaps.end());
+        route.insert(route.end(), lapsRoute.begin(), lapsRoute.end());
     }
 
     borderProgress.report(1.0);

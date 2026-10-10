@@ -339,7 +339,9 @@
     .dashboard-content {
         width: 100%;
         height: 100vh;
+        height: var(--app-height, 100dvh);
         min-height: 100vh;
+        min-height: var(--app-height, 100dvh);
         padding: 0;
         margin: 0;
         display: flex;

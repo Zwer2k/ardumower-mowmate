@@ -53,6 +53,7 @@
     .dashboard-content {
         width: 100%;
         height: 100vh;
+        height: var(--app-height, 100dvh);
         padding: 0;
         margin: 0;
         display: flex;
@@ -68,6 +69,7 @@
         display: flex;
         flex-direction: column;
         height: calc(100vh - 48px);
+        height: calc(var(--app-height, 100dvh) - 48px);
         overflow: hidden;
     }
 </style>

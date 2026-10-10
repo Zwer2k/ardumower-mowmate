@@ -62,8 +62,20 @@
     const help = () => (helpOpen = true);
     let url: string;
 
+    // Sichtbare Fensterhöhe als CSS-Variable --app-height. Mobile Browser
+    // rechnen 100vh mit eingeklappter, manche 100dvh mit ausgeklappter
+    // Adressleiste; beides passt nicht immer zur tatsächlich sichtbaren Fläche
+    // (Knöpfe unten abgeschnitten bzw. Lücke darunter).
+    function updateAppHeight() {
+        document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+    }
+
     onMount(() => {
         if (browser) {
+            updateAppHeight();
+            window.addEventListener('resize', updateAppHeight);
+            window.visualViewport?.addEventListener('resize', updateAppHeight);
+            window.addEventListener('orientationchange', updateAppHeight);
             const loader = document.getElementById('initial-loader');
             if (loader) {
                 loader.style.opacity = '0';
@@ -83,6 +95,11 @@
     });
 
     onDestroy(() => {
+        if (browser) {
+            window.removeEventListener('resize', updateAppHeight);
+            window.visualViewport?.removeEventListener('resize', updateAppHeight);
+            window.removeEventListener('orientationchange', updateAppHeight);
+        }
         if (connectionWarningTimer) {
             clearTimeout(connectionWarningTimer);
         }
@@ -282,17 +299,20 @@
 :global(body.dashboard-mode) {
     overflow: hidden !important;
     height: 100vh !important;
+    height: var(--app-height, 100dvh) !important;
 }
 
 :global(body.dashboard-mode .bx--content) {
     padding: 0 !important;
     margin: 0 !important;
     height: 100vh !important;
+    height: var(--app-height, 100dvh) !important;
     overflow: hidden !important;
 }
 
 :global(.dashboard-page) {
     height: 100vh !important;
+    height: var(--app-height, 100dvh) !important;
     overflow: hidden !important;
 }
 
@@ -300,6 +320,7 @@
 :global(body:not(.dashboard-mode) .bx--content) {
     padding: 1rem !important;
     height: calc(100vh - 48px) !important;
+    height: calc(var(--app-height, 100dvh) - 48px) !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
 }

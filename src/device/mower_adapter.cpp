@@ -154,6 +154,8 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   _map.patternAngle = _mowSettings.angle;
   _map.distanceToBorder = _mowSettings.distanceToBorder;
   _map.borderLaps = _mowSettings.borderLaps;
+  _map.distanceToExclusions = _mowSettings.distanceToExclusions;
+  _map.exclusionLaps = _mowSettings.exclusionLaps;
   _map.mowBorderCcw = _mowSettings.mowBorderCcw;
   _map.doMowArea = _mowSettings.doMowArea;
   _map.doMowPerimeter = _mowSettings.doMowPerimeter;
@@ -186,6 +188,8 @@ void MowerAdapter::syncMowSettingsFromMap() {
   _mowSettings.angle = _map.patternAngle;
   _mowSettings.distanceToBorder = _map.distanceToBorder;
   _mowSettings.borderLaps = _map.borderLaps;
+  _mowSettings.distanceToExclusions = _map.distanceToExclusions;
+  _mowSettings.exclusionLaps = _map.exclusionLaps;
   _mowSettings.mowBorderCcw = _map.mowBorderCcw;
   _mowSettings.doMowArea = _map.doMowArea;
   _mowSettings.doMowPerimeter = _map.doMowPerimeter;
@@ -1985,12 +1989,16 @@ ArduMower::Domain::Robot::MowSettings MowerAdapter::settingsFromMap(const ArduMo
   s.angle = map.patternAngle;
   s.distanceToBorder = map.distanceToBorder;
   s.borderLaps = map.borderLaps;
+  s.distanceToExclusions = map.distanceToExclusions;
+  s.exclusionLaps = map.exclusionLaps;
   s.mowBorderCcw = map.mowBorderCcw;
   s.doMowArea = map.doMowArea;
   s.doMowPerimeter = map.doMowPerimeter;
   s.doMowBorder = map.doMowBorder;
   s.doMowExclusions = map.doMowExclusions;
   s.doMowExclusionBorder = map.doMowExclusionBorder;
+  s.simplifyEpsilon = map.simplifyEpsilon;
+  s.checkTurnRadius = map.checkTurnRadius;
   s.timestamp = millis();
   return s;
 }

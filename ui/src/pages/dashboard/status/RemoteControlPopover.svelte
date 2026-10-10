@@ -380,6 +380,7 @@
             right: 0;
             width: 100vw;
             height: calc(100vh - 48px);
+            height: calc(var(--app-height, 100dvh) - 48px);
             border-radius: 0;
             border: none;
             border-top: 1px solid #ddd;
