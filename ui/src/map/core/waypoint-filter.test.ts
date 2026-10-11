@@ -45,6 +45,25 @@ describe("filterWaypointsByToggles", () => {
     expect(filtered).toEqual([{ x: 2, y: 0, tag: WpTag.BORDER, routeBreakBefore: true }]);
   });
 
+  it("lets a connector between Area and an exclusion lap follow Mow Excl. border, not Mow Border", () => {
+    const points = [
+      { x: 0, y: 0, tag: WpTag.AREA },
+      { x: 1, y: 0, tag: WpTag.CONNECTOR, conn: true },
+      { x: 2, y: 0, tag: WpTag.CONNECTOR, conn: true },
+      { x: 3, y: 0, tag: WpTag.EXCLUSION_BORDER },
+    ];
+
+    const exclusionOn = filterWaypointsByToggles(points, map, {
+      ...settings, doMowBorder: false, doMowExclusionBorder: true,
+    });
+    const exclusionOff = filterWaypointsByToggles(points, map, {
+      ...settings, doMowBorder: true, doMowExclusionBorder: false,
+    });
+
+    expect(exclusionOn).toHaveLength(4);
+    expect(exclusionOff).toEqual([{ x: 0, y: 0, tag: WpTag.AREA }]);
+  });
+
   it("removes mixed connectors when Area or Border is disabled", () => {
     const points = [
       { x: 0, y: 0, tag: WpTag.AREA },

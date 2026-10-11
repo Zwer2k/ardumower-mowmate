@@ -122,6 +122,28 @@ int main() {
         expect(c.exclusionBorder == 0, "mowExclusionBorder = false: no exclusion laps");
     }
 
+    {
+        // Exclusion am Perimeter: Die Perimeterrunde umfährt sie; die Stücke
+        // entlang ihrer Kante gehören zum Exclusion-Rand (Schalter "Mow Excl. border").
+        Map map = makeMap();
+        map.exclusions = {{{0, 4}, {2, 4}, {2, 6}, {0, 6}}};
+        const Polygon edgeExcl = map.exclusions[0];
+        Settings s = base;
+        s.distanceToBorder = 0;
+        s.exclusionLaps = 1;
+        Polygon route = calculateWaypoints(map, s, nullptr);
+        expect(route_check::check(map, route).empty(), "touching exclusion: no violations");
+        double borderAlong = 0, exclusionAlong = 0;
+        for (size_t i = 1; i < route.size(); i++) {
+            const Point &a = route[i - 1], &b = route[i];
+            if (route_check::distToBoundary(a, edgeExcl) > 0.005 || route_check::distToBoundary(b, edgeExcl) > 0.005) continue;
+            if (a.tag == TAG_BORDER && b.tag == TAG_BORDER) borderAlong += distance(a, b);
+            if (a.tag == TAG_EXCLUSION_BORDER && b.tag == TAG_EXCLUSION_BORDER) exclusionAlong += distance(a, b);
+        }
+        expect(borderAlong < 1e-6, "touching exclusion: no Border segment along its edge (" + std::to_string(borderAlong) + " m)");
+        expect(exclusionAlong > 5.0, "touching exclusion: its edge is an exclusion lap (" + std::to_string(exclusionAlong) + " m)");
+    }
+
     printf("%s\n", failures == 0 ? "exclusion laps: all checks passed" : "exclusion laps: FAILED");
     return failures == 0 ? 0 : 1;
 }
