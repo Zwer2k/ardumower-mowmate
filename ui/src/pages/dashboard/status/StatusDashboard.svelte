@@ -278,8 +278,7 @@
 <style lang="scss">
     .dashboard-content {
         width: 100%;
-        height: 100vh;
-        height: var(--app-height, 100dvh);
+        height: 100%;
         padding: 48px 0 0; /* Carbon-Header */
         margin: 0;
         display: flex;

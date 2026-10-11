@@ -84,11 +84,16 @@
 </div>
 
 <style>
+    /* An den sichtbaren Bildschirm gebunden: Mobile Browser richten fixierte
+       Elemente mit top/bottom 0 an der tatsächlich sichtbaren Fläche aus, auch
+       während die Adressleiste ein- oder ausklappt. Eine berechnete Höhe
+       (vh, dvh oder innerHeight) passt auf manchen Geräten nicht genau. */
     .dashboard-container {
-        position: relative;
-        width: 100%;
-        height: 100vh;
-        height: var(--app-height, 100dvh);
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
         overflow: hidden;
     }
 
