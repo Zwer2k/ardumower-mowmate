@@ -269,8 +269,8 @@
   <style>
   
     .terminal-container {
-      height: calc(100vh - 48px); /* Vollhöhe minus Header */
-      height: calc(var(--app-height, 100dvh) - 48px);
+      /* füllt den Bereich unter dem Header (das Dashboard zieht ihn ab) */
+      height: 100%;
       background-color: #1a1a1a;
       border-radius: 2px;
       box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);

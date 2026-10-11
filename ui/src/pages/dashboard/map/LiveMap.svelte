@@ -444,8 +444,7 @@
         display: flex;
         flex-direction: column;
         width: 100%;
-        height: 100vh;
-        height: var(--app-height, 100dvh);
+        height: 100%;
         padding-top: 48px;
         box-sizing: border-box;
     }

@@ -98,9 +98,36 @@ export function isCategoryActive(cat: WpCategory, settings: MowSettings): boolea
     case 'border': return settings.doMowBorder ?? false;
     case 'exclusionBorder': return settings.doMowExclusionBorder ?? false;
     case 'connector': return true;
-    case 'mixedConnector': return (settings.doMowArea ?? true) && (settings.doMowBorder ?? false);
+    // Decided from the joined categories, see activeMask().
+    case 'mixedConnector': return true;
     default: return false;
   }
+}
+
+// Active state per point. A mixed connector joins two categories (e.g. Area
+// and a Border or an exclusion lap) and is useful only when both stay
+// enabled, so it follows the nearest real route point before and after it.
+function activeMask(
+  points: { x: number; y: number; tag?: number; conn?: boolean }[],
+  map: Map,
+  settings: MowSettings
+): boolean[] {
+  const cats = points.map(p => classifyWaypoint(p, map, settings));
+  const active = cats.map(c => isCategoryActive(c, settings));
+  const joins = (c: WpCategory) => c === 'mixedConnector' || c === 'connector';
+  for (let i = 0; i < points.length; i++) {
+    if (cats[i] !== 'mixedConnector') continue;
+    let before = true;
+    for (let k = i - 1; k >= 0; k--) {
+      if (!joins(cats[k])) { before = active[k]; break; }
+    }
+    let after = true;
+    for (let k = i + 1; k < points.length; k++) {
+      if (!joins(cats[k])) { after = active[k]; break; }
+    }
+    active[i] = before && after;
+  }
+  return active;
 }
 
 export function filterWaypointsByToggles(
@@ -108,16 +135,17 @@ export function filterWaypointsByToggles(
   map: Map,
   settings: MowSettings
 ): { x: number; y: number; tag?: number; conn?: boolean; routeBreakBefore?: boolean }[] {
+  const active = activeMask(points, map, settings);
   const result: { x: number; y: number; tag?: number; conn?: boolean; routeBreakBefore?: boolean }[] = [];
   let skippedRoutePart = false;
-  for (const point of points) {
-    if (!isCategoryActive(classifyWaypoint(point, map, settings), settings)) {
+  points.forEach((point, i) => {
+    if (!active[i]) {
       skippedRoutePart = true;
-      continue;
+      return;
     }
     result.push(skippedRoutePart ? { ...point, routeBreakBefore: true } : point);
     skippedRoutePart = false;
-  }
+  });
   return result;
 }
 
@@ -126,5 +154,5 @@ export function waypointActiveStates(
   map: Map,
   settings: MowSettings
 ): boolean[] {
-  return points.map(p => isCategoryActive(classifyWaypoint(p, map, settings), settings));
+  return activeMask(points, map, settings);
 }

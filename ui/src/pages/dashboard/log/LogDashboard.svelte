@@ -52,8 +52,7 @@
 <style lang="scss">
     .dashboard-content {
         width: 100%;
-        height: 100vh;
-        height: var(--app-height, 100dvh);
+        height: 100%;
         padding: 0;
         margin: 0;
         display: flex;
@@ -68,8 +67,7 @@
         flex: 1;
         display: flex;
         flex-direction: column;
-        height: calc(100vh - 48px);
-        height: calc(var(--app-height, 100dvh) - 48px);
+        height: calc(100% - 48px);
         overflow: hidden;
     }
 </style>

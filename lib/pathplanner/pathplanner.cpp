@@ -1053,6 +1053,21 @@ Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &excl
     Polygon route;
     Point near = startNear;
     appendLapRings(route, near, rings.perimeterLaps, RouteTagBorder, ccw, router);
+    // Exclusions, die mit dem Perimeter verschmelzen, umfahren die
+    // Perimeterrunden. Die Stücke entlang ihrer Kante gehören zum Exclusion-Rand
+    // und folgen damit dem Schalter "Mow Excl. border", nicht "Mow Border".
+    if (exclusionLaps > 0) {
+        const double onEdge = 0.005;
+        for (auto &p : route) {
+            if (p.tag != RouteTagBorder) continue;
+            for (const auto &ex : exclusions) {
+                if (ex.size() >= 3 && distance(p, nearestPointOnPolygon(p, ex)) < onEdge) {
+                    p.tag = RouteTagExclusionBorder;
+                    break;
+                }
+            }
+        }
+    }
     appendLapRings(route, near, rings.exclusionLaps, RouteTagExclusionBorder, ccw, router);
 
     PP_LOG(0, "%saddBorderLaps done: %d points", _LOG_, route.size());

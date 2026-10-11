@@ -55,8 +55,7 @@
 <style lang="scss">
     .dashboard-content {
         width: 100%;
-        height: 100vh;
-        height: var(--app-height, 100dvh);
+        height: 100%;
         padding: 0;
         margin: 0;
         display: flex;
@@ -71,8 +70,7 @@
         flex: 1;
         display: flex;
         flex-direction: column;
-        height: calc(100vh - 48px);
-        height: calc(var(--app-height, 100dvh) - 48px);
+        height: calc(100% - 48px);
         overflow: hidden;
         padding: 0;
     }
@@ -82,8 +80,7 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        height: calc(100vh - 48px);
-        height: calc(var(--app-height, 100dvh) - 48px);
+        flex: 1;
         text-align: center;
         color: #6f6f6f;
 

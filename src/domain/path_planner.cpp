@@ -105,9 +105,8 @@ Polygon filterRouteByToggles(const Polygon &route,
             case Tag::EXCLUSION_BORDER: return s.doMowExclusionBorder;
             case Tag::TRANSIT:
             case Tag::NONE: return true;
-            // Mixed connectors join e.g. an Area route to a Border lap. They
-            // are useful only when both categories remain enabled.
-            case Tag::CONNECTOR: return s.doMowArea && s.doMowBorder;
+            // Mixed connectors: decided below from the categories they join.
+            case Tag::CONNECTOR: return true;
         }
         return true;
     };
@@ -115,6 +114,24 @@ Polygon filterRouteByToggles(const Polygon &route,
     std::vector<bool> active(route.size(), false);
     for (size_t i = 0; i < route.size(); i++) {
         active[i] = tagActive(route[i].tag, settings);
+    }
+    // A mixed connector joins two categories (e.g. Area and a Border or an
+    // exclusion lap). It is useful only when both of them remain enabled, so
+    // it follows the nearest real route point before and after it.
+    auto isConnector = [](uint8_t tag) {
+        return static_cast<Tag>(tag) == Tag::CONNECTOR || static_cast<Tag>(tag) == Tag::TRANSIT ||
+               static_cast<Tag>(tag) == Tag::NONE;
+    };
+    for (size_t i = 0; i < route.size(); i++) {
+        if (static_cast<Tag>(route[i].tag) != Tag::CONNECTOR) continue;
+        bool before = true, after = true;
+        for (size_t k = i; k-- > 0;) {
+            if (!isConnector(route[k].tag)) { before = active[k]; break; }
+        }
+        for (size_t k = i + 1; k < route.size(); k++) {
+            if (!isConnector(route[k].tag)) { after = active[k]; break; }
+        }
+        active[i] = before && after;
     }
 
     struct Segment {
