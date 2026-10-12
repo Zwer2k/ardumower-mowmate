@@ -37,9 +37,11 @@ void Terminal::loop()
     return;
   }
 
-  _terminalRouter->loop();
+  // Während der Baudraten-Erkennung liest der TerminalPort selbst; eine
+  // Unterbrechung (Firmware-Upload) gilt dann sofort als erreicht.
+  if (!readingPaused) _terminalRouter->loop();
 
-  if (prepareSuspended && !_terminalRouter->inAction()) 
+  if (prepareSuspended && (readingPaused || !_terminalRouter->inAction()))
   {
     prepareSuspended = false;
     suspended = true;
@@ -74,6 +76,7 @@ void Terminal::suspend(SuspendDone suspendDone)
 
 void Terminal::resume()
 {
+  if (_onResume) _onResume();
   suspended = false;
   prepareSuspended = false;
 }

@@ -2,6 +2,7 @@
   import type { Settings } from "../model";
   import CheckboxSetting from "../widget/CheckboxSetting.svelte";
   import Group from "./Group.svelte";
+  import { InfoStore } from "../stores/info";
 
   export let settings: Settings.Mower;
   export let original: Settings.Mower;
@@ -9,6 +10,8 @@
   // Ältere Firmware kennt das Feld nicht: dann wie bisher erlaubt.
   $: if (settings.support_firmware_upload === undefined) settings.support_firmware_upload = true;
   $: if (original.support_firmware_upload === undefined) original.support_firmware_upload = true;
+  $: if (settings.support_terminal === undefined) settings.support_terminal = true;
+  $: if (original.support_terminal === undefined) original.support_terminal = true;
 </script>
 
 <Group title="Mower capabilities" {settings} {original}>
@@ -40,4 +43,13 @@
     bind:value={settings.support_firmware_upload}
     bind:original={original.support_firmware_upload}
   />
+  {#if $InfoStore?.terminal_supported}
+    <CheckboxSetting
+      label="Terminal"
+      key="mower.support_terminal"
+      helpText="The modem's terminal port is wired to the mower console. When off, the port stays off and the Terminal dashboard and settings are hidden. Mower firmware upload is not affected."
+      bind:value={settings.support_terminal}
+      bind:original={original.support_terminal}
+    />
+  {/if}
 </Group>

@@ -59,6 +59,11 @@ export namespace Settings {
     ntp_server1: string;
     ntp_server2: string;
   }
+  export interface Terminal {
+    /** 0 = detect automatically */
+    baud: number;
+    format: "8N1" | "8E1" | "8O1";
+  }
   export interface Position {
     mode: "relative" | "absolute";
     lon: number;
@@ -75,6 +80,8 @@ export namespace Settings {
     support_cutter_height: boolean;
     has_sonar: boolean;
     support_firmware_upload: boolean;
+    /** Terminal port wired to the mower console */
+    support_terminal: boolean;
   }
 }
 
@@ -91,6 +98,7 @@ export interface Settings {
   prometheus: Settings.Prometheus;
   position: Settings.Position;
   mower: Settings.Mower;
+  terminal?: Settings.Terminal;
 }
 
 export interface Info {
@@ -102,6 +110,14 @@ export interface Info {
   bt_mac: string;
   firmware_target: "esp32" | "esp32-s3";
   memory?: MemoryInfo;
+  /** Firmware has a terminal port */
+  terminal_supported?: boolean;
+  /** Terminal port supported and switched on in the mower capabilities */
+  terminal_available?: boolean;
+  /** Baud rate the terminal port currently uses */
+  terminal_baud?: number;
+  /** fixed, auto (detected), unconfirmed, detecting, failed */
+  terminal_baud_state?: string;
 }
 
 export interface NetworkInfo {

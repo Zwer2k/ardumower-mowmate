@@ -9,6 +9,7 @@
   import PrometheusSettings from "./Prometheus.svelte";
   import PositionSettings from "./Position.svelte";
   import MowerSettings from "./Mower.svelte";
+  import TerminalSettings from "./Terminal.svelte";
   import Firmware from "./Firmware.svelte";
   import Storage from "./Storage.svelte";
   import { FrontendSettings as settings } from "../stores/frontend";
@@ -69,6 +70,13 @@
       <MowerSettings
         bind:settings={$settings.mower}
         bind:original={$original.mower}
+      />
+    {/if}
+    {#if ($info?.terminal_supported ?? $info?.terminal_available) && $settings.mower?.support_terminal !== false && $settings.terminal && $original.terminal}
+      <TerminalSettings
+        bind:settings={$settings.terminal}
+        bind:original={$original.terminal}
+        info={$info}
       />
     {/if}
     <Firmware />

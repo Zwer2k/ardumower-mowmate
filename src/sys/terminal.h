@@ -51,7 +51,13 @@ namespace ArduMower
 
       void suspend(SuspendDone suspendDone);
       void resume();
-      bool isSuspended() { return suspended; }
+      // Wird bei resume() aufgerufen, z. B. um nach dem Flashen der
+      // Mäher-Firmware die Port-Einstellungen wiederherzustellen.
+      void onResume(std::function<void()> handler) { _onResume = handler; }
+      bool isSuspended() { return suspended || prepareSuspended; }
+      // Lesepause für die Baudraten-Erkennung (TerminalPort). Unabhängig von
+      // suspend()/resume() des Firmware-Uploads, damit sich beide nicht stören.
+      void pauseReading(bool paused) { readingPaused = paused; }
       
       virtual void drainRx(const char* line, bool &stop) override;
       virtual void drainTx(const char* line, bool &stop) override;
@@ -61,9 +67,11 @@ namespace ArduMower
       RxHandler _rxHandler;
       TxHandler _txHandler;
       SuspendDone _suspendDone;
+      std::function<void()> _onResume;
 
       bool suspended = false;
       bool prepareSuspended = false;
+      bool readingPaused = false;
       Ringbuffer<TerminalLine, TERMINAL_RINGBUFFER_SIZE> *_buffer;
     };
   }

@@ -3,6 +3,9 @@
 #include "atomic_file.h"
 #include "url.h"
 #include "git_version.h"
+#ifdef MOWER_TERMINAL
+#include "terminal_port.h"
+#endif
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
@@ -30,6 +33,7 @@ const char * _t_position_mode = "mode";
 const char * _t_position_lon = "lon";
 const char * _t_position_lat = "lat";
 const char * _t_mower = "mower";
+const char * _t_terminal = "terminal";
 const char * _t_mower_mow_speed = "mow_speed";
 const char * _t_mower_goto_speed = "goto_speed";
 const char * _t_mower_fix_timeout = "fix_timeout";
@@ -40,6 +44,7 @@ const char * _t_mower_support_cutter_speed = "support_cutter_speed";
 const char * _t_mower_support_cutter_height = "support_cutter_height";
 const char * _t_mower_has_sonar = "has_sonar";
 const char * _t_mower_support_firmware_upload = "support_firmware_upload";
+const char * _t_mower_support_terminal = "support_terminal";
 
 const char * _t_sta_ssid = "sta_ssid";
 const char * _t_sta_psk = "sta_psk";
@@ -197,7 +202,8 @@ bool Settings::save()
 
 bool Settings::valid(String &invalid) const
 {
-  return general.valid(invalid) && time.valid(invalid) && web.valid(invalid) && wifi.valid(invalid) && mqtt.valid(invalid) && position.valid(invalid);
+  return general.valid(invalid) && time.valid(invalid) && web.valid(invalid) && wifi.valid(invalid) && mqtt.valid(invalid) && position.valid(invalid)
+      && terminal.valid(invalid);
 }
 
 // Mower has no strict validation - all values are optional with defaults
@@ -218,6 +224,7 @@ void Settings::marshal(JsonObject o) const
   { auto _j = o[_t_prometheus].to<JsonObject>(); prometheus.marshal(_j); }
   { auto _j = o[_t_position].to<JsonObject>(); position.marshal(_j); }
   { auto _j = o[_t_mower].to<JsonObject>(); mower.marshal(_j); }
+  { auto _j = o[_t_terminal].to<JsonObject>(); terminal.marshal(_j); }
 }
 
 #define mustContain(component, o, prop)                      \
@@ -260,6 +267,9 @@ bool Settings::unmarshal(JsonObject o)
   }
   if (o[_t_mower].is<JsonVariant>()) {
     mustContainAndSucceed("Settings", o, _t_mower, mower.unmarshal(o[_t_mower]));
+  }
+  if (o[_t_terminal].is<JsonVariant>()) {
+    mustContainAndSucceed("Settings", o, _t_terminal, terminal.unmarshal(o[_t_terminal]));
   }
 
   return true;
@@ -412,6 +422,7 @@ void Mower::marshal(JsonObject o) const
   o[_t_mower_support_cutter_height] = supportCutterHeight;
   o[_t_mower_has_sonar] = hasSonar;
   o[_t_mower_support_firmware_upload] = supportFirmwareUpload;
+  o[_t_mower_support_terminal] = supportTerminal;
 }
 
 bool Mower::unmarshal(JsonObject o)
@@ -436,10 +447,57 @@ bool Mower::unmarshal(JsonObject o)
     hasSonar = o[_t_mower_has_sonar].as<bool>();
   if (o[_t_mower_support_firmware_upload].is<JsonVariant>())
     supportFirmwareUpload = o[_t_mower_support_firmware_upload].as<bool>();
+  if (o[_t_mower_support_terminal].is<JsonVariant>())
+    supportTerminal = o[_t_mower_support_terminal].as<bool>();
   return true;
 }
 
 void Mower::stripSecrets(const JsonObject &) const
+{
+}
+
+bool TerminalSerial::validBaud(uint32_t baud)
+{
+  static const uint32_t rates[] = {9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
+  for (uint32_t r : rates)
+    if (r == baud) return true;
+  return false;
+}
+
+uint32_t TerminalSerial::serialConfig() const
+{
+  if (format == "8E1") return SERIAL_8E1;
+  if (format == "8O1") return SERIAL_8O1;
+  return SERIAL_8N1;
+}
+
+bool TerminalSerial::valid(String &invalid) const
+{
+  if (baud != 0 && !validBaud(baud)) {
+    invalid = "terminal.baud";
+    return false;
+  }
+  if (format != "8N1" && format != "8E1" && format != "8O1") {
+    invalid = "terminal.format";
+    return false;
+  }
+  return true;
+}
+
+void TerminalSerial::marshal(JsonObject o) const
+{
+  o["baud"] = baud;
+  o["format"] = format;
+}
+
+bool TerminalSerial::unmarshal(JsonObject o)
+{
+  if (o["baud"].is<JsonVariant>()) baud = o["baud"].as<uint32_t>();
+  if (o["format"].is<JsonVariant>()) format = o["format"].as<String>();
+  return true;
+}
+
+void TerminalSerial::stripSecrets(const JsonObject &) const
 {
 }
 
@@ -880,8 +938,16 @@ void PropertiesClass::marshal(JsonObject o) const
   o[_t_uptime] = millis();
   o[_t_bt_mac] = getBTMacAddress();
 #ifdef MOWER_TERMINAL
-  o[_t_terminal_available] = true;
+  // terminal_supported: Firmware hat ein Terminal; terminal_available: und es
+  // ist als Capability eingeschaltet (verdrahtet)
+  o["terminal_supported"] = true;
+  o[_t_terminal_available] = terminalPortInstance == nullptr || terminalPortInstance->enabled();
+  if (terminalPortInstance != nullptr && terminalPortInstance->enabled()) {
+    o["terminal_baud"] = terminalPortInstance->baud();
+    o["terminal_baud_state"] = terminalPortInstance->state();
+  }
 #else
+  o["terminal_supported"] = false;
   o[_t_terminal_available] = false;
 #endif
 #ifdef CONFIG_IDF_TARGET_ESP32S3

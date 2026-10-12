@@ -194,7 +194,8 @@ namespace ArduMower
       {
       public:
         Mower() : mowSpeed(0.3f), gotoSpeed(0.5f), fixTimeout(60), finishAndRestart(false), cutterPwm(255), mowHeight(55),
-                 supportCutterSpeed(true), supportCutterHeight(true), hasSonar(true), supportFirmwareUpload(true) {}
+                 supportCutterSpeed(true), supportCutterHeight(true), hasSonar(true), supportFirmwareUpload(true),
+                 supportTerminal(true) {}
 
         float mowSpeed;
         float gotoSpeed;
@@ -211,6 +212,28 @@ namespace ArduMower
         // Mäher-Firmware über das Modem flashen (STM32-Bootloader über
         // BOOT0/NRST). Aus: Option im Firmware-Dialog ausgeblendet, Upload abgelehnt.
         bool supportFirmwareUpload;
+        // Terminal-Port (Serial1) mit der Mäher-Konsole verbunden. Aus: Port
+        // bleibt aus, Terminal-Dashboard und -Einstellungen ausgeblendet.
+        bool supportTerminal;
+
+        virtual void marshal(JsonObject o) const override;
+        virtual bool unmarshal(JsonObject o) override;
+        virtual void stripSecrets(const JsonObject &o) const override;
+      };
+
+      // Serielle Verbindung des Terminals zur Mäher-Konsole (Serial1).
+      class TerminalSerial : public Group
+      {
+      public:
+        TerminalSerial() : baud(0), format("8N1") {}
+
+        uint32_t baud;   // 0 = automatisch erkennen
+        String format;   // 8N1, 8E1, 8O1
+
+        static bool validBaud(uint32_t baud);
+        uint32_t serialConfig() const;   // SERIAL_8N1 ...
+
+        bool valid(String &invalid) const;
 
         virtual void marshal(JsonObject o) const override;
         virtual bool unmarshal(JsonObject o) override;
@@ -236,6 +259,7 @@ namespace ArduMower
         Prometheus prometheus;
         Position position;
         Mower mower;
+        TerminalSerial terminal;
 
         Settings(String filename);
         Settings() : Settings(defaultSettingsFilename) {}

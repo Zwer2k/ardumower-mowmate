@@ -33,6 +33,7 @@
 #include "prometheus_adapter.h"
 #include "schedule.h"
 #include "terminal.h"
+#include "terminal_port.h"
 #include "router.h"
 #include "settings.h"
 #include "ui_adapter.h"
@@ -60,8 +61,10 @@ Wifi::Adapter wifiAdapter(settings, scheduleManager);
 // console is used during validation tests and enabled on simulator target only
 Console con(Serial, api, settings);
 #elif MOWER_TERMINAL
+// serial port of the terminal: baud rate (also auto detected) and format
+TerminalPort terminalPort(Serial1, settings.terminal);
 // establishes a terminal connection to the mover via web interface
-Terminal terminal(Serial1);
+Terminal terminal(terminalPort.stream());
 #endif
 
 
@@ -158,6 +161,7 @@ void setup() {
   looptime.add("con", std::bind(&Console::loop, &con));
 #elif MOWER_TERMINAL
   looptime.add("terminal", std::bind(&Terminal::loop, &terminal));
+  looptime.add("terminal_port", std::bind(&TerminalPort::loop, &terminalPort));
 #endif
   looptime.add("wifi", [&](){wifiAdapter.loop();});
   looptime.add("http", [&](){ if (!Ota::MowerUpdater::isFlashing()) httpAdapter.loop(); });
@@ -347,7 +351,9 @@ void setup() {
   setup_fake_ardumower();
   FakeArduMower.active = true;
 #elif MOWER_TERMINAL
-  Serial1.begin(115200, SERIAL_8N1); // connection to mower serial port
+  terminalPort.begin(terminal, settings.mower.supportTerminal); // connection to mower serial port (settings: Terminal)
+  // after flashing the mower firmware the STM32 bootloader leaves 115200 8N1
+  terminal.onResume([&]() { terminalPort.apply(); });
 #endif
 }
 
