@@ -1151,10 +1151,31 @@ bool MowerAdapter::requestSensorSummary()
 {
   uint32_t now = millis();
   if (_lastSensorSummaryRequest != 0 && now - _lastSensorSummaryRequest < 5000) return true;
+
+  // Vorherige Anfrage unbeantwortet, obwohl Sunray seitdem auf AT+S antwortete:
+  // Diese Sunray-Version kennt AT+S3 nicht (upstream). Jede weitere Anfrage
+  // würde die Leitung bis zum Timeout aufhalten.
+  // Hat Sunray einmal geantwortet, gilt AT+S3 als unterstützt: einzelne
+  // verlorene Antworten ändern daran nichts.
+  if (_sensorSummaryAwaiting && !_sensorSummaryEverAnswered && _state.timestamp != 0 &&
+      (int32_t)(_state.timestamp - _lastSensorSummaryRequest) > 0) {
+    _sensorSummaryAwaiting = false;
+    if (!_sensorSummaryUnsupported && ++_sensorSummaryMisses >= 3) {
+      _sensorSummaryUnsupported = true;
+      _sensorSummary.supported = false;
+      _sensorSummary.timestamp = now ? now : 1;   // an die UI melden
+      Log(INFO, "%sAT+S3 not answered, sensor summary unavailable (Sunray without AT+S3)", _LOG_);
+    }
+    if (_sensorSummaryUnsupported) _sensorSummaryUnsupportedSince = now;
+  }
+  // Nicht unterstützt: nur alle 10 min nachsehen, ob Sunray aktualisiert wurde
+  if (_sensorSummaryUnsupported && now - _sensorSummaryUnsupportedSince < 600000UL) return true;
+
   _lastSensorSummaryRequest = now ? now : 1;
   //Log(DBG, "%srequestSensorSummary", _LOG_);
   if (!assertSendIsInitialized())
     return false;
+  _sensorSummaryAwaiting = true;
   return sendCommand("AT+S3", true);
 }
 
@@ -1405,6 +1426,12 @@ void MowerAdapter::parseSensorSummaryResponse(const char* line)
 {
   //Log(DBG, "%sparseSensorSummaryResponse", _LOG_);
   const auto now = millis();
+  _sensorSummaryAwaiting = false;
+  _sensorSummaryMisses = 0;
+  _sensorSummaryEverAnswered = true;
+  if (_sensorSummaryUnsupported) Log(INFO, "%sAT+S3 answered again, sensor summary available", _LOG_);
+  _sensorSummaryUnsupported = false;
+  _sensorSummary.supported = true;
 
   processCSVResponse(line, [&](int index, const char* val, size_t len)
                      {

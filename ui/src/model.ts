@@ -250,6 +250,8 @@ export interface SensorSummary {
   lidar_near_obstacle: boolean;
   lift_triggered: boolean;
   rain_triggered: boolean;
+  /** false: Sunray does not answer AT+S3 (e.g. upstream); the values above are empty */
+  supported?: boolean;
 }
 
 export interface GpsSatellite {
