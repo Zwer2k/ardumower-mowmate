@@ -295,6 +295,14 @@
     margin: 0;
 }
 
+/* viewport-fit=cover (app.html): Die Seite reicht bis unter die Gestenleiste
+   von Android und, im Querformat, unter die Kamera-Aussparung. Inhalte halten
+   mit env(safe-area-inset-*) Abstand davon; ohne Unterstützung sind die Werte 0. */
+:global(.bx--header) {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+}
+
 /* Dashboard-Modus: Komplett ohne Scrollbars */
 :global(body.dashboard-mode) {
     overflow: hidden !important;
@@ -319,6 +327,9 @@
 /* Standard-Layout für Settings/andere Seiten - Nur Content scrollt */
 :global(body:not(.dashboard-mode) .bx--content) {
     padding: 1rem !important;
+    padding-left: calc(1rem + env(safe-area-inset-left, 0px)) !important;
+    padding-right: calc(1rem + env(safe-area-inset-right, 0px)) !important;
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px)) !important;
     height: calc(100vh - 48px) !important;
     height: calc(var(--app-height, 100dvh) - 48px) !important;
     overflow-y: auto !important;

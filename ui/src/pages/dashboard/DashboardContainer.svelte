@@ -84,12 +84,13 @@
 </div>
 
 <style>
-    /* An den sichtbaren Bildschirm gebunden: Mobile Browser richten fixierte
-       Elemente mit top/bottom 0 an der tatsächlich sichtbaren Fläche aus, auch
-       während die Adressleiste ein- oder ausklappt. Eine berechnete Höhe
-       (vh, dvh oder innerHeight) passt auf manchen Geräten nicht genau. */
+    /* Füllt den sichtbaren Bildschirm. Bewusst nicht position: fixed: Das
+       öffnet einen eigenen Stapelkontext, und Dialoge der Dashboards (z. B.
+       Route check im Karteneditor) lagen dann unter der Kopfzeile, die ihren
+       Titel und die Schließen-Schaltfläche verdeckte. Die Seite scrollt nicht,
+       daher entspricht der absolut positionierte Bereich dem Bildschirm. */
     .dashboard-container {
-        position: fixed;
+        position: absolute;
         top: 0;
         right: 0;
         bottom: 0;
@@ -103,6 +104,9 @@
         left: 0;
         width: 100%;
         height: 100%;
+        /* Abstand zu Gestenleiste und Kamera-Aussparung (viewport-fit=cover) */
+        box-sizing: border-box;
+        padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
         opacity: 0;
         visibility: hidden;
         transition: opacity 0.2s ease-in-out;
