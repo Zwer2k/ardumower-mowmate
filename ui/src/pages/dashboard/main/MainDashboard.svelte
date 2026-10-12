@@ -17,6 +17,8 @@
     import MotorRpmChart from './MotorRpmChart.svelte';
     import { MotorRpmStore } from '../../../stores/motorRpm';
     import { confirmUploadCapacity } from '../../../map/services/mower-capacity';
+    import { sensorFallbackStore, sonarRecentlyTriggered } from '../../../stores/sensor-fallback';
+    import { SensorDescriptions } from '../../../model';
 
     async function uploadMap() {
         if (await confirmUploadCapacity()) socketService.sendUploadMap();
@@ -152,7 +154,12 @@
                     <Tile class="status-tile compact">
                         <div class="status-icon" style:color={jobColor(state?.job) === 'green' ? '#24a148' : jobColor(state?.job) === 'blue' ? '#0f62fe' : jobColor(state?.job) === 'cyan' ? '#1192e8' : jobColor(state?.job) === 'red' ? '#da1e28' : '#8d8d8d'}>{jobIcon(state?.job)}</div>
                         <div class="status-value" style:color={jobColor(state?.job) === 'green' ? '#24a148' : jobColor(state?.job) === 'blue' ? '#0f62fe' : jobColor(state?.job) === 'cyan' ? '#1192e8' : jobColor(state?.job) === 'red' ? '#da1e28' : '#8d8d8d'}>{jobLabel(state?.job, desc?.job)}</div>
-                        <div class="status-label">Status</div>
+                        <!-- Grund des letzten Stopps (Sunray stateSensor), z. B. Regen oder Hindernis -->
+                        {#if (state?.sensor ?? 0) !== 0}
+                            <div class="status-label status-reason" title="Grund des letzten Stopps oder Fehlers">Meldung: {SensorDescriptions[state?.sensor ?? 0] ?? `#${state?.sensor}`}</div>
+                        {:else}
+                            <div class="status-label">Status</div>
+                        {/if}
                     </Tile>
                     <Tile class="battery-tile compact">
                         <div class="battery-icon">🔋</div>
@@ -282,7 +289,25 @@
         </Row>
 
         <!-- Sensor-Strip -->
-        {#if sensor}
+        {#if sensor && sensor.supported === false}
+            <!-- Sunray ohne AT+S3: nur Sonar-Ereignisse aus der Statistik -->
+            {@const sonarHit = sonarRecentlyTriggered($sensorFallbackStore, frame >= 0 ? Date.now() : 0)}
+            <div class="sensor-strip">
+                <Tile>
+                    <div class="sensor-row">
+                        <div class="sensor-group">
+                            <span class="sensor-title">Sonar</span>
+                            <div class="sensor-dots">
+                                <div class="sensor-dot sensor-dot-wide" class:alert={sonarHit}
+                                     title="Sonar-Ereignisse: {$sensorFallbackStore.sonarCount ?? '–'}. Abstände benötigen Sunray mit AT+S3.">
+                                    {sonarHit ? 'ausgelöst' : 'frei'}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </Tile>
+            </div>
+        {:else if sensor}
             <div class="sensor-strip">
                 <Tile>
                     <div class="sensor-row">
@@ -829,6 +854,20 @@
     .sensor-dot.alert {
         background: #da1e28;
         color: white;
+    }
+
+    .status-reason {
+        color: #da1e28;
+        font-weight: 600;
+    }
+
+    /* Ersatzanzeige ohne AT+S3: Text statt Buchstabe */
+    .sensor-dot.sensor-dot-wide {
+        width: auto;
+        min-width: 28px;
+        padding: 0 8px;
+        border-radius: 14px;
+        white-space: nowrap;
     }
 
     .sensor-divider {

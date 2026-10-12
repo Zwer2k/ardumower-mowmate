@@ -251,6 +251,9 @@ namespace ArduMower
         bool lidarNearObstacle;
         bool liftTriggered;
         bool rainTriggered;
+        // false: Sunray beantwortet AT+S3 nicht (z. B. upstream). Die Werte
+        // oben sind dann leer; die UI zeigt nur "Sonar ausgelöst" aus AT+T.
+        bool supported = true;
 
         SensorSummary()
             : timestamp(0), sonarLeft(0), sonarCenter(0), sonarRight(0),

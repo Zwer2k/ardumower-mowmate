@@ -77,6 +77,13 @@ namespace ArduMower
       uint32_t _lastStateRequest = 0;
       uint32_t _lastStatsRequest = 0;
       uint32_t _lastSensorSummaryRequest = 0;
+      // AT+S3 gibt es nur in unserem Sunray-Fork. Bleiben Antworten aus,
+      // obwohl Sunray auf anderes antwortet, wird nicht mehr gefragt.
+      bool _sensorSummaryAwaiting = false;
+      uint8_t _sensorSummaryMisses = 0;
+      bool _sensorSummaryUnsupported = false;
+      bool _sensorSummaryEverAnswered = false;   // einmal beantwortet = unterstützt
+      uint32_t _sensorSummaryUnsupportedSince = 0;
       uint32_t _lastObstaclesRequest = 0;
       uint32_t _lastGpsDetailsRequest = 0;
       uint32_t _lastControlRequest = 0;

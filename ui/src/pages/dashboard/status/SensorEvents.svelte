@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Tag, Tile } from "carbon-components-svelte";
   import type { SensorSummary } from "../../../model";
+  import { onDestroy, onMount } from "svelte";
+  import { sensorFallbackStore, sonarRecentlyTriggered } from "../../../stores/sensor-fallback";
 
   export let summary: SensorSummary | null = null;
 
@@ -31,7 +33,23 @@
     if (prev && !curr) pushEvent(`${name} frei`, "clear");
   }
 
-  $: {
+  // Sunray ohne AT+S3: Ereignisse aus Sonar-Zähler und Status
+  let now = Date.now();
+  let timer: ReturnType<typeof setInterval> | null = null;
+  onMount(() => { timer = setInterval(() => (now = Date.now()), 1000); });
+  onDestroy(() => { if (timer) clearInterval(timer); });
+  $: fallback = summary?.supported === false;
+  $: sonarHit = sonarRecentlyTriggered($sensorFallbackStore, now);
+  let lastSonarAt: number | null = null;
+  $: if (fallback) {
+    const at = $sensorFallbackStore.sonarTriggeredAt;
+    if (at !== null && at !== lastSonarAt) {
+      if (lastSonarAt !== null || events.length > 0) pushEvent("Sonar ausgelöst", "trigger");
+      lastSonarAt = at;
+    }
+  }
+
+  $: if (!fallback) {
     if (summary != null && lastSummary != null) {
       boolChanged(lastSummary.sonar_obstacle, summary.sonar_obstacle, "Sonar");
       boolChanged(lastSummary.bumper_obstacle, summary.bumper_obstacle, "Bumper");
@@ -57,7 +75,21 @@
 
 <Tile class="status-card">
   <div class="card-header"><span class="card-icon">🛡️</span><span class="card-title">Sensoren</span></div>
-  {#if summary != null}
+  {#if fallback}
+    <div class="sensor-grid">
+      <div class="sensor-group">
+        <div class="group-title">Sonar</div>
+        <div class="sensor-flags">
+          <Tag type={sonarHit ? "red" : "green"} size="sm">{sonarHit ? "ausgelöst" : "frei"}</Tag>
+          <span class="fallback-count">{$sensorFallbackStore.sonarCount ?? "–"} Ereignisse</span>
+        </div>
+      </div>
+    </div>
+    <div class="fallback-hint">
+      Diese Sunray-Version liefert keine Sensor-Übersicht (AT+S3). Angezeigt werden nur Sonar-Ereignisse
+      aus der Statistik; der Grund eines Stopps (z. B. Regen) steht beim Mäher-Status.
+    </div>
+  {:else if summary != null}
     <div class="sensor-grid">
       <div class="sensor-group">
         <div class="group-title">Sonar (cm)</div>
@@ -204,5 +236,14 @@
   .log-entry.clear {
     background: #defbe6;
     color: #0e6027;
+  }
+  .fallback-count {
+    font-size: 0.75rem;
+    color: #6f6f6f;
+  }
+  .fallback-hint {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    color: #6f6f6f;
   }
 </style>

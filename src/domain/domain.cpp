@@ -299,6 +299,7 @@ void MotorRpmHistory::clear()
 bool SensorSummary::operator==(const SensorSummary &other)
 {
   return timestamp == other.timestamp &&
+         supported == other.supported &&
          sonarLeft == other.sonarLeft &&
          sonarCenter == other.sonarCenter &&
          sonarRight == other.sonarRight &&
@@ -329,6 +330,7 @@ void SensorSummary::marshal(JsonObject o) const
   o[_t_sensor_lidar_near_obstacle] = lidarNearObstacle;
   o[_t_sensor_lift_triggered] = liftTriggered;
   o[_t_sensor_rain_triggered] = rainTriggered;
+  o["supported"] = supported;
 }
 
 bool GpsDetails::operator==(const GpsDetails &other)
