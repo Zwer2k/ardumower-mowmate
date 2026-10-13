@@ -1149,9 +1149,27 @@ bool MowerAdapter::requestMotorRpm()
 {
   uint32_t now = millis();
   if (_lastMotorRpmRequest != 0 && now - _lastMotorRpmRequest < 5000) return true;
+
+  // Wie bei AT+S3: Bleibt die Anfrage unbeantwortet, obwohl Sunray seitdem auf
+  // AT+S antwortete, kennt diese Sunray-Version AT+S5 nicht (upstream). Jede
+  // weitere Anfrage würde die Leitung bis zum Timeout aufhalten.
+  if (_motorRpmAwaiting && !_motorRpmEverAnswered && _state.timestamp != 0 &&
+      (int32_t)(_state.timestamp - _lastMotorRpmRequest) > 0) {
+    _motorRpmAwaiting = false;
+    if (!_motorRpmUnsupported && ++_motorRpmMisses >= 3) {
+      _motorRpmUnsupported = true;
+      _motorRpm.supported = false;
+      Log(INFO, "%sAT+S5 not answered, motor telemetry unavailable (Sunray without AT+S5)", _LOG_);
+    }
+    if (_motorRpmUnsupported) _motorRpmUnsupportedSince = now;
+  }
+  // Nicht unterstützt: nur alle 10 min nachsehen, ob Sunray aktualisiert wurde
+  if (_motorRpmUnsupported && now - _motorRpmUnsupportedSince < 600000UL) return true;
+
   _lastMotorRpmRequest = now ? now : 1;
   if (!assertSendIsInitialized())
     return false;
+  _motorRpmAwaiting = true;
   return sendCommand("AT+S5", true);
 }
 
@@ -1426,6 +1444,12 @@ void MowerAdapter::parseMotorRpmResponse(const char* line)
       });
 
   _motorRpm.timestamp = now;
+  _motorRpmAwaiting = false;
+  _motorRpmMisses = 0;
+  _motorRpmEverAnswered = true;
+  if (_motorRpmUnsupported) Log(INFO, "%sAT+S5 answered again, motor telemetry available", _LOG_);
+  _motorRpmUnsupported = false;
+  _motorRpm.supported = true;
   _motorRpmHistory.add(now / 1000, _motorRpm.left, _motorRpm.right, _motorRpm.mow,
                        _motorRpm.ampsLeft, _motorRpm.ampsRight, _motorRpm.ampsMow);
 }

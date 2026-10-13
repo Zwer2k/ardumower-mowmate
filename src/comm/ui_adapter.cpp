@@ -265,6 +265,7 @@ void UiAdapter::handleApiGetMotorRpm(AsyncWebServerRequest *request)
   doc["amps_left"] = rpm.ampsLeft;
   doc["amps_right"] = rpm.ampsRight;
   doc["amps_mow"] = rpm.ampsMow;
+  doc["supported"] = rpm.supported;
   doc["uptime_s"] = millis() / 1000;
   doc["interval_s"] = history.intervalSec();
   doc["count"] = history.count();

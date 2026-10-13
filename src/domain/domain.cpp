@@ -246,7 +246,8 @@ bool MotorRpm::operator==(const MotorRpm &other)
          pwmMow == other.pwmMow &&
          ampsLeft == other.ampsLeft &&
          ampsRight == other.ampsRight &&
-         ampsMow == other.ampsMow;
+         ampsMow == other.ampsMow &&
+         supported == other.supported;
 }
 
 void MotorRpm::marshal(JsonObject o) const
@@ -258,6 +259,7 @@ void MotorRpm::marshal(JsonObject o) const
   o[_t_motorRpm_ampsLeft] = ampsLeft;
   o[_t_motorRpm_ampsRight] = ampsRight;
   o[_t_motorRpm_ampsMow] = ampsMow;
+  o["supported"] = supported;
 }
 
 bool MotorRpmHistory::add(uint32_t t, float left, float right, float mow,

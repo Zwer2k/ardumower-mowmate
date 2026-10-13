@@ -260,6 +260,8 @@
                         <div class="metric-label">Nächster Mähvorgang</div>
                     </Tile>
                     {/if}
+                    <!-- Sunray ohne AT+S5 (z. B. upstream) liefert keine Motordaten -->
+                    {#if $MotorRpmStore.supported}
                     <Tile class="metric-tile compact rpm-tile">
                         <button type="button" class="rpm-toggle"
                                 onclick={() => rpmChartOpen = !rpmChartOpen}
@@ -274,8 +276,9 @@
                             <span class="metric-label">U/min · Strom {rpmChartOpen ? '▲' : '▼'}</span>
                         </button>
                     </Tile>
+                    {/if}
                 </div>
-                {#if rpmChartOpen}
+                {#if rpmChartOpen && $MotorRpmStore.supported}
                     <Tile class="rpm-chart-tile">
                         <MotorRpmChart samples={$MotorRpmStore.samples} intervalS={$MotorRpmStore.intervalS} />
                     </Tile>

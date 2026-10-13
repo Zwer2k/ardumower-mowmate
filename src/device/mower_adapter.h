@@ -77,6 +77,12 @@ namespace ArduMower
       ArduMower::Domain::Robot::MotorRpm _motorRpm;
       ArduMower::Domain::Robot::MotorRpmHistory _motorRpmHistory;
       uint32_t _lastMotorRpmRequest = 0;
+      // AT+S5 wie AT+S3: nach 3 unbeantworteten Anfragen nicht unterstützt
+      bool _motorRpmAwaiting = false;
+      uint8_t _motorRpmMisses = 0;
+      bool _motorRpmUnsupported = false;
+      bool _motorRpmEverAnswered = false;   // einmal beantwortet = unterstützt
+      uint32_t _motorRpmUnsupportedSince = 0;
       ArduMower::Modem::MapManager _mapManager;
       String _lastUploadedMapId;
       int _lastUploadedMapCrc = 0;

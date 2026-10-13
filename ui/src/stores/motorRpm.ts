@@ -24,11 +24,13 @@ export interface MotorRpmState {
   intervalS: number;
   samples: MotorRpmSample[];
   loaded: boolean;
+  /** false: Sunray answers no AT+S5 (e.g. upstream Sunray); the values stay 0 */
+  supported: boolean;
 }
 
 const empty: MotorRpmState = {
   left: 0, right: 0, mow: 0, pwmMow: 0, ampsLeft: 0, ampsRight: 0, ampsMow: 0,
-  uptime: 0, intervalS: 5, samples: [], loaded: false,
+  uptime: 0, intervalS: 5, samples: [], loaded: false, supported: true,
 };
 
 function createMotorRpmStore() {
@@ -80,6 +82,7 @@ function createMotorRpmStore() {
             }))
           : s.samples,
         loaded: true,
+        supported: j.supported !== false,
       }));
     } catch (e) {
       // transient network errors are normal while the modem reconnects, but staying silent
