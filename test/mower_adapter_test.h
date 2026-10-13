@@ -219,6 +219,22 @@ testF(TestMowerAdapter, parsePlaintextCommand)
   assertEqual(uut->desiredState().finishAndRestart, true);
 }
 
+testF(TestMowerAdapter, parseCommandKeepsCutterPwm)
+{
+  // 8 Felder + Prüfsumme: die Prüfsumme darf nicht als Feld 9 (Cutter-PWM) gelten
+  bool tmp;
+  const int pwm = uut->desiredState().mowPwm;
+  uut->drainTx("AT+C,-1,0,-1,-1,-1,-1,-1,-1,0x5c", tmp);
+  assertEqual(uut->desiredState().mowPwm, pwm);
+  // AT+CT (Tuning) ist kein AT+C
+  const int op = uut->desiredState().op;
+  uut->drainTx("AT+CT,4,2.0000,0x3e", tmp);
+  assertEqual(uut->desiredState().op, op);
+  // ein echter Wert in Feld 9 wird übernommen
+  uut->drainTx("AT+C,-1,-1,-1,-1,-1,-1,-1,-1,128,-1,-1,0x00", tmp);
+  assertEqual(uut->desiredState().mowPwm, (int)128);
+}
+
 // testbed
 
 void TestMowerAdapter::setup()

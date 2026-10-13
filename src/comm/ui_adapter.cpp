@@ -361,6 +361,7 @@ void UiAdapter::handleApiPostRobotCommand(AsyncWebServerRequest *request, JsonVa
     _settings.mower.fixTimeout = desired->fixTimeout;
     _settings.mower.finishAndRestart = desired->finishAndRestart;
     _settings.mower.cutterPwm = desired->mowPwm;
+    _settings.mower.cutterPwmSaved = true;
     _settings.mower.mowHeight = desired->mowHeight;
     ok = _settings.save();
   }

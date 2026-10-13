@@ -1863,11 +1863,23 @@ void MowerAdapter::parseATWCommand(const char* line)
 
 void MowerAdapter::parseATCCommand(const char* line)
 {
+  // Nur AT+C selbst, nicht AT+CT (Tuning-Parameter).
+  if (strncmp(line, "AT+C,", 5) != 0) return;
   Log(DBG, "%sparseATCCommand", _LOG_);
   const auto now = millis();
 
+  // Die angehängte Prüfsumme ",0xNN" abschneiden: Sie landete sonst im Feld
+  // nach dem letzten Wert. Bei AT+C mit 8 Feldern (Start, Stopp, Sonar ...)
+  // war das Feld 9, die Cutter-PWM, und atoi("0x..") setzte sie auf 0.
+  char buf[256];
+  strncpy(buf, line, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+  char *lastComma = strrchr(buf, ',');
+  if (lastComma != nullptr && lastComma[1] == '0' && (lastComma[2] == 'x' || lastComma[2] == 'X'))
+    *lastComma = '\0';
+
   processCSVResponse(
-      line,
+      buf,
       [&](int index, const char* val, size_t len)
       {
         (void)len;

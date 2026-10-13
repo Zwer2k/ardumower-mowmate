@@ -75,6 +75,8 @@ export namespace Settings {
     fix_timeout: number;
     finish_and_restart: boolean;
     cutter_pwm: number;
+    /** cutter_pwm was saved with "Set as Default"; otherwise the modem uses 70 % */
+    cutter_pwm_saved?: boolean;
     mow_height: number;
     support_cutter_speed: boolean;
     support_cutter_height: boolean;
