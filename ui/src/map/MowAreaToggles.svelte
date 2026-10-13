@@ -6,13 +6,22 @@
   import { Toggle } from "carbon-components-svelte";
   import { mowSettingsStore } from "./mow-settings";
   import { socketService } from "../stores/socket";
+  import { routeStyleStore } from "./route-style";
 
-  let { horizontal = false, showTitle = true, labelPrefix = "" } = $props();
+  // showRouteStyle: VORÜBERGEHENDER Schalter für die Bahndarstellung (nur Karteneditor)
+  let { horizontal = false, showTitle = true, labelPrefix = "", showRouteStyle = false } = $props();
 
   const instanceId = `mow-area-toggles-${++instanceCounter}`;
   const areaId = `${instanceId}-area`;
   const borderId = `${instanceId}-border`;
   const exclBorderId = `${instanceId}-excl-border`;
+  const routeStyleId = `${instanceId}-route-style`;
+
+  // VORÜBERGEHEND: Darstellung der Mähbahnen vergleichen (siehe route-style.ts)
+  let cutWidthTracks = $state($routeStyleStore === "width");
+  $effect(() => {
+    routeStyleStore.set(cutWidthTracks ? "width" : "cassandra");
+  });
 
   let doMowArea = $state($mowSettingsStore.doMowArea ?? true);
   let doMowBorder = $state($mowSettingsStore.doMowBorder ?? false);
@@ -98,9 +107,24 @@
     size="sm"
     bind:toggled={doMowExclusionBorder}
   />
+  <!-- VORÜBERGEHEND: Vergleich der Bahndarstellung (an: Schnittbreite, aus: wie CaSSAndRA) -->
+  {#if showRouteStyle}
+  <span class="route-style-toggle" title="Temporary: tracks drawn as wide as the cut (on) or like CaSSAndRA (off)">
+    <Toggle
+      id={routeStyleId}
+      labelText="Tracks: cut width"
+      size="sm"
+      bind:toggled={cutWidthTracks}
+    />
+  </span>
+  {/if}
 </div>
 
 <style>
+  .route-style-toggle {
+    border-top: 1px dashed #c6c6c6;
+    padding-top: 0.25rem;
+  }
   .mow-area-toggles {
     display: flex;
     flex-direction: column;

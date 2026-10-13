@@ -36,26 +36,68 @@
     let menuAbove = $state(false);
     let inputEl: HTMLInputElement | undefined = $state(undefined);
 
-    const baseCommands: { cmd: string; desc: string }[] = [
-      { cmd: 'AT+S', desc: 'Status anfordern (CRC, Position, Lösung)' },
-      { cmd: 'AT+T', desc: 'Statistiken anfordern' },
-      { cmd: 'AT+V', desc: 'Versionsinfo anfordern' },
-      { cmd: 'AT+S3', desc: 'Sensor-Zusammenfassung' },
-      { cmd: 'AT+S4', desc: 'GPS-Details / Satelliten' },
-      { cmd: 'AT+Q', desc: 'Motor-Plot Daten' },
-      { cmd: 'AT+M,0,0', desc: 'Manuell fahren (linear, angular)' },
-      { cmd: 'AT+W,50', desc: 'Mähanteil in % setzen' },
-      { cmd: 'AT+S2,30', desc: 'Schnitthöhe setzen (mm)' },
+    interface KnownCommand { cmd: string; desc: string; group: string }
+
+    // Nach doc/AT_Protocol.md (Sunray). "MowMate-Sunray": nur im Sunray-Fork,
+    // upstream Sunray antwortet darauf nicht. Kartenupload (AT+W/N/X) fehlt
+    // bewusst, er überschreibt die Karte im Mäher.
+    const baseCommands: KnownCommand[] = [
+      { group: 'Abfragen', cmd: 'AT+V', desc: 'Version und Board' },
+      { group: 'Abfragen', cmd: 'AT+S', desc: 'Status (Akku, Position, Betrieb, GPS, Karten-CRC)' },
+      { group: 'Abfragen', cmd: 'AT+S2', desc: 'Hindernisse' },
+      { group: 'Abfragen', cmd: 'AT+S3', desc: 'Sensoren: Sonar, Bumper, Lift, Regen (MowMate-Sunray)' },
+      { group: 'Abfragen', cmd: 'AT+S4', desc: 'GPS-Details und Satelliten (MowMate-Sunray)' },
+      { group: 'Abfragen', cmd: 'AT+S5', desc: 'Motordrehzahlen und -ströme (MowMate-Sunray)' },
+      { group: 'Abfragen', cmd: 'AT+T', desc: 'Statistiken' },
+      { group: 'Abfragen', cmd: 'AT+L', desc: 'Statistiken löschen' },
+      { group: 'Steuern', cmd: 'AT+C,-1,1,-1,-1,-1,-1,-1,-1', desc: 'Mähen starten' },
+      { group: 'Steuern', cmd: 'AT+C,-1,0,-1,-1,-1,-1,-1,-1', desc: 'Stopp (Idle, alle Motoren aus)' },
+      { group: 'Steuern', cmd: 'AT+C,-1,4,-1,-1,-1,-1,-1,-1', desc: 'Docken' },
+      { group: 'Steuern', cmd: 'AT+C,1,-1,-1,-1,-1,-1,-1,-1', desc: 'Mähmotor ein (0 = aus)' },
+      { group: 'Steuern', cmd: 'AT+C,-1,-1,0.30,-1,-1,-1,-1,-1', desc: 'Mähgeschwindigkeit (m/s)' },
+      { group: 'Steuern', cmd: 'AT+C,-1,-1,-1,60,-1,-1,-1,-1', desc: 'GPS-Fix-Timeout (s)' },
+      { group: 'Steuern', cmd: 'AT+C,-1,-1,-1,-1,-1,50,-1,-1', desc: 'Mähfortschritt setzen (%)' },
+      { group: 'Steuern', cmd: 'AT+C,-1,-1,-1,-1,-1,-1,1,-1', desc: 'Nächsten Mähpunkt überspringen' },
+      { group: 'Steuern', cmd: 'AT+C,-1,-1,-1,-1,-1,-1,-1,1', desc: 'Sonar ein (0 = aus)' },
+      { group: 'Steuern', cmd: 'AT+C,-1,-1,-1,-1,-1,-1,-1,-1,179,-1,-1', desc: 'Max. Mähmotor-PWM (0..255)' },
+      { group: 'Steuern', cmd: 'AT+C,-1,-1,-1,-1,-1,-1,-1,-1,-1,45,-1', desc: 'Schnitthöhe (mm, falls unterstützt)' },
+      { group: 'Steuern', cmd: 'AT+M,0,0', desc: 'Manuell fahren (linear m/s, angular rad/s)' },
+      { group: 'Steuern', cmd: 'AT+R,0,0', desc: 'Zu Kartenpunkt fahren (x, y in m; MowMate-Sunray)' },
+      { group: 'Steuern', cmd: 'AT+CT,9,255', desc: 'Tuning-Parameter setzen (Index, Wert)' },
+      { group: 'Diagnose', cmd: 'AT+E', desc: 'Motortest' },
+      { group: 'Diagnose', cmd: 'AT+Q', desc: 'Motor-Plot' },
+      { group: 'Diagnose', cmd: 'AT+F', desc: 'Sensortest' },
+      { group: 'Diagnose', cmd: 'AT+O', desc: 'Hindernis simulieren' },
+      { group: 'Diagnose', cmd: 'AT+O2', desc: 'Regen simulieren' },
+      { group: 'Diagnose', cmd: 'AT+O3', desc: 'Niedrigen Akku simulieren' },
+      { group: 'Diagnose', cmd: 'AT+G', desc: 'GPS-Lösung umschalten (Test)' },
+      { group: 'Diagnose', cmd: 'AT+K', desc: 'Kidnap-Test (Pose auf 0)' },
+      { group: 'Diagnose', cmd: 'AT+Z', desc: 'Pathfinder-Stresstest' },
+      { group: 'Neustart', cmd: 'AT+Y', desc: 'Mäher neu starten (Watchdog)' },
+      { group: 'Neustart', cmd: 'AT+Y2', desc: 'GPS-Empfänger neu starten' },
+      { group: 'Neustart', cmd: 'AT+Y3', desc: 'Ausschalten (falls unterstützt)' },
+      { group: 'Linux', cmd: 'AT+B1', desc: 'WLAN-Netze suchen' },
+      { group: 'Linux', cmd: 'AT+B3', desc: 'Lokale IP-Adresse' },
     ];
 
     const gpsDashboardEnabled = import.meta.env.VITE_ENABLE_GPS_DASHBOARD === 'true';
-    const ubxCommandItems: { cmd: string; desc: string }[] = gpsDashboardEnabled
+    const ubxCommandItems: KnownCommand[] = gpsDashboardEnabled
       ? ubxCommands
           .filter(c => c.hex)
-          .map(c => ({ cmd: `AT+U,${c.hex}`, desc: `${c.name} (${c.category})` }))
+          .map(c => ({ group: 'u-blox (AT+UBX, MowMate-Sunray)', cmd: `AT+UBX,${c.hex}`, desc: `${c.name} (${c.category})` }))
       : [];
 
-    const knownCommands: { cmd: string; desc: string }[] = [...baseCommands, ...ubxCommandItems];
+    const knownCommands: KnownCommand[] = [...baseCommands, ...ubxCommandItems];
+
+    // Sunray entfernt auf der Konsole das letzte Komma-Feld als Prüfsumme, auch
+    // ohne sie zu prüfen: Aus "AT+M,0.1,0" würde "AT+M,0.1". Deshalb bekommen
+    // AT-Befehle ohne Prüfsumme sie hier angehängt.
+    function withChecksum(cmd: string): string {
+      if (!/^AT\+/i.test(cmd) || /,0x[0-9a-f]{1,2}$/i.test(cmd)) return cmd;
+      let sum = 0;
+      for (let i = 0; i < cmd.length; i++) sum = (sum + cmd.charCodeAt(i)) & 0xff;
+      return `${cmd},0x${sum.toString(16).padStart(2, '0')}`;
+    }
 
     function loadHistory(): string[] {
       if (typeof document === 'undefined') return [];
@@ -149,7 +191,7 @@
           return;
         default:
           sendCmd = '';
-          sendCmd = cmd;
+          sendCmd = withChecksum(cmd);
           break;
       }
     }
@@ -233,6 +275,7 @@
         bind:value={command}
         onkeydown={processCommand}
         bind:this={inputEl}
+        placeholder="AT-Befehl, z. B. AT+S · Rechtsklick oder Strg+→: bekannte Befehle · Prüfsumme wird angehängt"
         spellcheck="false"
         use:setFous
       />
@@ -257,7 +300,10 @@
   <div class="cmd-menu" class:cmd-menu-above={menuAbove}
        style="left: {menuPos.x}px; {menuAbove ? 'bottom' : 'top'}: {menuPos.y}px;" role="menu">
     <div class="cmd-menu-title">Bekannte Befehle</div>
-    {#each knownCommands as item}
+    {#each knownCommands as item, i}
+      {#if i === 0 || knownCommands[i - 1].group !== item.group}
+        <div class="cmd-menu-group">{item.group}</div>
+      {/if}
       <button class="cmd-menu-item" onclick={() => selectKnownCommand(item.cmd)} title={item.desc}>
         <span class="cmd-menu-cmd">{item.cmd}</span>
         <span class="cmd-menu-desc">{item.desc}</span>
@@ -343,6 +389,12 @@
       font-family: inherit;
       font-size: inherit;
       caret-color: #00ff00;
+      min-width: 0;
+      text-overflow: ellipsis;
+    }
+
+    .terminal-input::placeholder {
+      color: #6f6f6f;
     }
 
     .console-line {
@@ -392,6 +444,14 @@
   border-bottom: 1px solid #383838;
   margin-bottom: 4px;
   font-weight: 600;
+}
+
+.cmd-menu-group {
+  padding: 8px 12px 2px;
+  color: #888;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .cmd-menu-item {

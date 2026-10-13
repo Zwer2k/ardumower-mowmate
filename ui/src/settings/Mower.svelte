@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Settings } from "../model";
   import CheckboxSetting from "../widget/CheckboxSetting.svelte";
+  import NumberSetting from "../widget/NumberSetting.svelte";
   import Group from "./Group.svelte";
   import { InfoStore } from "../stores/info";
 
@@ -12,6 +13,8 @@
   $: if (original.support_firmware_upload === undefined) original.support_firmware_upload = true;
   $: if (settings.support_terminal === undefined) settings.support_terminal = true;
   $: if (original.support_terminal === undefined) original.support_terminal = true;
+  $: if (settings.cut_width === undefined) settings.cut_width = 0.18;
+  $: if (original.cut_width === undefined) original.cut_width = 0.18;
 </script>
 
 <Group title="Mower capabilities" {settings} {original}>
@@ -52,4 +55,14 @@
       bind:original={original.support_terminal}
     />
   {/if}
+  <NumberSetting
+    label="Cut width (m)"
+    key="mower.cut_width"
+    helpText="Width the mower deck cuts. The map editor can draw the tracks this wide to show overlaps and gaps (Tracks: cut width)."
+    step={0.01}
+    min={0.05}
+    max={1}
+    bind:value={settings.cut_width}
+    bind:original={original.cut_width}
+  />
 </Group>

@@ -9,6 +9,8 @@
     import { MapStore } from '../../../map/service';
     import { mowSettingsStore } from '../../../map/mow-settings';
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
+    import { splitRouteProgress } from '../../../map/core/route-progress';
+    import { isMowerMapSynced } from '../../../map/services/map-sync';
     import { relativeToAbsolute, type GeoJsonReference } from '../../../map/core/map-formats';
     import { BackendSettings } from '../../../stores/backend';
 
@@ -92,6 +94,9 @@
     let roverMarker: any = null;
     let mapLayer: any = null;
     let mapLayerKey = '';
+    // Mähroute mit Fortschritt: eigene Ebene, neu gezeichnet bei Fortschritt oder Darstellung
+    let routeLayer: any = null;
+    let routeLayerKey = '';
     let mapBounds = $state.raw<any>(null);
     let roverPosition = $state.raw<[number, number] | null>(null);
     let resizeObserver: ResizeObserver | null = null;
@@ -185,12 +190,6 @@
         for (const ex of exclusions) {
             L.polygon(ex, { color: '#c62828', weight: 1.5, fillColor: '#e57373', fillOpacity: 0.25 }).addTo(mapLayer);
         }
-        if (showRoute && m.waypoints.points.length >= 2) {
-            const route = settings ? filterWaypointsByToggles(m.waypoints.points, m, settings) : m.waypoints.points;
-            if (route.length >= 2) {
-                L.polyline(route.map(toLL), { color: '#455a64', weight: 1, opacity: 0.6 }).addTo(mapLayer);
-            }
-        }
         if (m.dockpoints.points.length >= 2) {
             L.polyline(m.dockpoints.points.map(toLL), { color: '#1565c0', weight: 3, opacity: 0.9 }).addTo(mapLayer);
         }
@@ -198,10 +197,42 @@
         mapBounds = L.latLngBounds(perimeter);
     }
 
+    // Wie CaSSAndRA: alle Linien 2 px, offen grün, gemäht blass, aktuelles Teilstück gestrichelt.
+    function updateRouteLayer() {
+        if (!map || !L) return;
+        const ref = reference;
+        const m = mowerMap;
+        const settings = $mowSettingsStore;
+        const state = $socketStore.state;
+        const synced = isMowerMapSynced(state, $socketStore.currentMapId, $socketStore.currentMapMeta?.crc ?? 0);
+        const mpi = state?.position?.mow_point_index ?? -1;
+        const key = !mapLayer || !showRoute || !ref || !m ? '' : JSON.stringify([mapLayerKey, synced, mpi]);
+        if (key === routeLayerKey && (key === '' || routeLayer)) return;
+        routeLayerKey = key;
+        if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+        if (!key || !m || m.waypoints.points.length < 2) return;
+
+        const toLL = (p: { x: number; y: number }) => mapToLatLng(p, ref!);
+        const route = settings ? filterWaypointsByToggles(m.waypoints.points, m, settings) : m.waypoints.points;
+        const progress = splitRouteProgress(route, mpi, synced);
+        routeLayer = L.layerGroup();
+        for (const seg of progress.done) {
+            L.polyline(seg.map(toLL), { color: '#7f7f7f', weight: 2, opacity: 0.125 }).addTo(routeLayer);
+        }
+        for (const seg of progress.todo) {
+            L.polyline(seg.map(toLL), { color: '#7fb249', weight: 2, opacity: 0.7 }).addTo(routeLayer);
+        }
+        if (progress.current) {
+            L.polyline(progress.current.map(toLL), { color: 'black', weight: 2, opacity: 0.8, dashArray: '4,3' }).addTo(routeLayer);
+        }
+        routeLayer.addTo(map);
+    }
+
     function updateLayers() {
         if (!map || !L) return;
 
         updateMowerMapLayer();
+        updateRouteLayer();
 
         const history = filteredHistory;
         const pvt = gpsState.navPvt;

@@ -88,7 +88,7 @@
       </div>
     {/if}
   </div>
-  <MowAreaToggles />
+  <MowAreaToggles showRouteStyle={true} />
 </div>
 
 <style>

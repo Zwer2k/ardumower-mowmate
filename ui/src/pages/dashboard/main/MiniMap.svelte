@@ -6,6 +6,7 @@
     import { socketStore } from '../../../stores/socket';
     import { mowSettingsStore } from '../../../map/mow-settings';
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
+    import { splitRouteProgress } from '../../../map/core/route-progress';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import Obstacles from '../../../map/Obstacles.svelte';
     import MapLoadingOverlay from '../../../map/MapLoadingOverlay.svelte';
@@ -119,22 +120,6 @@
         return Number.isFinite(n) ? n : 0;
     }
 
-    function buildSegments(points: any[], start: number, end: number): any[][] {
-        const segments: any[][] = [];
-        let current: any[] | null = null;
-        for (let i = start; i < end; i++) {
-            if (points[i]?.routeBreakBefore) {
-                if (current !== null) segments.push(current);
-                current = [points[i]];
-            } else if (current === null) {
-                current = [points[i]];
-            } else {
-                current.push(points[i]);
-            }
-        }
-        if (current !== null) segments.push(current);
-        return segments;
-    }
 
     // ─── Goto (wie im Karteneditor, gemeinsames Ziel) ──────────────────────
     const gotoSelection = createMapSelection();
@@ -327,51 +312,43 @@
                 {#if map.waypoints?.points?.length}
                     {@const settings = $mowSettingsStore}
                     {@const visibleWaypoints = filterWaypointsByToggles(map.waypoints.points, map, settings)}
-                    {@const wpCount = visibleWaypoints.length}
-                    {@const lastDone = isMapSynced ? Math.min(completedIndex + 1, wpCount - 1) : -1}
-                    {#if lastDone > 0 && isMapSynced}
-                        {@const doneSegments = buildSegments(visibleWaypoints, 0, lastDone + 1)}
-                        {#each doneSegments as seg}
-                            {#if seg.length > 1}
-                                <polyline
-                                    points={seg.map((p: any) => `${p.x},${p.y}`).join(' ')}
-                                    fill="none"
-                                    stroke="#2e7d32"
-                                    stroke-width="0.02"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                />
-                            {/if}
-                        {/each}
-                    {/if}
-                    {#if lastDone < wpCount - 1}
-                        {@const todoSegments = buildSegments(visibleWaypoints, Math.max(0, lastDone), wpCount)}
-                        {#each todoSegments as seg}
-                            {#if seg.length > 1}
-                                <polyline
-                                    points={seg.map((p: any) => `${p.x},${p.y}`).join(' ')}
-                                    fill="none"
-                                    stroke="blue"
-                                    stroke-width="0.008"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                />
-                            {/if}
-                        {/each}
-                    {/if}
-                    {#each visibleWaypoints as wp, i}
-                        {@const done = isMapSynced && i <= lastDone}
-                        {#if !done || isMapSynced}
-                            <circle
-                                cx={wp.x}
-                                cy={wp.y}
-                                r={done ? 0.025 : 0.02}
-                                fill={done ? '#2e7d32' : 'blue'}
-                                stroke={done ? '#2e7d32' : 'blue'}
-                                stroke-width="0.005"
-                            />
-                        {/if}
+                    {@const progress = splitRouteProgress(visibleWaypoints, completedIndex, isMapSynced)}
+                    <!-- wie CaSSAndRA: alle Linien 2 px, offen grün, gemäht blass, aktuelles Teilstück gestrichelt -->
+                    {#each progress.done as seg}
+                        <polyline
+                            points={seg.map((p) => `${p.x},${p.y}`).join(' ')}
+                            fill="none"
+                            stroke="rgba(127, 127, 127, 0.25)"
+                            stroke-opacity="0.5"
+                            stroke-width="2"
+                            vector-effect="non-scaling-stroke"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        />
                     {/each}
+                    {#each progress.todo as seg}
+                        <polyline
+                            points={seg.map((p) => `${p.x},${p.y}`).join(' ')}
+                            fill="none"
+                            stroke="#7fb249"
+                            stroke-opacity="0.7"
+                            stroke-width="2"
+                            vector-effect="non-scaling-stroke"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        />
+                    {/each}
+                    {#if progress.current}
+                        <polyline
+                            points={progress.current.map((p) => `${p.x},${p.y}`).join(' ')}
+                            fill="none"
+                            stroke="black"
+                            stroke-opacity="0.8"
+                            stroke-width="2"
+                            stroke-dasharray="4 3"
+                            vector-effect="non-scaling-stroke"
+                        />
+                    {/if}
                 {/if}
 
                 </g>

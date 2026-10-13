@@ -13,6 +13,8 @@
   export let editItemId: null | string = null;
   export let drawActive: boolean = false;
   export let onMove: (points: PointType[]) => void = () => {};
+  /** VORÜBERGEHEND: Bahnen zusätzlich in Schnittbreite (m) zeichnen; null = aus */
+  export let cutWidth: number | null = null;
 
   const dispatch = createEventDispatcher();
 
@@ -38,6 +40,24 @@
     return segments;
   }, []);
 </script>
+
+{#if cutWidth && value.points.length > 1}
+  <!-- Bänder in Schnittbreite unter der Route: zeigen Überlappung und Lücken -->
+  {#each routeSegments as segment}
+    {#if segment.length > 1}
+      <polyline
+        fill="none"
+        stroke="#7fb249"
+        stroke-opacity="0.45"
+        stroke-width={cutWidth}
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        pointer-events="none"
+        points={segment.map(p => `${p.x},${p.y}`).join(" ")}
+      />
+    {/if}
+  {/each}
+{/if}
 
 {#if value.points.length > 1}
   {#each routeSegments as segment}

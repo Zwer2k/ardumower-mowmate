@@ -78,6 +78,8 @@ export namespace Settings {
     /** cutter_pwm was saved with "Set as Default"; otherwise the modem uses 70 % */
     cutter_pwm_saved?: boolean;
     mow_height: number;
+    /** Cut width of the mower deck in metres, only used to draw the tracks */
+    cut_width: number;
     support_cutter_speed: boolean;
     support_cutter_height: boolean;
     has_sonar: boolean;
