@@ -195,6 +195,8 @@ namespace ArduMower
         float ampsLeft = 0;
         float ampsRight = 0;
         float ampsMow = 0;
+        // false: Sunray beantwortet AT+S5 nicht (z. B. upstream), Werte bleiben 0
+        bool supported = true;
 
         bool operator==(const MotorRpm &other);
         bool operator!=(const MotorRpm &other) { return !(*this == other); }
