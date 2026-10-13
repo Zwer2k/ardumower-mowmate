@@ -8,7 +8,7 @@
   import { socketService } from "../stores/socket";
   import { routeStyleStore } from "./route-style";
 
-  // showRouteStyle: VORÜBERGEHENDER Schalter für die Bahndarstellung (nur Karteneditor)
+  // showRouteStyle: Schalter für die Bahndarstellung (nur im Karteneditor)
   let { horizontal = false, showTitle = true, labelPrefix = "", showRouteStyle = false } = $props();
 
   const instanceId = `mow-area-toggles-${++instanceCounter}`;
@@ -17,7 +17,7 @@
   const exclBorderId = `${instanceId}-excl-border`;
   const routeStyleId = `${instanceId}-route-style`;
 
-  // VORÜBERGEHEND: Darstellung der Mähbahnen vergleichen (siehe route-style.ts)
+  // Bahnen in Schnittbreite zeichnen (siehe route-style.ts)
   let cutWidthTracks = $state($routeStyleStore === "width");
   $effect(() => {
     routeStyleStore.set(cutWidthTracks ? "width" : "cassandra");
@@ -107,9 +107,9 @@
     size="sm"
     bind:toggled={doMowExclusionBorder}
   />
-  <!-- VORÜBERGEHEND: Vergleich der Bahndarstellung (an: Schnittbreite, aus: wie CaSSAndRA) -->
+  <!-- Bahnen zusätzlich in Schnittbreite zeichnen -->
   {#if showRouteStyle}
-  <span class="route-style-toggle" title="Temporary: tracks drawn as wide as the cut (on) or like CaSSAndRA (off)">
+  <span class="route-style-toggle" title="Draw the tracks as wide as the mower cuts (Settings → Mower → Cut width) to show overlaps and gaps">
     <Toggle
       id={routeStyleId}
       labelText="Tracks: cut width"
@@ -122,7 +122,7 @@
 
 <style>
   .route-style-toggle {
-    border-top: 1px dashed #c6c6c6;
+    border-top: 1px solid #e0e0e0;
     padding-top: 0.25rem;
   }
   .mow-area-toggles {

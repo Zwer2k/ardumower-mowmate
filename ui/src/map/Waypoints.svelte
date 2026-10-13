@@ -13,7 +13,7 @@
   export let editItemId: null | string = null;
   export let drawActive: boolean = false;
   export let onMove: (points: PointType[]) => void = () => {};
-  /** VORÜBERGEHEND: Bahnen zusätzlich in Schnittbreite (m) zeichnen; null = aus */
+  /** Bahnen zusätzlich in Schnittbreite (m) zeichnen; null = aus */
   export let cutWidth: number | null = null;
 
   const dispatch = createEventDispatcher();
