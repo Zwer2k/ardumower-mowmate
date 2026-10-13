@@ -47,6 +47,8 @@
     buildPointId,
     buildInitialCandidates,
   } from "./interactions/map-edit";
+  import { BackendSettings } from "../stores/backend";
+  import { routeStyleStore } from "./route-style";
   import { createMapSelection, gotoStore } from "./interactions/map-goto";
   import GotoControls from "./overlay/GotoControls.svelte";
   import { createCompassState } from "./interactions/map-compass";
@@ -1331,6 +1333,7 @@
         <Waypoints
           value={{ points: edit && editCategory === "waypoints" ? rawWaypoints : filteredWaypoints }}
           waypointsId="map-0-waypoints"
+          cutWidth={$routeStyleStore === 'width' ? Math.max(0.05, $BackendSettings?.mower?.cut_width ?? 0.18) : null}
           {edit}
           {editCategory}
           {drawActive}
