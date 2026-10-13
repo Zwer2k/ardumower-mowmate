@@ -47,7 +47,8 @@
     buildPointId,
     buildInitialCandidates,
   } from "./interactions/map-edit";
-  import { createGotoState } from "./interactions/map-goto";
+  import { createMapSelection, gotoStore } from "./interactions/map-goto";
+  import GotoControls from "./overlay/GotoControls.svelte";
   import { createCompassState } from "./interactions/map-compass";
   import {
     recordMapSnapshot,
@@ -1109,16 +1110,13 @@
   }
 
   // ─── Goto state ────────────────────────────────────────────────────────────
-  const goto = createGotoState();
+  // Ziel und Fahrt teilt der Editor mit dem Main-Dashboard (gotoStore).
+  const gotoSelection = createMapSelection();
+  const gotoHint = gotoSelection.hint;
   $: mowerPos = $socketStore.state?.position ?? null;
   $: hasMap = $MapStore?.map?.perimeter?.points?.length > 0;
-  $: targetSet = $goto.targetSet;
-  $: targetPos = $goto.targetPos;
-  $: isDriving = $goto.isDriving;
-  $: targetDist = $goto.targetDist;
-  $: targetBearing = $goto.targetBearing;
-  // Entfernung nachführen; am Ziel blendet sich die Fahrfunktion aus
-  $: goto.updateFromMower(mowerPos, $socketStore.state?.job ?? null);
+  $: targetSet = $gotoStore.targetSet;
+  $: targetPos = $gotoStore.targetPos;
 
   function onMapClick(event: CustomEvent<{ x: number; y: number }>) {
     const { x, y } = event.detail;
@@ -1131,56 +1129,18 @@
     if (edit) return;
     if (!hasMap) return;
     if (showManage || showCalculate || showSchedule) return;
-    // Der erste Klick wählt nur die Karte aus; erst ein zweiter Klick
-    // innerhalb von GOTO_SELECT_MS setzt das Ziel. Danach (oder nach einer
-    // anderen Aktion: Karte verschoben, Bedienelement benutzt) braucht es
-    // wieder zwei Klicks.
-    if (!mapSelected) {
-      mapSelected = true;
-      gotoHint = true;
-      restartGotoSelectTimer();
-      return;
-    }
-    gotoHint = false;
-    restartGotoSelectTimer();
-    goto.setTarget(x, y);
-  }
-
-  const GOTO_SELECT_MS = 2500;
-  let mapSelected = false;
-  let gotoHint = false;
-  let gotoHintTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // Weitere Klicks innerhalb der Zeit versetzen das Ziel direkt.
-  function restartGotoSelectTimer() {
-    if (gotoHintTimer) clearTimeout(gotoHintTimer);
-    gotoHintTimer = setTimeout(onMapInteract, GOTO_SELECT_MS);
+    if (gotoSelection.click()) gotoStore.setTarget(x, y);
   }
 
   function onMapInteract() {
-    if (gotoHintTimer) clearTimeout(gotoHintTimer);
-    gotoHintTimer = null;
-    mapSelected = false;
-    gotoHint = false;
+    gotoSelection.interact();
   }
 
-  onDestroy(() => {
-    if (gotoHintTimer) clearTimeout(gotoHintTimer);
-  });
+  // Hand-Cursor nur, solange ein Klick die Karte bloß auswählt: nicht beim
+  // Bearbeiten und nicht, solange ein Klick ein Goto-Ziel setzt.
+  $: showGrabCursor = !edit && !drawActive && !$gotoHint && !$gotoStore.targetSet;
 
-  // Die Befehle an den Mäher sendet der Goto-Store (früher doppelt).
-  function startDrive() {
-    if (!$goto.targetSet || !$goto.targetPos) return;
-    goto.startDrive();
-  }
-
-  function stopDrive() {
-    goto.stopDrive();
-  }
-
-  function clearTarget() {
-    goto.clearTarget();
-  }
+  onDestroy(() => gotoSelection.destroy());
 
   // ─── Compass state ─────────────────────────────────────────────────────────
   const compassState = createCompassState();
@@ -1311,6 +1271,7 @@
     />
     <Canvas
       compassRotation={compassRotation}
+      grab={showGrabCursor}
       on:mapclick={onMapClick}
       on:mapinteract={onMapInteract}
       on:mousemove={onMouseMove}
@@ -1433,20 +1394,7 @@
         />
       {/if}
     </Canvas>
-    {#if gotoHint && !showManage && !edit && !showCalculate && !showSchedule}
-      <div class="goto-floater goto-hint" class:above-goto={targetSet}>Tap again to set a go-to target</div>
-    {/if}
-    {#if targetSet && !showManage && !edit && !showCalculate && !showSchedule}
-      <div class="goto-floater">
-        <span class="goto-badge">{targetDist.toFixed(1)}m / {targetBearing.toFixed(0)}°</span>
-        {#if isDriving}
-          <button class="goto-btn stop" on:click={stopDrive}>Stop</button>
-        {:else}
-          <button class="goto-btn drive" on:click={startDrive}>Drive</button>
-        {/if}
-        <button class="goto-btn clear" on:click={clearTarget}>✕</button>
-      </div>
-    {/if}
+    <GotoControls hint={$gotoHint} visible={!showManage && !edit && !showCalculate && !showSchedule} />
   </div>
 </div>
 
@@ -1500,59 +1448,6 @@
   }
   .map-canvas-wrapper.hidden {
     display: none;
-  }
-  .goto-floater {
-    position: absolute;
-    bottom: 1rem;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    background: rgba(255, 255, 255, 0.9);
-    padding: 0.5rem;
-    border-radius: 4px;
-    border: 1px solid #e0e0e0;
-    z-index: 10;
-  }
-  .goto-hint {
-    font-size: 0.75em;
-    color: #525252;
-    pointer-events: none;
-  }
-  .goto-hint.above-goto {
-    bottom: 4.5rem;
-  }
-  .goto-badge {
-    font-size: 0.75em;
-    padding: 3px 8px;
-    background: #fff3e0;
-    border: 1px solid #ffab00;
-    border-radius: 4px;
-    color: #b06000;
-    font-family: monospace;
-    margin-right: 4px;
-  }
-  .goto-btn {
-    padding: 4px 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    font-size: 0.75em;
-    cursor: pointer;
-    background: #f4f4f4;
-  }
-  .goto-btn.drive {
-    background: #e8f5e9;
-    border-color: #4caf50;
-    color: #2e7d32;
-  }
-  .goto-btn.stop {
-    background: #ffebee;
-    border-color: #ef5350;
-    color: #c62828;
-  }
-  .goto-btn.clear {
-    padding: 4px 8px;
   }
   :global(.map-toolbar .bx--row) {
     flex-wrap: wrap;

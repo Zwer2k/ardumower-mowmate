@@ -1,6 +1,6 @@
-import { writable, get } from "svelte/store";
+import { writable, get, type Readable } from "svelte/store";
 import type { SocketState } from "../../stores/socket";
-import { socketService } from "../../stores/socket";
+import { socketService, socketStore } from "../../stores/socket";
 
 export interface GotoState {
   targetSet: boolean;
@@ -35,6 +35,8 @@ export interface GotoStore {
   clearTarget(): void;
   /** Mit jeder neuen Mäherposition aufrufen: Entfernung, Richtung, Ziel erreicht */
   updateFromMower(mowerPos: { x: number; y: number } | null, job: number | null): void;
+  /** Ziel verwerfen, ohne dem Mäher etwas zu senden */
+  reset(): void;
 }
 
 export function createGotoState(): GotoStore {
@@ -63,6 +65,73 @@ export function createGotoState(): GotoStore {
       const next = updateGotoFromMower(state, mowerPos, job);
       if (next !== state) store.set(next);
     },
+    reset() {
+      store.set({ ...NO_TARGET });
+    },
+  };
+}
+
+/**
+ * Gemeinsames Goto-Ziel von Karteneditor und Main-Dashboard: ein Ziel, das in
+ * einer Ansicht gesetzt wurde, ist auch in der anderen zu sehen und zu fahren.
+ */
+export const gotoStore = createGotoState();
+
+let gotoMapId: string | null = null;
+socketStore.subscribe((s) => {
+  // Ein Ziel gehört zur Karte, auf der es gesetzt wurde.
+  if (gotoMapId !== null && s.currentMapId !== gotoMapId && !get(gotoStore).isDriving) gotoStore.reset();
+  gotoMapId = s.currentMapId;
+  gotoStore.updateFromMower(s.state?.position ?? null, s.state?.job ?? null);
+});
+
+/** Zeit, in der ein zweiter Klick das Ziel setzt */
+export const GOTO_SELECT_MS = 2500;
+
+export interface MapSelection {
+  /** true, solange der Hinweis "Tap again ..." gezeigt wird */
+  hint: Readable<boolean>;
+  /** Klick auf die Karte; true = Goto-Ziel jetzt setzen */
+  click(): boolean;
+  /** Andere Aktion (Karte verschoben, Bedienelement benutzt) */
+  interact(): void;
+  destroy(): void;
+}
+
+/**
+ * Der erste Klick auf die Karte wählt sie nur aus und zeigt einen Hinweis;
+ * erst ein zweiter Klick innerhalb von ms setzt das Ziel. Weitere Klicks
+ * innerhalb von ms nach dem vorigen versetzen das Ziel direkt. Danach, oder
+ * nach einer anderen Aktion, braucht es wieder zwei Klicks.
+ */
+export function createMapSelection(ms = GOTO_SELECT_MS): MapSelection {
+  const hint = writable(false);
+  let selected = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const reset = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    selected = false;
+    hint.set(false);
+  };
+  const restart = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(reset, ms);
+  };
+  return {
+    hint: { subscribe: hint.subscribe },
+    click() {
+      restart();
+      if (!selected) {
+        selected = true;
+        hint.set(true);
+        return false;
+      }
+      hint.set(false);
+      return true;
+    },
+    interact: reset,
+    destroy: reset,
   };
 }
 

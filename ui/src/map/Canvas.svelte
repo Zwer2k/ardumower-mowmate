@@ -10,6 +10,8 @@
   const dispatch = createEventDispatcher();
 
   export let compassRotation = 0;
+  /** Hand-Cursor: zeigt, dass die Karte verschoben werden kann */
+  export let grab = false;
 
   $: vb = $MapStore.presentation.viewBox.split(' ').map(Number);
   $: vx = vb[0] || 0;
@@ -136,6 +138,7 @@
     preserveAspectRatio="xMidYMid meet"
     width="100%"
     height="100%"
+    class:grab
     onpointerdown={handlePointerDown}
     onpointerup={handlePointerUp}
     onpointermove={handlePointerMove}
@@ -159,5 +162,11 @@
     height: 100%;
     display: block;
     touch-action: none;
+  }
+  svg.grab {
+    cursor: grab;
+  }
+  svg.grab:active {
+    cursor: grabbing;
   }
 </style>

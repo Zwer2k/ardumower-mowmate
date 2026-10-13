@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { setGotoTarget, updateGotoFromMower, type GotoState } from "../map-goto";
+import { describe, it, expect, vi } from "vitest";
+import { get } from "svelte/store";
+import { createMapSelection, setGotoTarget, updateGotoFromMower, type GotoState } from "../map-goto";
 
 // Kartenkoordinaten der UI: y ist gegenüber der Mäherposition gespiegelt.
 function driving(x: number, y: number): GotoState {
@@ -45,5 +46,30 @@ describe("goto target", () => {
   it("does not react to the mower reaching the spot without a drive", () => {
     const s = updateGotoFromMower({ ...driving(1, 0), isDriving: false }, { x: 1, y: 0 }, 0);
     expect(s.targetSet).toBe(true);
+  });
+});
+
+describe("map selection before a goto target", () => {
+  it("needs a second click within the hint time", () => {
+    vi.useFakeTimers();
+    const sel = createMapSelection(2500);
+    expect(sel.click()).toBe(false);          // selects the map
+    expect(get(sel.hint)).toBe(true);
+    expect(sel.click()).toBe(true);           // sets the target
+    expect(get(sel.hint)).toBe(false);
+    vi.advanceTimersByTime(2000);
+    expect(sel.click()).toBe(true);           // moves the target directly
+    vi.advanceTimersByTime(2600);
+    expect(sel.click()).toBe(false);          // expired: two clicks again
+    vi.useRealTimers();
+  });
+
+  it("starts over after another action", () => {
+    const sel = createMapSelection(2500);
+    sel.click();
+    sel.interact();
+    expect(get(sel.hint)).toBe(false);
+    expect(sel.click()).toBe(false);
+    sel.destroy();
   });
 });

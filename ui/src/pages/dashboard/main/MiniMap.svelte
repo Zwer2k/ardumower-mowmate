@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount, onDestroy } from 'svelte';
-    import { select } from 'd3-selection';
+    import { select, pointer } from 'd3-selection';
     import { zoom, zoomIdentity, type ZoomTransform } from 'd3-zoom';
     import { MapStore, drivenTrackStore } from '../../../map/service';
     import { socketStore } from '../../../stores/socket';
@@ -9,6 +9,9 @@
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import Obstacles from '../../../map/Obstacles.svelte';
     import MapLoadingOverlay from '../../../map/MapLoadingOverlay.svelte';
+    import MapGotoOverlay from '../../../map/overlay/MapGotoOverlay.svelte';
+    import GotoControls from '../../../map/overlay/GotoControls.svelte';
+    import { createMapSelection, gotoStore } from '../../../map/interactions/map-goto';
 
     export let mowPointIndex: number = -1;
 
@@ -25,6 +28,7 @@
     $: headingDeg = mowerPos ? 90 - mowerPos.delta * 180 / Math.PI : 0;
 
     let svgEl: SVGSVGElement | null = null;
+    let mapGroup: SVGGElement | null = null;
     let currentTransform: ZoomTransform = zoomIdentity;
     let cleanup: (() => void) | null = null;
     let compassOffset = 0;
@@ -132,10 +136,47 @@
         return segments;
     }
 
+    // ─── Goto (wie im Karteneditor, gemeinsames Ziel) ──────────────────────
+    const gotoSelection = createMapSelection();
+    const gotoHint = gotoSelection.hint;
+    $: hasPerimeter = (map?.perimeter?.points?.length ?? 0) > 0;
+    let pointerStart: { id: number; x: number; y: number; time: number } | null = null;
+
+    function onPointerDown(event: PointerEvent) {
+        pointerStart = { id: event.pointerId, x: event.clientX, y: event.clientY, time: performance.now() };
+    }
+
+    // Kurzer Tipp ohne Verschieben = Klick (wie Canvas.svelte im Editor)
+    function onPointerUp(event: PointerEvent) {
+        if (!pointerStart || event.pointerId !== pointerStart.id) return;
+        const moved = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
+        const dt = performance.now() - pointerStart.time;
+        pointerStart = null;
+        if (dt >= 300 || moved >= 8 || !mapGroup || !hasPerimeter) return;
+        if (!gotoSelection.click()) return;
+        const [x, y] = pointer(event, mapGroup);
+        gotoStore.setTarget(x, y);
+    }
+
+    // Etwas außerhalb der Karte bedient: der nächste Klick wählt nur aus
+    function onWindowPointerDown(event: PointerEvent) {
+        if (!svgEl || !(event.target instanceof Node) || !svgEl.contains(event.target)) {
+            gotoSelection.interact();
+        }
+    }
+
+    onMount(() => {
+        window.addEventListener('pointerdown', onWindowPointerDown, true);
+        return () => window.removeEventListener('pointerdown', onWindowPointerDown, true);
+    });
+
+    onDestroy(() => gotoSelection.destroy());
+
     function attachZoom(node: SVGSVGElement) {
         const z = zoom<SVGSVGElement, unknown>()
             .scaleExtent([0.5, 10])
-            .on('zoom', ({ transform }) => {
+            .on('zoom', ({ transform, sourceEvent }) => {
+                if (sourceEvent) gotoSelection.interact();
                 currentTransform = transform;
             });
         const sel = select(node);
@@ -234,9 +275,12 @@
             </svg>
         </button>
         <button class="zoom-reset" on:click={resetZoom} title="Zoom zurücksetzen">⟲</button>
-        <svg bind:this={svgEl} viewBox={safeViewBox} preserveAspectRatio="xMidYMid meet">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <svg bind:this={svgEl} viewBox={safeViewBox} preserveAspectRatio="xMidYMid meet"
+            class:grab={!$gotoHint && !$gotoStore.targetSet}
+            on:pointerdown={onPointerDown} on:pointerup={onPointerUp}>
             <g transform={transformAttr}>
-                <g transform={rotationAttr}>
+                <g transform={rotationAttr} bind:this={mapGroup}>
                     {#if map.perimeter?.points?.length > 0}
                         <polygon
                             points={map.perimeter.points.map((p) => `${p.x},${p.y}`).join(' ')}
@@ -341,6 +385,13 @@
                         />
                     {/if}
 
+                    <MapGotoOverlay
+                        targetPos={$gotoStore.targetPos}
+                        {mowerPos}
+                        showTarget={$gotoStore.targetSet}
+                        showLine={$gotoStore.targetSet && !!mowerPos && (mowerPos.x !== 0 || mowerPos.y !== 0)}
+                    />
+
                     {#if mowerPos}
                         {#if (mowerPos.accuracy ?? 0) > 0}
                             <circle
@@ -361,6 +412,7 @@
                 </g>
             </g>
         </svg>
+        <GotoControls hint={$gotoHint} />
     {:else}
         <div class="no-map">No map loaded</div>
     {/if}
@@ -437,10 +489,14 @@
         width: 100%;
         height: 100%;
         display: block;
+    }
+
+    /* Hand-Cursor nur, solange ein Klick kein Goto-Ziel setzt */
+    svg.grab {
         cursor: grab;
     }
 
-    svg:active {
+    svg.grab:active {
         cursor: grabbing;
     }
 
