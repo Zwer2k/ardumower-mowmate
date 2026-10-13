@@ -1,8 +1,8 @@
 import { writable } from "svelte/store";
 
-// VORÜBERGEHEND: Vergleich zweier Darstellungen der Mähbahnen auf Main-Dashboard
-// und Live-Karte. "width": offene Bahnen so breit wie die Schnittbreite, gemähte
-// dünn. "cassandra": wie CaSSAndRA, alle Linien 2 px, offen grün, gemäht blass.
+// Darstellung der Mähbahnen im Karteneditor (Schalter "Tracks: cut width"):
+// "width": zusätzlich Bänder in der Schnittbreite aus den Einstellungen
+// (mower.cut_width) unter der Route, "cassandra": nur die Route.
 export type RouteStyle = "width" | "cassandra";
 
 const KEY = "mowmate_route_style";
