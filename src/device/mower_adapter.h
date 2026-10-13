@@ -49,6 +49,12 @@ namespace ArduMower
       bool lastOk = false;
       bool waitingForResponse = false;
       bool lastCommandQueued = false;
+      // Nach einem Fehlschlag erst nach einer Pause erneut senden, damit eine
+      // verspätete Antwort nicht dem nächsten Befehl zugeordnet wird.
+      uint32_t retryPauseSince = 0;
+      // W,<Index> war kleiner als erwartet; erst eine zweite Ablehnung nach der
+      // Pause gilt als echte Verweigerung (Speicher voll).
+      bool indexMismatchSeen = false;
       ArduMower::Domain::Robot::MowerMap snapshot;
     };
 

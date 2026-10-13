@@ -2091,6 +2091,8 @@ void MowerAdapter::startMapUploadFromLoop()
   // Die Karte selbst bleibt ungefiltert, damit die Toggles nur die Anzeige/Upload
   // beeinflussen und nicht die gespeicherte Berechnung.
   // Die gespeicherte Karte trägt ihre eigenen Mäh-Einstellungen; die aktuellen
+  _mapUploadState.retryPauseSince = 0;
+  _mapUploadState.indexMismatchSeen = false;
   // Runtime-Toggles gehören zur gerade geladenen Karte.
   auto settings = useOverride ? settingsFromMap(snap) : _mowSettings;
   auto filtered = ArduMower::Modem::PathPlanner::filterRouteByToggles(snap.waypoints, snap, settings);
@@ -2192,6 +2194,9 @@ static bool isPointUploadPhase(int phase)
     case ArduMower::Modem::MapUploadState::dockpoints:
     case ArduMower::Modem::MapUploadState::waypoints:
       return true;
+// länger als der Router-Timeout (1 s), damit verspätete Antworten ankommen
+static const uint32_t MAP_UPLOAD_RETRY_PAUSE_MS = 1500;
+
     default:
       return false;
   }
@@ -2247,8 +2252,13 @@ void MowerAdapter::processMapUpload()
         responseValid = false;
         // Sunray bestätigt mit W,<Index> den Punkt, an dem setPoint() abbrach
         // (zu wenig Speicher oder gesperrt nach einem früheren Speicherfehler).
-        // Denselben Chunk erneut zu senden ändert daran nichts.
-        if (respIdx < _mapUploadState.lastExpectedNextIdx) {
+        // Dieselbe Antwort entsteht aber auch, wenn eine verspätete Antwort auf
+        // einen wiederholten Chunk dem nächsten Befehl zugeordnet wird. Deshalb
+        // nach einer Pause einmal erneut senden; erst eine zweite Ablehnung
+        // gilt als Verweigerung.
+        if (respIdx < _mapUploadState.lastExpectedNextIdx && !_mapUploadState.indexMismatchSeen) {
+          _mapUploadState.indexMismatchSeen = true;
+        } else if (respIdx < _mapUploadState.lastExpectedNextIdx) {
           _mapUploadError = "The mower stopped accepting map points at point " + String(respIdx) +
               " of " + String(uploadProgress().totalTotal) +
               ". It most likely ran out of memory: reduce the number of points (e.g. Lines instead of Rings, a larger track width). If even small maps fail, restart the mower.";
@@ -2280,9 +2290,12 @@ void MowerAdapter::processMapUpload()
         case MapUploadState::exclusions:
         case MapUploadState::dockpoints:
         case MapUploadState::waypoints:
+      _mapUploadState.retryPauseSince = millis();
+      if (_mapUploadState.retryPauseSince == 0) _mapUploadState.retryPauseSince = 1;
           // Anhand der vom Mower bestätigten Indizes weiterschalten,
           // damit Chunk-Größe nicht aus der Sync gerät.
           _mapUploadState.pointIdx = _mapUploadState.lastExpectedNextIdx - _mapUploadState.lastBaseIdx;
+      _mapUploadState.indexMismatchSeen = false;
           break;
         default:
           break;
@@ -2298,6 +2311,16 @@ void MowerAdapter::processMapUpload()
       _mapUploadState.pointIdx = 0;
       _mapUploadState.chunkRetry = 0;
       _mapUploadState.totalPointsSent = 0;
+  // Pause vor einer Wiederholung: Antworten, die jetzt noch eintreffen,
+  // gehören zum vorigen Versuch und werden ohne wartenden Befehl verworfen.
+  if (_mapUploadState.retryPauseSince != 0) {
+    if (millis() - _mapUploadState.retryPauseSince < MAP_UPLOAD_RETRY_PAUSE_MS) {
+      router.loop();
+      return;
+    }
+    _mapUploadState.retryPauseSince = 0;
+  }
+
       break;
 
     case MapUploadState::perimeter:
