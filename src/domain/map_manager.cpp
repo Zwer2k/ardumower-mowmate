@@ -3,6 +3,9 @@
 #include "log.h"
 #include "atomic_file.h"
 #include <MD5Builder.h>
+#ifdef ENABLE_MAP
+#include "path_planner.h"
+#endif
 
 #define _LOG_ "MapManager::"
 
@@ -193,8 +196,35 @@ namespace ArduMower {
             return md5.toString();
         }
 
-        int MapManager::computeCrc(const ArduMower::Domain::Robot::MowerMap &map) {
+        int MapManager::computeCrc(const ArduMower::Domain::Robot::MowerMap &map, int *uploadPoints) {
+            size_t fixedPoints = map.perimeter.size() + map.dockpoints.size();
+            for (const auto &ex : map.exclusions) fixedPoints += ex.size();
+#ifdef ENABLE_MAP
+            // Wie startMapUploadFromLoop(): ausgeschaltete Bereiche gehen nicht zum Mäher
+            if (!(map.doMowArea && map.doMowBorder && map.doMowExclusions && map.doMowExclusionBorder)) {
+                ArduMower::Domain::Robot::MowSettings s;
+                s.doMowArea = map.doMowArea;
+                s.doMowPerimeter = map.doMowPerimeter;
+                s.doMowBorder = map.doMowBorder;
+                s.doMowExclusions = map.doMowExclusions;
+                s.doMowExclusionBorder = map.doMowExclusionBorder;
+                auto filtered = PathPlanner::filterRouteByToggles(map.waypoints, map, s);
+                int waypointsCrc = 0;
+                int crc = map.computeMapCrcDetail(nullptr, nullptr, nullptr, &waypointsCrc);
+                if (uploadPoints) *uploadPoints = (int)(fixedPoints + filtered.size());
+                return crc - waypointsCrc + ArduMower::Domain::Robot::MowerMap::pointsCrc(filtered);
+            }
+#endif
+            if (uploadPoints) *uploadPoints = (int)(fixedPoints + map.waypoints.size());
             return map.computeMapCrc();
+        }
+
+        bool MapManager::updateCrc(const String &id, int crc) {
+            MapMeta *meta = findMeta(id);
+            if (!meta || meta->crc == crc) return false;
+            Log(INFO, "%s updateCrc: Karte %s CRC %d -> %d", _LOG_, id.c_str(), meta->crc, crc);
+            meta->crc = crc;
+            return saveIndex();
         }
 
         int MapManager::getCrc(const String &id) const {

@@ -585,6 +585,7 @@ namespace ArduMower
         virtual bool discardMap() { return false; }
         virtual String currentMapHash() { return ""; }
         virtual int currentMapCrc() { return 0; }
+        virtual int currentMapUploadPoints() { return 0; }
         virtual double currentMapArea() { return 0.0; }
         virtual double currentMapRotation() { return 0.0; }
         virtual String lastUploadedMapId() { return ""; }

@@ -135,11 +135,15 @@ void MowerAdapter::updateCurrentMapMeta() {
   // berechnet. Er wird jetzt nur noch markiert und in currentMapHash()
   // bei Bedarf nachgeholt (Speichern, Intercept, Kartenliste).
   _currentMapHashDirty = true;
-  _currentMapCrc = _mapManager.computeCrc(_map);
+  refreshCurrentMapCrc();
   _currentMapArea = _mapManager.computeArea(_map);
   Log(DBG, "%s CRC %d aus Geometrie (pts=%d/%d/%d/%d)",
       _LOG_, _currentMapCrc,
       _map.perimeter.size(), _map.exclusions.size(), _map.dockpoints.size(), _map.waypoints.size());
+}
+
+void MowerAdapter::refreshCurrentMapCrc() {
+  _currentMapCrc = _mapManager.computeCrc(_map, &_currentMapUploadPoints);
 }
 
 void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s) {
@@ -164,6 +168,8 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   _map.doMowExclusionBorder = _mowSettings.doMowExclusionBorder;
   _map.simplifyEpsilon = _mowSettings.simplifyEpsilon;
   _map.checkTurnRadius = _mowSettings.checkTurnRadius;
+  // Die "Mow areas"-Schalter bestimmen, welche Wegpunkte zum Mäher gehen
+  refreshCurrentMapCrc();
   // _map.timestamp bleibt unverändert: Er steuert die Übertragung der Karte an
   // den Browser, und die Geometrie hat sich nicht geändert. Jedes Umschalten
   // eines Mäh-Toggles schickte sonst die ganze Karte (tausende Wegpunkte)
@@ -384,7 +390,7 @@ bool MowerAdapter::loadMap(const String &id) {
     _currentMapHash = t->hash;
     _currentMapHashDirty = false;
     _currentMapArea = t->area;
-    _currentMapCrc = t->crc;
+    refreshCurrentMapCrc();
     _currentMapUnsaved = true;
     _pendingRenameId = "";
     _pendingRenameName = "";
@@ -412,12 +418,13 @@ bool MowerAdapter::loadMap(const String &id) {
   _currentMapHash = _mapManager.computeHash(_map);
   _currentMapHashDirty = false;
   _currentMapArea = _mapManager.computeArea(_map);
-  _currentMapCrc = _mapManager.getCrc(id);
+  refreshCurrentMapCrc();
+  _mapManager.updateCrc(id, _currentMapCrc);
   _currentMapUnsaved = false;
   _pendingRenameId = "";
   _pendingRenameName = "";
   syncMowSettingsFromMap();
-  Log(INFO, "%sloadMap: Karte %s geladen, CRC %d (aus SPIFFS)", _LOG_, id.c_str(), _currentMapCrc);
+  Log(INFO, "%sloadMap: Karte %s geladen, CRC %d", _LOG_, id.c_str(), _currentMapCrc);
   _mapListDirty = true;
   return true;
 }
@@ -595,7 +602,8 @@ void MowerAdapter::begin()
       _currentMapHash = _mapManager.computeHash(_map);
       _currentMapHashDirty = false;
       _currentMapArea = _mapManager.computeArea(_map);
-      _currentMapCrc = _mapManager.getCrc(_mapManager.activeId());
+      refreshCurrentMapCrc();
+      _mapManager.updateCrc(_mapManager.activeId(), _currentMapCrc);
       syncMowSettingsFromMap();
       Log(INFO, "%s begin: aktive Karte '%s' aus SPIFFS geladen, CRC %d (%.1f m²)",
           _LOG_, _mapManager.activeId().c_str(), _currentMapCrc, _currentMapArea);
@@ -2083,6 +2091,8 @@ void MowerAdapter::startMapUploadFromLoop()
   _mapUploadState.lastOk = false;
   _mapUploadState.waitingForResponse = false;
   _mapUploadState.lastCommandQueued = false;
+  _mapUploadState.retryPauseSince = 0;
+  _mapUploadState.indexMismatchSeen = false;
   // _map bleibt im reading-Zustand, um parseATNCommand/setMap während des Uploads zu blockieren
 
   auto &snap = _mapUploadState.snapshot;
@@ -2091,8 +2101,6 @@ void MowerAdapter::startMapUploadFromLoop()
   // Die Karte selbst bleibt ungefiltert, damit die Toggles nur die Anzeige/Upload
   // beeinflussen und nicht die gespeicherte Berechnung.
   // Die gespeicherte Karte trägt ihre eigenen Mäh-Einstellungen; die aktuellen
-  _mapUploadState.retryPauseSince = 0;
-  _mapUploadState.indexMismatchSeen = false;
   // Runtime-Toggles gehören zur gerade geladenen Karte.
   auto settings = useOverride ? settingsFromMap(snap) : _mowSettings;
   auto filtered = ArduMower::Modem::PathPlanner::filterRouteByToggles(snap.waypoints, snap, settings);
@@ -2186,6 +2194,9 @@ static bool responseOkForPhase(int phase, const char* response)
   }
 }
 
+// länger als der Router-Timeout (1 s), damit verspätete Antworten ankommen
+static const uint32_t MAP_UPLOAD_RETRY_PAUSE_MS = 1500;
+
 static bool isPointUploadPhase(int phase)
 {
   switch (phase) {
@@ -2194,9 +2205,6 @@ static bool isPointUploadPhase(int phase)
     case ArduMower::Modem::MapUploadState::dockpoints:
     case ArduMower::Modem::MapUploadState::waypoints:
       return true;
-// länger als der Router-Timeout (1 s), damit verspätete Antworten ankommen
-static const uint32_t MAP_UPLOAD_RETRY_PAUSE_MS = 1500;
-
     default:
       return false;
   }
@@ -2282,20 +2290,20 @@ void MowerAdapter::processMapUpload()
       }
       // Resend same chunk (pointIdx was not advanced)
       _mapUploadState.lastResponse[0] = '\0';
+      _mapUploadState.retryPauseSince = millis();
+      if (_mapUploadState.retryPauseSince == 0) _mapUploadState.retryPauseSince = 1;
     } else {
       // Success: advance pointIdx for chunk phases
       _mapUploadState.chunkRetry = 0;
+      _mapUploadState.indexMismatchSeen = false;
       switch (_mapUploadState.phase) {
         case MapUploadState::perimeter:
         case MapUploadState::exclusions:
         case MapUploadState::dockpoints:
         case MapUploadState::waypoints:
-      _mapUploadState.retryPauseSince = millis();
-      if (_mapUploadState.retryPauseSince == 0) _mapUploadState.retryPauseSince = 1;
           // Anhand der vom Mower bestätigten Indizes weiterschalten,
           // damit Chunk-Größe nicht aus der Sync gerät.
           _mapUploadState.pointIdx = _mapUploadState.lastExpectedNextIdx - _mapUploadState.lastBaseIdx;
-      _mapUploadState.indexMismatchSeen = false;
           break;
         default:
           break;
@@ -2303,14 +2311,6 @@ void MowerAdapter::processMapUpload()
     }
   }
 
-  switch (_mapUploadState.phase) {
-    case MapUploadState::start:
-      Log(INFO, "%sprocessMapUpload: uploading map...", _LOG_);
-      _mapUploadError = "";
-      _mapUploadState.phase = MapUploadState::perimeter;
-      _mapUploadState.pointIdx = 0;
-      _mapUploadState.chunkRetry = 0;
-      _mapUploadState.totalPointsSent = 0;
   // Pause vor einer Wiederholung: Antworten, die jetzt noch eintreffen,
   // gehören zum vorigen Versuch und werden ohne wartenden Befehl verworfen.
   if (_mapUploadState.retryPauseSince != 0) {
@@ -2321,6 +2321,14 @@ void MowerAdapter::processMapUpload()
     _mapUploadState.retryPauseSince = 0;
   }
 
+  switch (_mapUploadState.phase) {
+    case MapUploadState::start:
+      Log(INFO, "%sprocessMapUpload: uploading map...", _LOG_);
+      _mapUploadError = "";
+      _mapUploadState.phase = MapUploadState::perimeter;
+      _mapUploadState.pointIdx = 0;
+      _mapUploadState.chunkRetry = 0;
+      _mapUploadState.totalPointsSent = 0;
       break;
 
     case MapUploadState::perimeter:

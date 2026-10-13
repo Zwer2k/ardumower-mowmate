@@ -63,7 +63,9 @@ export function mowerCapacityFor(
   map: Map | null | undefined,
   settings: MowSettings | null,
 ): MowerCapacity {
-  const points = uploadPointCount(map, settings);
+  // Die Zählung des Modems ist genau (inkl. neu berechneter Verbindungen);
+  // die eigene Filterung ist nur der Ersatz, bis sie vorliegt.
+  const points = socket.currentMapUploadPoints ?? uploadPointCount(map, settings);
   const synced = isMowerMapSynced(socket.state, socket.currentMapId, socket.currentMapMeta?.crc ?? 0);
   // Hält der Mäher genau diese Karte, wird ihr Speicher beim Upload frei.
   // Hält er eine andere Karte, ist deren Größe unbekannt.

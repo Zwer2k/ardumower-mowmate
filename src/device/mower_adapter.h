@@ -111,6 +111,7 @@ namespace ArduMower
       String _currentMapId;
       String _currentMapHash;
       int _currentMapCrc = 0;
+      int _currentMapUploadPoints = 0;   // Punkte, die beim Upload zum Mäher gehen
       double _currentMapArea = 0.0;
       bool _currentMapUnsaved = false;
       String _pendingRenameId;
@@ -252,6 +253,9 @@ namespace ArduMower
       virtual bool setActiveMap(const String &id) override;
       virtual String currentMapHash() override;
       virtual int currentMapCrc() override;
+      virtual int currentMapUploadPoints() override { return _currentMapUploadPoints; }
+      // CRC und Punktzahl der aktuellen Karte, wie sie zum Mäher gehen
+      void refreshCurrentMapCrc();
       virtual double currentMapArea() override;
       virtual double currentMapRotation() override { return _map.rotation; }
 

@@ -608,7 +608,10 @@
   $: highlightedFindingPoints = highlightedFindingIdx
     .map((i) => rawWaypoints[i])
     .filter((p): p is Point => !!p);
-  $: totalPoints = perimeterPoints + dockpointsPoints + waypointsPoints + exclusionPoints.reduce((a, b) => a + b, 0);
+  // Gezählt wird, was zum Mäher geht: ausgeschaltete "Mow areas" fehlen.
+  $: fixedPoints = perimeterPoints + dockpointsPoints + exclusionPoints.reduce((a, b) => a + b, 0);
+  $: totalPoints = $socketStore.currentMapUploadPoints ?? fixedPoints + filteredWaypoints.length;
+  $: uploadWaypointsPoints = Math.max(0, totalPoints - fixedPoints);
   // Schätzung, wie viele Punkte in den Speicher des Mähers passen.
   $: mowerCapacity = mowerCapacityFor($socketStore, $MapStore?.map, $mowSettingsStore);
   $: mowerCapacityExceeded = capacityExceeded(mowerCapacity);
@@ -1296,6 +1299,7 @@
             }));
             setMapDirty(true);
           }}
+      {uploadWaypointsPoints}
         />
         {#if $MapStore.map.searchWire.points.length > 1}
           <polyline

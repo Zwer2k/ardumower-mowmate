@@ -49,11 +49,17 @@ namespace ArduMower {
             String activeId() const { return _index.activeId; }
 
             static String computeHash(const ArduMower::Domain::Robot::MowerMap &map);
-            static int computeCrc(const ArduMower::Domain::Robot::MowerMap &map);
+            // CRC der Karte, wie sie zum Mäher geht: Die Wegpunkte werden mit den
+            // "Mow areas"-Schaltern der Karte gefiltert. uploadPoints erhält die
+            // Anzahl der übertragenen Punkte.
+            static int computeCrc(const ArduMower::Domain::Robot::MowerMap &map, int *uploadPoints = nullptr);
             static double computeArea(const ArduMower::Domain::Robot::MowerMap &map);
 
             // Gibt den in SPIFFS gespeicherten CRC zurück (0 wenn nicht gefunden)
             int getCrc(const String &id) const;
+            // Korrigiert den gespeicherten CRC (z. B. von Karten, deren CRC noch
+            // ohne die "Mow areas"-Schalter berechnet wurde)
+            bool updateCrc(const String &id, int crc);
             static bool isMapValid(const ArduMower::Domain::Robot::MowerMap &map);
 
             String generateDefaultName() const;

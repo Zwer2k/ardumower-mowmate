@@ -2272,6 +2272,9 @@ bool UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
   }
   if (dataType == ResponseDataType::mowSettings) {
     _j["mapId"] = _source.currentMapId();
+    // hängen von den "Mow areas"-Schaltern ab
+    _j["mapCrc"] = _source.currentMapCrc();
+    _j["uploadPoints"] = _source.currentMapUploadPoints();
   }
 
   if (dataType == ResponseDataType::mowerState && !_progressOp.isEmpty()) {
@@ -2386,6 +2389,7 @@ void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool acc
   auto data = doc["data"].to<JsonObject>();
   data["hash"] = "";
   data["crc"] = _source.currentMapCrc();
+  data["uploadPoints"] = _source.currentMapUploadPoints();
   data["area"] = _source.currentMapArea();
   data["rotation"] = _source.currentMapRotation();
   data["unsaved"] = true;

@@ -9,6 +9,8 @@
   export let exclusionPoints: number[];
   export let dockpointsPoints: number;
   export let waypointsPoints: number;
+  /** Wegpunkte, die zum Mäher gehen (nur eingeschaltete "Mow areas") */
+  export let uploadWaypointsPoints: number = waypointsPoints;
   export let totalPoints: number;
   export let mowerCapacity: MowerCapacity | null = null;
   export let mowerCapacityExceeded = false;
@@ -64,7 +66,11 @@
     <div><strong>Area:</strong> {(socketState.currentMapMeta?.area ?? 0).toFixed(1)} m²</div>
     <div><strong>Perimeter:</strong> {perimeterPoints}</div>
     <div><strong>Dock:</strong> {dockpointsPoints}</div>
-    <div><strong>Way:</strong> {waypointsPoints}</div>
+    <div title={uploadWaypointsPoints !== waypointsPoints
+      ? `${uploadWaypointsPoints} of ${waypointsPoints} waypoints go to the mower; the others belong to switched-off mow areas`
+      : undefined}>
+      <strong>Way:</strong> {uploadWaypointsPoints}{#if uploadWaypointsPoints !== waypointsPoints}<span class="capacity"> / {waypointsPoints}</span>{/if}
+    </div>
     {#if needsUpload && onUploadMap}
       <button class="sync-btn sync-warn" on:click={onUploadMap} title="Upload this map to the mower">
         ⚠ not synced — upload

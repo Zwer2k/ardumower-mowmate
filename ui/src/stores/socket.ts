@@ -80,6 +80,8 @@ export interface SocketState {
   activeMapId: string;
   currentMapId: string;
   currentMapMeta: { hash: string; crc: number; area: number; rotation: number } | null;
+  /** Punkte, die beim Upload zum Mäher gehen (nur eingeschaltete "Mow areas"), null = unbekannt */
+  currentMapUploadPoints: number | null;
   currentMapUnsaved: boolean;
   isLoadingMap: boolean;
   isNewMap: boolean;
@@ -109,6 +111,7 @@ const initialState: SocketState = {
   activeMapId: "",
   currentMapId: "",
   currentMapMeta: null,
+  currentMapUploadPoints: null,
   currentMapUnsaved: false,
   isLoadingMap: false,
   isNewMap: false,
@@ -626,6 +629,7 @@ class SocketService {
                     syncId: number;
                     mapId: string;
                     accepted: boolean;
+                    uploadPoints?: number;
                   };
                   if (!data.accepted) {
                     if (this.pendingUpload?.syncId === data.syncId) {
@@ -664,6 +668,7 @@ class SocketService {
                     rotation: data.rotation || 0,
                   };
                   newState.currentMapMeta = meta;
+                  if (typeof data.uploadPoints === "number") newState.currentMapUploadPoints = data.uploadPoints;
                   newState.currentMapUnsaved = data.unsaved;
                   mapMetaStore.set(meta);
                   setMapDirty(data.unsaved);
@@ -819,6 +824,7 @@ class SocketService {
                     // hängt, die im Backend nicht mehr geladen ist.
                     newState.currentMapId = "";
                     newState.currentMapMeta = null;
+                    newState.currentMapUploadPoints = null;
                     newState.isNewMap = false;
                     workflowLoadFailed = true;
                   }
@@ -836,11 +842,20 @@ class SocketService {
                 case ResponseDataType.ubxResponse:
                   newState.ubxResponse = jsonData.data as UbxResponse;
                   break;
-                case ResponseDataType.mowSettings:
-                  if ((jsonData.data as MowSettings & { mapId?: string }).mapId === newState.currentMapId) {
-                    mowSettingsStore.set(jsonData.data as MowSettings);
+                case ResponseDataType.mowSettings: {
+                  const data = jsonData.data as MowSettings & { mapId?: string; mapCrc?: number; uploadPoints?: number };
+                  if (data.mapId === newState.currentMapId) {
+                    mowSettingsStore.set(data);
+                    // Die "Mow areas"-Schalter ändern, welche Wegpunkte zum Mäher
+                    // gehen, und damit den CRC, den der Mäher melden muss.
+                    if (typeof data.mapCrc === "number" && newState.currentMapMeta) {
+                      newState.currentMapMeta = { ...newState.currentMapMeta, crc: data.mapCrc };
+                      mapMetaStore.set(newState.currentMapMeta);
+                    }
+                    if (typeof data.uploadPoints === "number") newState.currentMapUploadPoints = data.uploadPoints;
                   }
                   break;
+                }
                 case ResponseDataType.mowerMap: {
                   const data = jsonData.data as { json: string };
                   if (data?.json) {
@@ -1293,7 +1308,7 @@ class SocketService {
     // des Ladens weiß, welche Karte geladen wird, und finishLoadMap korrekt
     // ausgelöst wird. startLoadMap versucht denselben Zustand über updateSocket
     // zu setzen, falls das Workflow-Store bereits registriert ist.
-    socketStore.update((s) => ({ ...s, currentMapMeta: null, currentMapId: id, isLoadingMap: true, isNewMap: false }));
+    socketStore.update((s) => ({ ...s, currentMapMeta: null, currentMapUploadPoints: null, currentMapId: id, isLoadingMap: true, isNewMap: false }));
     mapMetaStore.set(null);
     // The report describes the route of the map we are leaving.
     clearRouteReport();
