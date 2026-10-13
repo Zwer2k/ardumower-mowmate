@@ -35,6 +35,14 @@
   const pixelsPerUnit = writable(1);
   let resizeObserver: ResizeObserver | null = null;
 
+  // "mapinteract": die Karte wurde verschoben/gezoomt oder etwas außerhalb der
+  // Karte bedient. Map.svelte wertet den nächsten Klick dann nur als Auswahl.
+  function onWindowPointerDown(event: PointerEvent) {
+    if (!svg || !(event.target instanceof Node) || !svg.contains(event.target)) {
+      dispatch('mapinteract');
+    }
+  }
+
   function updatePixelsPerUnit() {
     if (!contentGroup) return;
     const m = contentGroup.getScreenCTM();
@@ -61,7 +69,8 @@
     if (svg && g) {
       const zoomBehaviour = zoom()
         .filter(() => panEnabled)
-        .on("zoom", ({ transform }) => {
+        .on("zoom", ({ transform, sourceEvent }) => {
+          if (sourceEvent) dispatch('mapinteract');
           const { k, x, y } = transform;
           select(g).attr("transform", `translate(${x}, ${y}) scale(${k})`);
           updatePixelsPerUnit();
@@ -69,6 +78,7 @@
       select(svg).call(zoomBehaviour);
     }
     updatePixelsPerUnit();
+    window.addEventListener("pointerdown", onWindowPointerDown, true);
     if (svg && typeof ResizeObserver !== "undefined") {
       resizeObserver = new ResizeObserver(() => updatePixelsPerUnit());
       resizeObserver.observe(svg);
@@ -76,6 +86,7 @@
   });
 
   onDestroy(() => {
+    if (typeof window !== "undefined") window.removeEventListener("pointerdown", onWindowPointerDown, true);
     resizeObserver?.disconnect();
     resizeObserver = null;
   });

@@ -1117,6 +1117,8 @@
   $: isDriving = $goto.isDriving;
   $: targetDist = $goto.targetDist;
   $: targetBearing = $goto.targetBearing;
+  // Entfernung nachführen; am Ziel blendet sich die Fahrfunktion aus
+  $: goto.updateFromMower(mowerPos, $socketStore.state?.job ?? null);
 
   function onMapClick(event: CustomEvent<{ x: number; y: number }>) {
     const { x, y } = event.detail;
@@ -1129,22 +1131,54 @@
     if (edit) return;
     if (!hasMap) return;
     if (showManage || showCalculate || showSchedule) return;
+    // Der erste Klick wählt nur die Karte aus; erst ein zweiter Klick
+    // innerhalb von GOTO_SELECT_MS setzt das Ziel. Danach (oder nach einer
+    // anderen Aktion: Karte verschoben, Bedienelement benutzt) braucht es
+    // wieder zwei Klicks.
+    if (!mapSelected) {
+      mapSelected = true;
+      gotoHint = true;
+      restartGotoSelectTimer();
+      return;
+    }
+    gotoHint = false;
+    restartGotoSelectTimer();
     goto.setTarget(x, y);
   }
 
+  const GOTO_SELECT_MS = 2500;
+  let mapSelected = false;
+  let gotoHint = false;
+  let gotoHintTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Weitere Klicks innerhalb der Zeit versetzen das Ziel direkt.
+  function restartGotoSelectTimer() {
+    if (gotoHintTimer) clearTimeout(gotoHintTimer);
+    gotoHintTimer = setTimeout(onMapInteract, GOTO_SELECT_MS);
+  }
+
+  function onMapInteract() {
+    if (gotoHintTimer) clearTimeout(gotoHintTimer);
+    gotoHintTimer = null;
+    mapSelected = false;
+    gotoHint = false;
+  }
+
+  onDestroy(() => {
+    if (gotoHintTimer) clearTimeout(gotoHintTimer);
+  });
+
+  // Die Befehle an den Mäher sendet der Goto-Store (früher doppelt).
   function startDrive() {
     if (!$goto.targetSet || !$goto.targetPos) return;
-    socketService.sendNavigateTo($goto.targetPos.x, -$goto.targetPos.y);
     goto.startDrive();
   }
 
   function stopDrive() {
-    socketService.sendJoystickMove(0, 0);
     goto.stopDrive();
   }
 
   function clearTarget() {
-    socketService.sendJoystickMove(0, 0);
     goto.clearTarget();
   }
 
@@ -1265,6 +1299,7 @@
       {exclusionPoints}
       {dockpointsPoints}
       {waypointsPoints}
+      {uploadWaypointsPoints}
       {totalPoints}
       {mowerCapacity}
       {mowerCapacityExceeded}
@@ -1277,6 +1312,7 @@
     <Canvas
       compassRotation={compassRotation}
       on:mapclick={onMapClick}
+      on:mapinteract={onMapInteract}
       on:mousemove={onMouseMove}
     >
       {#if $MapStore && $MapStore.map}
@@ -1299,7 +1335,6 @@
             }));
             setMapDirty(true);
           }}
-      {uploadWaypointsPoints}
         />
         {#if $MapStore.map.searchWire.points.length > 1}
           <polyline
@@ -1398,6 +1433,9 @@
         />
       {/if}
     </Canvas>
+    {#if gotoHint && !showManage && !edit && !showCalculate && !showSchedule}
+      <div class="goto-floater goto-hint" class:above-goto={targetSet}>Tap again to set a go-to target</div>
+    {/if}
     {#if targetSet && !showManage && !edit && !showCalculate && !showSchedule}
       <div class="goto-floater">
         <span class="goto-badge">{targetDist.toFixed(1)}m / {targetBearing.toFixed(0)}°</span>
@@ -1476,6 +1514,14 @@
     border-radius: 4px;
     border: 1px solid #e0e0e0;
     z-index: 10;
+  }
+  .goto-hint {
+    font-size: 0.75em;
+    color: #525252;
+    pointer-events: none;
+  }
+  .goto-hint.above-goto {
+    bottom: 4.5rem;
   }
   .goto-badge {
     font-size: 0.75em;
