@@ -178,8 +178,12 @@ namespace ArduMower
         int fixTimeout;
         int mowPwm;
         int mowHeight;
+        // Mähmotor-Schalter: AUTO = Sunray entscheidet, OFF = ausgeschaltet und
+        // gesperrt (AT+C mit Mow = 0), ON = freigegeben und eingeschaltet
+        enum MowMotorMode : uint8_t { MOW_MOTOR_AUTO = 0, MOW_MOTOR_OFF = 1, MOW_MOTOR_ON = 2 };
+        uint8_t mowMotorMode;
 
-        DesiredState() : timestamp(1), speed(0.2f), mowerMotorEnabled(false), finishAndRestart(false), sonarEnabled(true), op(-1), fixTimeout(-1), mowPwm(255), mowHeight(55){};
+        DesiredState() : timestamp(1), speed(0.2f), mowerMotorEnabled(false), finishAndRestart(false), sonarEnabled(true), op(-1), fixTimeout(-1), mowPwm(255), mowHeight(55), mowMotorMode(MOW_MOTOR_AUTO){};
         void marshal(JsonObject o) const;
       };
 

@@ -214,15 +214,26 @@
         };
     }
 
-    let motorState = $state<boolean | null>(null); // null=neutral/auto, false=force off, true=force on
+    // Mähmotor: Off = aus und gesperrt, Auto = Sunray entscheidet, On = frei und an.
+    // Angezeigt wird der Zustand des Modems, damit er auch nach dem Neuladen stimmt.
+    type MowMotorMode = 'off' | 'auto' | 'on';
+    const mowMotorModes: { mode: MowMotorMode; label: string; title: string }[] = [
+        { mode: 'off', label: 'Off', title: 'Switch the cutter off and keep it off, also when mowing starts' },
+        { mode: 'auto', label: 'Auto', title: 'Sunray switches the cutter on and off while mowing' },
+        { mode: 'on', label: 'On', title: 'Switch the cutter on now' },
+    ];
+    let pendingMowMotorMode = $state<MowMotorMode | null>(null);
+    let mowMotorMode = $derived<MowMotorMode>(pendingMowMotorMode ?? desiredState?.mow_motor_mode ?? 'auto');
+    // Die Antwort des Modems ersetzt die vorläufige Anzeige
+    $effect(() => {
+        if (desiredState?.mow_motor_mode === pendingMowMotorMode) pendingMowMotorMode = null;
+    });
 
-    function cycleMowerMotor() {
-        if (motorState === null) motorState = false;
-        else if (motorState === false) motorState = true;
-        else motorState = null;
-
-        // neutral sends null -> backend restores mower-driven motor control
-        send('mowerEnabled', { enabled: motorState });
+    function setMowMotorMode(mode: MowMotorMode) {
+        if (mode === mowMotorMode) return;
+        pendingMowMotorMode = mode;
+        // null = Auto: das Modem gibt das Mähwerk frei, ohne es außerhalb des Mähens einzuschalten
+        send('mowerEnabled', { enabled: mode === 'auto' ? null : mode === 'on' });
     }
 </script>
 
@@ -240,11 +251,16 @@
         <button title="Request Status" onclick={() => send('requestStatus')}><ChartLine /></button>
     </div>
     <div class="toggle-row">
-        <label class="toggle-label tristate-label">
-            <input type="checkbox" indeterminate={motorState === null} checked={motorState === true}
-                   onclick={cycleMowerMotor} />
-            <span class="tristate-text">Mow Motor {motorState === null ? '(auto)' : motorState ? '(on)' : '(off)'}</span>
-        </label>
+        <div class="toggle-label mow-motor">
+            <span id="mow-motor-label">Mow Motor</span>
+            <div class="segmented" role="radiogroup" aria-labelledby="mow-motor-label">
+                {#each mowMotorModes as m}
+                    <button type="button" role="radio" aria-checked={mowMotorMode === m.mode}
+                            class:active={mowMotorMode === m.mode} class={m.mode} title={m.title}
+                            onclick={() => setMowMotorMode(m.mode)}>{m.label}</button>
+                {/each}
+            </div>
+        </div>
         <label class="toggle-label">
             <input type="checkbox" checked={desiredState?.finish_and_restart ?? false}
                    onchange={(e) => send('finishAndRestartEnabled', { enabled: e.currentTarget.checked })} />
@@ -472,9 +488,17 @@
 
     .toggle-row {
         display: flex;
-        gap: 12px;
+        flex-wrap: wrap;
+        gap: 6px 12px;
         justify-content: center;
         margin-top: 4px;
+    }
+
+    /* Der Segment-Schalter bekommt eine eigene Zeile */
+    .toggle-label.mow-motor {
+        flex-basis: 100%;
+        justify-content: center;
+        cursor: default;
     }
 
     .toggle-label {
@@ -483,6 +507,36 @@
         gap: 4px;
         font-size: 0.8em;
         cursor: pointer;
+    }
+
+    /* Segment-Schalter Off | Auto | On */
+    .segmented {
+        display: inline-flex;
+        border: 1px solid #8d8d8d;
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    .segmented button {
+        padding: 2px 8px;
+        border: none;
+        border-left: 1px solid #8d8d8d;
+        background: #f4f4f4;
+        color: #161616;
+        font-size: 1em;
+        cursor: pointer;
+    }
+    .segmented button:first-child {
+        border-left: none;
+    }
+    .segmented button.active {
+        background: #0f62fe;
+        color: #fff;
+    }
+    .segmented button.off.active {
+        background: #da1e28;
+    }
+    .segmented button.on.active {
+        background: #24a148;
     }
 
     /* ─── Sliders ────────────────────────────────────────────────────────── */

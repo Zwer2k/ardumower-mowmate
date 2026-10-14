@@ -235,6 +235,7 @@ void DesiredState::marshal(JsonObject o) const
   o[_t_desiredState_mowPwm] = mowPwm;
   o[_t_desiredState_mowHeight] = mowHeight;
   o[_t_desiredState_sonarEnabled] = sonarEnabled;
+  o["mow_motor_mode"] = mowMotorMode == MOW_MOTOR_OFF ? "off" : mowMotorMode == MOW_MOTOR_ON ? "on" : "auto";
 }
 
 bool MotorRpm::operator==(const MotorRpm &other)

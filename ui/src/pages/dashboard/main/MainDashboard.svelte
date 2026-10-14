@@ -18,7 +18,7 @@
     import { MotorRpmStore } from '../../../stores/motorRpm';
     import { confirmUploadCapacity } from '../../../map/services/mower-capacity';
     import { sensorFallbackStore, sonarRecentlyTriggered } from '../../../stores/sensor-fallback';
-    import { SensorDescriptions } from '../../../model';
+    import SensorReasonTag from '../../../widget/SensorReasonTag.svelte';
 
     async function uploadMap() {
         if (await confirmUploadCapacity()) socketService.sendUploadMap();
@@ -156,7 +156,7 @@
                         <div class="status-value" style:color={jobColor(state?.job) === 'green' ? '#24a148' : jobColor(state?.job) === 'blue' ? '#0f62fe' : jobColor(state?.job) === 'cyan' ? '#1192e8' : jobColor(state?.job) === 'red' ? '#da1e28' : '#8d8d8d'}>{jobLabel(state?.job, desc?.job)}</div>
                         <!-- Grund des letzten Stopps (Sunray stateSensor), z. B. Regen oder Hindernis -->
                         {#if (state?.sensor ?? 0) !== 0}
-                            <div class="status-label status-reason" title="Grund des letzten Stopps oder Fehlers">Meldung: {SensorDescriptions[state?.sensor ?? 0] ?? `#${state?.sensor}`}</div>
+                            <div class="status-label status-reason"><SensorReasonTag sensor={state?.sensor ?? 0} /></div>
                         {:else}
                             <div class="status-label">Status</div>
                         {/if}
@@ -859,9 +859,8 @@
         color: white;
     }
 
-    .status-reason {
-        color: #da1e28;
-        font-weight: 600;
+    .status-reason :global(.bx--tag) {
+        margin: 0;
     }
 
     /* Ersatzanzeige ohne AT+S3: Text statt Buchstabe */

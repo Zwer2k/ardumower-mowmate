@@ -913,10 +913,19 @@ void MowerAdapter::finalizeInterceptedMap() {
 // start mowing
 bool MowerAdapter::start()
 {
-  Log(DBG, "%sstart", _LOG_CMD_); 
-  //    AT+C,   -1,                   -1,    -1,          -1,                 -1,      0.32,             -1,   -1
-  // Command, Mow , start / stop / Dock , Speed, fix timeout, finish and restart, Waypoints, skip waypoint ,sonar
-  return sendCommand("AT+C,-1,1,0.2,100,0,-1,-1,1");
+  Log(DBG, "%sstart", _LOG_CMD_);
+  // Command, Mow, start / stop / Dock, Speed, fix timeout, finish and restart, Waypoints, skip waypoint, sonar
+  // Mow = 1 gibt den Mähmotor frei: Sunray sperrt ihn nach einem AT+C mit Mow = 0
+  // (enableMowMotor = false) bis zum nächsten Neustart, mit -1 mähte der Roboter
+  // dann ohne Messer. Sunray schaltet den Motor beim Beginn von OP_MOW wieder aus
+  // und erst auf der Mähbahn ein.
+  // Wurde der Mähmotor zuletzt ausdrücklich ausgeschaltet (z. B. Home Assistant
+  // fan_speed "off": fahren ohne Messer), bleibt es bei -1.
+  // Die übrigen Felder bleiben -1: Früher setzte der Start jedes Mal 0,2 m/s,
+  // 100 s Fix-Timeout, kein "finish and restart" und Sonar an und überschrieb
+  // damit die eigenen Einstellungen.
+  const bool mowMotorOff = _desiredState.mowMotorMode == ArduMower::Domain::Robot::DesiredState::MOW_MOTOR_OFF;
+  return sendCommand(mowMotorOff ? "AT+C,-1,1,-1,-1,-1,-1,-1,-1" : "AT+C,1,1,-1,-1,-1,-1,-1,-1");
 }
 
 // stop mowing
@@ -1017,6 +1026,9 @@ bool MowerAdapter::setFixTimeout(int timeout)
 bool MowerAdapter::mowerEnabled(bool enabled)
 {
   Log(DBG, "%smowerEnabled(%d)", _LOG_CMD_, enabled);
+  _desiredState.mowMotorMode = enabled ? ArduMower::Domain::Robot::DesiredState::MOW_MOTOR_ON
+                                       : ArduMower::Domain::Robot::DesiredState::MOW_MOTOR_OFF;
+  _desiredState.timestamp = millis();
   String command = "AT+C," + String(enabled ? "1" : "0") + ",-1,-1,-1,-1,-1,-1,-1";
 
   return sendCommand(command);
@@ -1026,7 +1038,14 @@ bool MowerAdapter::mowerEnabled(bool enabled)
 bool MowerAdapter::mowerAuto()
 {
   Log(DBG, "%smowerAuto", _LOG_CMD_);
-  return sendCommand("AT+C,-1,-1,-1,-1,-1,-1,-1,-1");
+  // Sunray kennt kein "nur entsperren": AT+C mit Mow = 1 schaltet das Mähwerk
+  // auch sofort ein. Beim Mähen übernimmt Sunray danach selbst; sonst bleibt
+  // Sunray unberührt, und der nächste Start gibt das Mähwerk frei.
+  _desiredState.mowMotorMode = ArduMower::Domain::Robot::DesiredState::MOW_MOTOR_AUTO;
+  _desiredState.timestamp = millis();
+  if (_state.job == 1)
+    return sendCommand("AT+C,1,-1,-1,-1,-1,-1,-1,-1");
+  return true;
 }
 
 // activate and deactivate finish and restart
@@ -1914,6 +1933,12 @@ void MowerAdapter::parseATCCommand(const char* line)
         {
         case 1:
           _desiredState.mowerMotorEnabled = atoi(val) == 1;
+          // Von MowMate oder einer anderen App ausgeschaltet: gesperrt. Gibt eine
+          // andere App ihn wieder frei, gilt das als "on".
+          if (atoi(val) == 0)
+            _desiredState.mowMotorMode = ArduMower::Domain::Robot::DesiredState::MOW_MOTOR_OFF;
+          else if (_desiredState.mowMotorMode == ArduMower::Domain::Robot::DesiredState::MOW_MOTOR_OFF)
+            _desiredState.mowMotorMode = ArduMower::Domain::Robot::DesiredState::MOW_MOTOR_ON;
           break;
         case 2:
           _desiredState.op = atoi(val);

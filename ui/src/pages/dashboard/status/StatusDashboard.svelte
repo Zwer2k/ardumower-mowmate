@@ -7,6 +7,7 @@
     import { MapStore } from '../../../map/service';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import { getModemInfo, type ApiModemInfoResponse } from '../../../firmware/service';
+    import SensorReasonTag from '../../../widget/SensorReasonTag.svelte';
     import { SensorDescriptions } from '../../../model';
     import { page } from '$app/stores';
     import { browser } from '$app/environment';
@@ -122,7 +123,7 @@
                 {#if (mower?.sensor ?? 0) === 0}
                     <Tag type="green" size="sm">keine</Tag>
                 {:else}
-                    <Tag type="red" size="sm">{SensorDescriptions[mower?.sensor ?? 0] ?? `#${mower?.sensor}`}</Tag>
+                    <SensorReasonTag sensor={mower?.sensor ?? 0} />
                 {/if}
             </Tile>
             <Tile class="summary-tile">
