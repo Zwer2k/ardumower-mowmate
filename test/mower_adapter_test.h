@@ -169,6 +169,16 @@ testF(TestMowerAdapter, start)
 {
   assertTrue(uut->start());
   String actualResult = stripChecksumAndCRLF(fakeArduMowerInputReadLine());
+  assertEqual(actualResult, "AT+C,1,1,-1,-1,-1,-1,-1,-1");
+}
+
+testF(TestMowerAdapter, startKeepsMowMotorOffWhenSwitchedOff)
+{
+  // Mähmotor ausdrücklich aus (z. B. Home Assistant fan_speed "off"): Start gibt ihn nicht frei
+  assertTrue(uut->mowerEnabled(false));
+  fakeArduMowerInputReadLine();
+  assertTrue(uut->start());
+  String actualResult = stripChecksumAndCRLF(fakeArduMowerInputReadLine());
   assertEqual(actualResult, "AT+C,-1,1,-1,-1,-1,-1,-1,-1");
 }
 

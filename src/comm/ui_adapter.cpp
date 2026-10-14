@@ -336,8 +336,11 @@ void UiAdapter::handleApiPostRobotCommand(AsyncWebServerRequest *request, JsonVa
       _cmd.requestStats(); // cache empty → forward to Teensy
     ok = true;
   }
-  else if (action == "mowerEnabled")
-    ok = _cmd.mowerEnabled(json.as<JsonObject>()["enabled"] | true);
+  else if (action == "mowerEnabled") {
+    // null = Auto (Sunray entscheidet); früher wurde daraus true und schaltete das Mähwerk ein
+    auto enabled = json.as<JsonObject>()["enabled"];
+    ok = enabled.isNull() ? _cmd.mowerAuto() : _cmd.mowerEnabled(enabled.as<bool>());
+  }
   else if (action == "sonarEnabled")
     ok = _cmd.sonarEnabled(json.as<JsonObject>()["enabled"] | true);
   else if (action == "finishAndRestartEnabled")

@@ -310,6 +310,8 @@ export interface DesiredState {
   fix_timeout: number;
   mow_pwm?: number;     // max cutter PWM 0..255
   mow_height?: number;  // mm
+  /** Mow motor switch: auto = Sunray decides, off = switched off and locked, on = released and on */
+  mow_motor_mode?: "auto" | "off" | "on";
 }
 
 export interface ModemLog {
