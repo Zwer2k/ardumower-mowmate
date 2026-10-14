@@ -196,6 +196,25 @@ export const SensorDescriptions: { [sensorId: number]: string } = {
   18: "temp out of range",
 };
 
+/**
+ * Badge-Farbe für den Grund eines Stopps (Sunray stateSensor):
+ * rot = Fehler oder Sicherheitsstopp, magenta = Hindernis oder GPS,
+ * cyan = Regen (Wetter, kein Fehler).
+ */
+export function sensorTagType(sensorId: number): "red" | "magenta" | "cyan" {
+  switch (sensorId) {
+    case 16: return "cyan";        // rain
+    case 2:                        // obstacle
+    case 3:                        // gps fix timeout
+    case 9:                        // gps invalid
+    case 13:                       // bumper
+    case 14:                       // sonar
+      return "magenta";
+    default:
+      return "red";
+  }
+}
+
 export interface Stats {
   idle: number;
   charge: number;
