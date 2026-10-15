@@ -54,6 +54,35 @@ static PPC::Map toPlannerMap(ArduMower::Domain::Robot::MowerMap &map) {
     return pm;
 }
 
+// "border,area,exclusions" -> PPC::RouteBlock; leer oder ungültig: wie früher
+// aus mowBorderCcw (aus: Fläche, Außengrenze, Exclusions; an: Außengrenze,
+// Exclusions, Fläche).
+static void toRouteOrder(const String &text, bool mowBorderCcw, uint8_t order[3]) {
+    if (mowBorderCcw) {
+        order[0] = PPC::RouteBlockBorder; order[1] = PPC::RouteBlockExclusionBorder; order[2] = PPC::RouteBlockArea;
+    } else {
+        order[0] = PPC::RouteBlockArea; order[1] = PPC::RouteBlockBorder; order[2] = PPC::RouteBlockExclusionBorder;
+    }
+    if (text.length() == 0) return;
+    uint8_t parsed[3];
+    int n = 0;
+    int start = 0;
+    while (start <= (int)text.length() && n < 4) {
+        int comma = text.indexOf(',', start);
+        String token = text.substring(start, comma < 0 ? text.length() : comma);
+        token.trim();
+        if (n >= 3) return;
+        if (token == "area") parsed[n++] = PPC::RouteBlockArea;
+        else if (token == "border") parsed[n++] = PPC::RouteBlockBorder;
+        else if (token == "exclusions") parsed[n++] = PPC::RouteBlockExclusionBorder;
+        else return;
+        if (comma < 0) break;
+        start = comma + 1;
+    }
+    if (n != 3) return;
+    for (int i = 0; i < 3; i++) order[i] = parsed[i];  // Doppelte prüft der Planer
+}
+
 static PPC::Settings toPlannerSettings(const ArduMower::Domain::Robot::MowSettings &settings) {
     PPC::Settings ps;
     ps.timestamp = settings.timestamp;
@@ -65,6 +94,8 @@ static PPC::Settings toPlannerSettings(const ArduMower::Domain::Robot::MowSettin
     ps.mowArea = true;
     ps.mowExclusionBorder = true;
     ps.mowBorderCcw = settings.mowBorderCcw;
+    toRouteOrder(settings.routeOrder, settings.mowBorderCcw, ps.routeOrder);
+    ps.exclusionLapsWithArea = settings.exclusionLapsWithArea;
     ps.distanceToBorder = settings.distanceToBorder;
     ps.borderLaps = settings.borderLaps;
     ps.distanceToExclusions = (int)lroundf(settings.distanceToExclusions);

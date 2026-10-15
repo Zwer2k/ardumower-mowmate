@@ -475,7 +475,12 @@ namespace ArduMower
         int borderLaps;
         float distanceToExclusions;  // Spurbreiten Abstand zu den Exclusions
         int exclusionLaps;           // Runden um die Exclusions
-        bool mowBorderCcw;
+        bool mowBorderCcw;           // Laufrichtung der Randrunden
+        // Reihenfolge der Abschnitte, z. B. "border,area,exclusions". Leer: wie
+        // früher aus mowBorderCcw (aus: Fläche zuerst, an: Ränder zuerst).
+        String routeOrder;
+        // Exclusion-Runden beim Vorbeifahren in die Fläche einfügen
+        bool exclusionLapsWithArea = false;
         // Neue Laufzeit-Toggles: Karte wird berechnet, diese Schalter entscheiden,
         // welche bereits berechneten Bereiche tatsächlich gemäht werden.
         bool doMowArea = true;
@@ -495,6 +500,7 @@ namespace ArduMower
             : timestamp(0), pattern(0), width(0.3f), angle(0),
               distanceToBorder(0.0f), borderLaps(0),
               distanceToExclusions(0.0f), exclusionLaps(0), mowBorderCcw(false),
+              routeOrder(""), exclusionLapsWithArea(false),
               doMowArea(true), doMowPerimeter(true), doMowBorder(false),
               doMowExclusions(true), doMowExclusionBorder(false),
               simplifyEpsilon(0.02f), checkTurnRadius(0.30f) {}
@@ -509,6 +515,8 @@ namespace ArduMower
               && distanceToExclusions == other.distanceToExclusions
               && exclusionLaps == other.exclusionLaps
               && mowBorderCcw == other.mowBorderCcw
+              && routeOrder == other.routeOrder
+              && exclusionLapsWithArea == other.exclusionLapsWithArea
               && doMowArea == other.doMowArea
               && doMowPerimeter == other.doMowPerimeter
               && doMowBorder == other.doMowBorder

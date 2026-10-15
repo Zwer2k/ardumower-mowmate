@@ -110,6 +110,10 @@ namespace ArduMower {
                 float distanceToExclusions = 0.0f;
                 int exclusionLaps = 0;
                 bool mowBorderCcw = false;
+                // Reihenfolge der Abschnitte ("area", "border", "exclusions",
+                // kommagetrennt); leer: wie früher aus mowBorderCcw
+                String routeOrder = "";
+                bool exclusionLapsWithArea = false;
                 // Runtime-Flags (können unterwegs ein-/ausgeschaltet werden)
                 bool doMowArea = true;
                 bool doMowExclusions = true; // true: Aussparungen umfahren (immer geometrisch); false: Nur Perimeter
@@ -293,6 +297,8 @@ namespace ArduMower {
                     if (hasDistanceToBorder) distanceToBorder = obj["distanceToBorder"];
                     if (hasBorderLaps) borderLaps = obj["borderLaps"];
                     if (obj["mowBorderCcw"].is<JsonVariant>()) mowBorderCcw = obj["mowBorderCcw"];
+                    routeOrder = obj["routeOrder"].is<const char *>() ? obj["routeOrder"].as<String>() : String("");
+                    exclusionLapsWithArea = obj["exclusionLapsWithArea"] | false;
                     // Legacy Webapp verwendet doMowArea/doPerimeterBorder/doExclusionsBorder
                     // als Berechnungs-Flags. Wir importieren sie als Runtime-Flags,
                     // damit alte Karten weiter funktionieren.
@@ -361,6 +367,8 @@ namespace ArduMower {
                     obj["distanceToExclusions"] = distanceToExclusions;
                     obj["exclusionLaps"] = exclusionLaps;
                     obj["mowBorderCcw"] = mowBorderCcw;
+                    if (routeOrder.length() > 0) obj["routeOrder"] = routeOrder;
+                    if (exclusionLapsWithArea) obj["exclusionLapsWithArea"] = true;
                     // Runtime-Flags (können unterwegs umgeschaltet werden)
                     obj["doMowExclusions"] = doMowExclusions;
                     obj["doMowPerimeter"] = doMowPerimeter;

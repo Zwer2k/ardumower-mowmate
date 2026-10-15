@@ -372,7 +372,12 @@ export interface MowSettings {
   distanceToExclusions?: number;
   /** Laps around each exclusion. */
   exclusionLaps?: number;
+  /** Direction of all border laps */
   mowBorderCcw: boolean;
+  /** Order of the route parts, e.g. "border,area,exclusions"; empty: derived from mowBorderCcw */
+  routeOrder?: string;
+  /** Mow the exclusion laps on the way while mowing the area */
+  exclusionLapsWithArea?: boolean;
   // Runtime toggles: already calculated areas can be switched on/off at runtime
   doMowArea: boolean;
   doMowPerimeter: boolean;
@@ -602,6 +607,8 @@ export interface MowSettingsData {
   distanceToExclusions?: number;
   exclusionLaps?: number;
   mowBorderCcw: boolean;
+  routeOrder?: string;
+  exclusionLapsWithArea?: boolean;
   doMowArea: boolean;
   doMowPerimeter: boolean;
   doMowBorder: boolean;

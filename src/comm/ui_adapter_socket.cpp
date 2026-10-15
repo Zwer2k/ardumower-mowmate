@@ -372,6 +372,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       map.distanceToExclusions = settings.distanceToExclusions;
       map.exclusionLaps = settings.exclusionLaps;
       map.mowBorderCcw = settings.mowBorderCcw;
+      map.routeOrder = settings.routeOrder;
+      map.exclusionLapsWithArea = settings.exclusionLapsWithArea;
       map.doMowArea = settings.doMowArea;
       map.doMowPerimeter = settings.doMowPerimeter;
       map.doMowBorder = settings.doMowBorder;
@@ -411,6 +413,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       if (!jsonData["distanceToExclusions"].isNull()) s.distanceToExclusions = jsonData["distanceToExclusions"];
       if (!jsonData["exclusionLaps"].isNull()) s.exclusionLaps = jsonData["exclusionLaps"];
       if (!jsonData["mowBorderCcw"].isNull()) s.mowBorderCcw = jsonData["mowBorderCcw"];
+      if (jsonData["routeOrder"].is<const char *>()) s.routeOrder = jsonData["routeOrder"].as<String>();
+      if (!jsonData["exclusionLapsWithArea"].isNull()) s.exclusionLapsWithArea = jsonData["exclusionLapsWithArea"];
       if (!jsonData["doMowArea"].isNull()) s.doMowArea = jsonData["doMowArea"];
       if (!jsonData["doMowPerimeter"].isNull()) s.doMowPerimeter = jsonData["doMowPerimeter"];
       if (!jsonData["doMowBorder"].isNull()) s.doMowBorder = jsonData["doMowBorder"];

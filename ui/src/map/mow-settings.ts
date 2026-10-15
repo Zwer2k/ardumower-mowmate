@@ -11,6 +11,8 @@ const defaultSettings: MowSettings = {
   distanceToExclusions: 0,
   exclusionLaps: 0,
   mowBorderCcw: false,
+  routeOrder: "",
+  exclusionLapsWithArea: false,
   doMowArea: true,
   doMowPerimeter: true,
   doMowBorder: false,
