@@ -2057,6 +2057,12 @@ void UiSocketHandler::calculateWaypoints() {
     sendProgress("calculate", 0, "Calculation already in progress");
     return;
   }
+  // Eine laufende Kartenübertragung zum Browser (z. B. das Ergebnis der
+  // vorigen Berechnung) unterdrückt alle anderen Nachrichten und sperrt die
+  // Karte. Lief sie weiter, kam kein Fortschritt beim Browser an, und am Ende
+  // verwarf setMap() das neue Ergebnis, weil die Karte noch gelesen wurde.
+  // Die Karte wird ohnehin ersetzt und danach neu übertragen.
+  abortMapChunkSendForMapChange();
   _calculateWaypointsPending = true;
   _calculateWaypointsTimestamp = millis();
   _calculateWaypointsMap = _source.mowerMap();
@@ -2072,6 +2078,8 @@ void UiSocketHandler::processCalculateWaypoints() {
 
   _calculateWaypointsRunning = true;
   _calculateWaypointsPending = false;
+  // Seit dem Einreihen kann eine neue Übertragung begonnen haben (siehe calculateWaypoints())
+  abortMapChunkSendForMapChange();
 
   using namespace ArduMower::Domain::Robot;
   auto map = _calculateWaypointsMap;
