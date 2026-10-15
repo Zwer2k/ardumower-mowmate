@@ -156,6 +156,33 @@ if (typeof window !== "undefined") {
  *  ist NICHT von clearConsoleLines() betroffen (vermeidet Race Condition
  *  mit dem Terminal, das sofort nach Empfang der Lines cleart). */
 export const motorPlotStore = writable<ConsoleLine[]>([]);
+// Noch nicht vom Modem bestätigte Änderungen der Mäh-Einstellungen. Das Modem
+// schickt nach jeder Änderung alle Einstellungen zurück; die Antwort auf eine
+// frühere Änderung kennt eine spätere noch nicht und ließe den Schalter kurz
+// zurückspringen. Bestätigt ist eine Änderung, sobald eine Antwort ihren Wert
+// enthält; nach PENDING_MOW_SETTINGS_MS gilt wieder, was das Modem meldet.
+const PENDING_MOW_SETTINGS_MS = 5000;
+const pendingMowSettings = new Map<string, { value: unknown; mapId: string; at: number }>();
+
+export function overlayPendingMowSettings<T extends object>(data: T, mapId: string, now: number): T {
+  const merged = { ...data } as Record<string, unknown>;
+  for (const [key, p] of pendingMowSettings) {
+    if (p.mapId !== mapId || now - p.at > PENDING_MOW_SETTINGS_MS || (data as Record<string, unknown>)[key] === p.value) {
+      pendingMowSettings.delete(key);
+    } else {
+      merged[key] = p.value;
+    }
+  }
+  return merged as T;
+}
+
+export function rememberPendingMowSettings(data: Record<string, unknown>, mapId: string, now: number) {
+  for (const [key, value] of Object.entries(data)) {
+    if (key === "mapId" || value === undefined) continue;
+    pendingMowSettings.set(key, { value, mapId, at: now });
+  }
+}
+
 export const mapMetaStore = writable<{ hash: string; crc: number; area: number; rotation: number } | null>(null);
 
 // Tells the map editor that the modem's current map changed underneath it,
@@ -845,7 +872,7 @@ class SocketService {
                 case ResponseDataType.mowSettings: {
                   const data = jsonData.data as MowSettings & { mapId?: string; mapCrc?: number; uploadPoints?: number };
                   if (data.mapId === newState.currentMapId) {
-                    mowSettingsStore.set(data);
+                    mowSettingsStore.set(overlayPendingMowSettings(data, newState.currentMapId, Date.now()));
                     // Die "Mow areas"-Schalter ändern, welche Wegpunkte zum Mäher
                     // gehen, und damit den CRC, den der Mäher melden muss.
                     if (typeof data.mapCrc === "number" && newState.currentMapMeta) {
@@ -1233,9 +1260,11 @@ class SocketService {
   }
 
   sendMowSettings(data: Partial<MowSettingsData>) {
+    const mapId = get(socketStore).currentMapId;
+    rememberPendingMowSettings(data as Record<string, unknown>, mapId, Date.now());
     const req: RequestSocketMessage = {
       type: RequestDataType.setMowSettings,
-      data: { ...data, mapId: get(socketStore).currentMapId },
+      data: { ...data, mapId },
     };
     this.sendMessage(req);
   }
