@@ -9,7 +9,7 @@
     import { MapStore } from '../../../map/service';
     import { mowSettingsStore } from '../../../map/mow-settings';
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
-    import { splitRouteProgress } from '../../../map/core/route-progress';
+    import { splitRouteProgress, routeTransitPaths } from '../../../map/core/route-progress';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import { relativeToAbsolute, type GeoJsonReference } from '../../../map/core/map-formats';
     import { BackendSettings } from '../../../stores/backend';
@@ -206,7 +206,8 @@
         const state = $socketStore.state;
         const synced = isMowerMapSynced(state, $socketStore.currentMapId, $socketStore.currentMapMeta?.crc ?? 0);
         const mpi = state?.position?.mow_point_index ?? -1;
-        const key = !mapLayer || !showRoute || !ref || !m ? '' : JSON.stringify([mapLayerKey, synced, mpi]);
+        const transitCount = $socketStore.currentMapTransits?.length ?? -1;
+        const key = !mapLayer || !showRoute || !ref || !m ? '' : JSON.stringify([mapLayerKey, synced, mpi, transitCount]);
         if (key === routeLayerKey && (key === '' || routeLayer)) return;
         routeLayerKey = key;
         if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
@@ -218,6 +219,12 @@
         routeLayer = L.layerGroup();
         for (const seg of progress.done) {
             L.polyline(seg.map(toLL), { color: '#7f7f7f', weight: 2, opacity: 0.125 }).addTo(routeLayer);
+        }
+        // Verbindungsfahrten über ausgeblendete Abschnitte: Weg des Modems, sonst gestrichelt gerade
+        for (const t of routeTransitPaths(route, $socketStore.currentMapTransits)) {
+            L.polyline(t.path.map(toLL), t.exact
+                ? { color: '#7fb249', weight: 2, opacity: 0.7 }
+                : { color: '#7f7f7f', weight: 1, opacity: 0.7, dashArray: '3,3' }).addTo(routeLayer);
         }
         for (const seg of progress.todo) {
             L.polyline(seg.map(toLL), { color: '#7fb249', weight: 2, opacity: 0.7 }).addTo(routeLayer);

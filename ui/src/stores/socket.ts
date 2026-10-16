@@ -82,6 +82,8 @@ export interface SocketState {
   currentMapMeta: { hash: string; crc: number; area: number; rotation: number } | null;
   /** Punkte, die beim Upload zum Mäher gehen (nur eingeschaltete "Mow areas"), null = unbekannt */
   currentMapUploadPoints: number | null;
+  /** Wege, mit denen das Modem ausgeblendete Abschnitte überbrückt (Kartenkoordinaten) */
+  currentMapTransits: { x: number; y: number }[][] | null;
   currentMapUnsaved: boolean;
   isLoadingMap: boolean;
   isNewMap: boolean;
@@ -112,6 +114,7 @@ const initialState: SocketState = {
   currentMapId: "",
   currentMapMeta: null,
   currentMapUploadPoints: null,
+  currentMapTransits: null,
   currentMapUnsaved: false,
   isLoadingMap: false,
   isNewMap: false,
@@ -164,15 +167,36 @@ export const motorPlotStore = writable<ConsoleLine[]>([]);
 const PENDING_MOW_SETTINGS_MS = 5000;
 const pendingMowSettings = new Map<string, { value: unknown; mapId: string; at: number }>();
 
+/** true, solange eine gesendete Änderung der Mäh-Einstellungen unbestätigt ist */
+export const mowSettingsPendingStore = writable(false);
+let pendingTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function updatePendingState() {
+  mowSettingsPendingStore.set(pendingMowSettings.size > 0);
+  if (pendingTimeout) clearTimeout(pendingTimeout);
+  pendingTimeout = null;
+  if (pendingMowSettings.size === 0) return;
+  // Kommt keine Antwort, gibt die Sperre nach PENDING_MOW_SETTINGS_MS wieder frei.
+  pendingTimeout = setTimeout(() => {
+    pendingMowSettings.clear();
+    updatePendingState();
+  }, PENDING_MOW_SETTINGS_MS);
+}
+
 export function overlayPendingMowSettings<T extends object>(data: T, mapId: string, now: number): T {
   const merged = { ...data } as Record<string, unknown>;
   for (const [key, p] of pendingMowSettings) {
-    if (p.mapId !== mapId || now - p.at > PENDING_MOW_SETTINGS_MS || (data as Record<string, unknown>)[key] === p.value) {
+    const echoed = (data as Record<string, unknown>)[key];
+    // Kommazahlen kommen als float zurück (0.35 -> 0.3499999)
+    const confirmed = echoed === p.value ||
+      (typeof echoed === "number" && typeof p.value === "number" && Math.abs(echoed - p.value) < 1e-4);
+    if (p.mapId !== mapId || now - p.at > PENDING_MOW_SETTINGS_MS || confirmed) {
       pendingMowSettings.delete(key);
     } else {
       merged[key] = p.value;
     }
   }
+  updatePendingState();
   return merged as T;
 }
 
@@ -181,6 +205,13 @@ export function rememberPendingMowSettings(data: Record<string, unknown>, mapId:
     if (key === "mapId" || value === undefined) continue;
     pendingMowSettings.set(key, { value, mapId, at: now });
   }
+  updatePendingState();
+}
+
+// [[[X, Y], ...], ...] des Modems -> Kartenkoordinaten der UI (y gespiegelt)
+function parseTransits(raw: unknown): { x: number; y: number }[][] | null {
+  if (!Array.isArray(raw)) return null;
+  return raw.map((line) => (Array.isArray(line) ? line : []).map((p: number[]) => ({ x: p[0], y: -p[1] })));
 }
 
 export const mapMetaStore = writable<{ hash: string; crc: number; area: number; rotation: number } | null>(null);
@@ -657,6 +688,7 @@ class SocketService {
                     mapId: string;
                     accepted: boolean;
                     uploadPoints?: number;
+                    transits?: unknown;
                   };
                   if (!data.accepted) {
                     if (this.pendingUpload?.syncId === data.syncId) {
@@ -696,6 +728,7 @@ class SocketService {
                   };
                   newState.currentMapMeta = meta;
                   if (typeof data.uploadPoints === "number") newState.currentMapUploadPoints = data.uploadPoints;
+                  if (data.transits !== undefined) newState.currentMapTransits = parseTransits(data.transits);
                   newState.currentMapUnsaved = data.unsaved;
                   mapMetaStore.set(meta);
                   setMapDirty(data.unsaved);
@@ -852,6 +885,7 @@ class SocketService {
                     newState.currentMapId = "";
                     newState.currentMapMeta = null;
                     newState.currentMapUploadPoints = null;
+                    newState.currentMapTransits = null;
                     newState.isNewMap = false;
                     workflowLoadFailed = true;
                   }
@@ -870,7 +904,7 @@ class SocketService {
                   newState.ubxResponse = jsonData.data as UbxResponse;
                   break;
                 case ResponseDataType.mowSettings: {
-                  const data = jsonData.data as MowSettings & { mapId?: string; mapCrc?: number; uploadPoints?: number };
+                  const data = jsonData.data as MowSettings & { mapId?: string; mapCrc?: number; uploadPoints?: number; transits?: unknown };
                   if (data.mapId === newState.currentMapId) {
                     mowSettingsStore.set(overlayPendingMowSettings(data, newState.currentMapId, Date.now()));
                     // Die "Mow areas"-Schalter ändern, welche Wegpunkte zum Mäher
@@ -880,6 +914,7 @@ class SocketService {
                       mapMetaStore.set(newState.currentMapMeta);
                     }
                     if (typeof data.uploadPoints === "number") newState.currentMapUploadPoints = data.uploadPoints;
+                    if (data.transits !== undefined) newState.currentMapTransits = parseTransits(data.transits);
                   }
                   break;
                 }
@@ -1262,6 +1297,9 @@ class SocketService {
   sendMowSettings(data: Partial<MowSettingsData>) {
     const mapId = get(socketStore).currentMapId;
     rememberPendingMowSettings(data as Record<string, unknown>, mapId, Date.now());
+    // Die exakte Punktzahl und die Verbindungswege des Modems passen nicht mehr;
+    // bis seine Antwort kommt, zählt die Karte selbst (Zwischenwert).
+    socketStore.update((s) => ({ ...s, currentMapUploadPoints: null, currentMapTransits: null }));
     const req: RequestSocketMessage = {
       type: RequestDataType.setMowSettings,
       data: { ...data, mapId },
@@ -1337,7 +1375,7 @@ class SocketService {
     // des Ladens weiß, welche Karte geladen wird, und finishLoadMap korrekt
     // ausgelöst wird. startLoadMap versucht denselben Zustand über updateSocket
     // zu setzen, falls das Workflow-Store bereits registriert ist.
-    socketStore.update((s) => ({ ...s, currentMapMeta: null, currentMapUploadPoints: null, currentMapId: id, isLoadingMap: true, isNewMap: false }));
+    socketStore.update((s) => ({ ...s, currentMapMeta: null, currentMapUploadPoints: null, currentMapTransits: null, currentMapId: id, isLoadingMap: true, isNewMap: false }));
     mapMetaStore.set(null);
     // The report describes the route of the map we are leaving.
     clearRouteReport();

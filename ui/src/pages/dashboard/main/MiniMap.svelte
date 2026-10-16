@@ -6,7 +6,7 @@
     import { socketStore } from '../../../stores/socket';
     import { mowSettingsStore } from '../../../map/mow-settings';
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
-    import { splitRouteProgress } from '../../../map/core/route-progress';
+    import { splitRouteProgress, routeTransitPaths } from '../../../map/core/route-progress';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import Obstacles from '../../../map/Obstacles.svelte';
     import MapLoadingOverlay from '../../../map/MapLoadingOverlay.svelte';
@@ -325,6 +325,13 @@
                             stroke-linecap="round"
                             stroke-linejoin="round"
                         />
+                    {/each}
+                    <!-- Verbindungsfahrten über ausgeblendete Abschnitte: Weg des Modems, sonst gestrichelt gerade -->
+                    {#each routeTransitPaths(visibleWaypoints, $socketStore.currentMapTransits) as t}
+                        <polyline points={t.path.map((p) => `${p.x},${p.y}`).join(' ')} fill="none"
+                            stroke={t.exact ? '#7fb249' : '#7f7f7f'} stroke-opacity="0.7"
+                            stroke-width={t.exact ? 2 : 1} stroke-dasharray={t.exact ? undefined : '3 3'}
+                            vector-effect="non-scaling-stroke" stroke-linejoin="round" />
                     {/each}
                     {#each progress.todo as seg}
                         <polyline

@@ -5,6 +5,7 @@
   import Point from "./Point.svelte";
   import Edge from "./Edge.svelte";
   import type { MapArea } from "./model";
+  import { routeTransitPaths } from "./core/route-progress";
 
   export let value: WaypointsModel;
   export let waypointsId: string;
@@ -15,6 +16,8 @@
   export let onMove: (points: PointType[]) => void = () => {};
   /** Bahnen zusätzlich in Schnittbreite (m) zeichnen; null = aus */
   export let cutWidth: number | null = null;
+  /** Wege des Modems über ausgeblendete Abschnitte */
+  export let transits: { x: number; y: number }[][] | null = null;
 
   const dispatch = createEventDispatcher();
 
@@ -60,6 +63,14 @@
 {/if}
 
 {#if value.points.length > 1}
+  <!-- Verbindungsfahrten über ausgeblendete Abschnitte: Weg des Modems, sonst gestrichelt gerade -->
+  {#each routeTransitPaths(value.points, transits) as t}
+    <polyline fill="none" stroke="blue" pointer-events="none"
+      stroke-opacity={t.exact ? 1 : 0.6}
+      stroke-width={t.exact ? lineWidth : lineWidth * 0.6}
+      stroke-dasharray={t.exact ? undefined : "0.08 0.06"}
+      points={t.path.map(p => `${p.x},${p.y}`).join(" ")} />
+  {/each}
   {#each routeSegments as segment}
     {#if segment.length > 1}
       <polyline

@@ -201,7 +201,7 @@
         {#each visibleOrder as block, i (block)}
           <li>
             <span class="route-order-label">
-              {blockLabels[block]}{#if block === "area" && exclusionLapsWithArea}<span class="route-order-hint"> with exclusion borders</span>{/if}
+              {blockLabels[block]}{#if block === "area" && exclusionLapsWithArea}<span class="route-order-hint">{" with exclusion borders"}</span>{/if}
             </span>
             <Button kind="ghost" size="small" iconDescription="Earlier" disabled={i === 0}
               on:click={() => moveBlock(i, -1)}>▲</Button>

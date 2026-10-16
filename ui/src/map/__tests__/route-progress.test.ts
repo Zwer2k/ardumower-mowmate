@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { splitRouteProgress } from "../core/route-progress";
+import { splitRouteProgress, routeTransits, routeTransitPaths } from "../core/route-progress";
 
 const pts = [0, 1, 2, 3, 4].map((i) => ({ x: i, y: 0 }));
 
@@ -22,5 +22,21 @@ describe("route progress", () => {
     const broken = pts.map((p, i) => (i === 2 ? { ...p, routeBreakBefore: true } : p));
     const r = splitRouteProgress(broken, -1, true);
     expect(r.todo).toEqual([broken.slice(0, 2), broken.slice(2)]);
+  });
+});
+
+describe("route transits", () => {
+  it("connects the end of one part with the start of the next", () => {
+    const pts = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 5, y: 5, routeBreakBefore: true }, { x: 6, y: 5 }];
+    expect(routeTransits(pts)).toEqual([[pts[1], pts[2]]]);
+  });
+});
+
+describe("route transit paths", () => {
+  it("uses the modem's path when start and end match, a straight line otherwise", () => {
+    const pts = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 5, y: 5, routeBreakBefore: true }, { x: 6, y: 5 }];
+    const modem = [[{ x: 1, y: 0.01 }, { x: 3, y: 2 }, { x: 5, y: 5 }]];
+    expect(routeTransitPaths(pts, modem)).toEqual([{ path: modem[0], exact: true }]);
+    expect(routeTransitPaths(pts, null)).toEqual([{ path: [pts[1], pts[2]], exact: false }]);
   });
 });

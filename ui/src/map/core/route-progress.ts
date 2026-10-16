@@ -51,3 +51,41 @@ export function splitRouteProgress<P extends RoutePoint>(
     todo: routeSegments(points, Math.max(0, k - 1), n),
   };
 }
+
+/**
+ * Verbindungsfahrten über ausgeblendete Abschnitte ("Mow areas"): Das Modem
+ * verbindet beim Upload jede zwei aufeinanderfolgenden Abschnitte mit einer
+ * Fahrt um Exclusions herum. Hier nur als gerade Linie zwischen Ende und
+ * Anfang, damit Reihenfolge und Zusammenhang sichtbar bleiben.
+ */
+export function routeTransits<P extends RoutePoint>(points: P[]): [P, P][] {
+  const transits: [P, P][] = [];
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].routeBreakBefore) transits.push([points[i - 1], points[i]]);
+  }
+  return transits;
+}
+
+export interface RouteTransit {
+  path: { x: number; y: number }[];
+  /** true: der Weg des Modems; false: gerade Linie, bis er vorliegt */
+  exact: boolean;
+}
+
+const TRANSIT_MATCH_M = 0.05;
+
+/**
+ * Wie routeTransits(), aber mit dem Weg, den das Modem für die Lücke
+ * berechnet hat (um Exclusions herum), sofern Anfang und Ende passen.
+ */
+export function routeTransitPaths<P extends RoutePoint>(
+  points: P[],
+  modemTransits: { x: number; y: number }[][] | null | undefined
+): RouteTransit[] {
+  const near = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    Math.hypot(a.x - b.x, a.y - b.y) < TRANSIT_MATCH_M;
+  return routeTransits(points).map(([a, b]) => {
+    const t = modemTransits?.find((line) => line.length >= 2 && near(line[0], a) && near(line[line.length - 1], b));
+    return t ? { path: t, exact: true } : { path: [a, b], exact: false };
+  });
+}

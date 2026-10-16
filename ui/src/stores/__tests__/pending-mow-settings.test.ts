@@ -23,3 +23,12 @@ describe("pending mow settings", () => {
     expect(overlayPendingMowSettings({ doMowArea: true }, "m1", 6000)).toEqual({ doMowArea: true });
   });
 });
+
+describe("pending mow settings with numbers", () => {
+  it("treats a float echo as confirmed", () => {
+    rememberPendingMowSettings({ width: 0.35 }, "m1", 0);
+    overlayPendingMowSettings({ width: 0.3499999940395355 }, "m1", 10);
+    // bestätigt: das Modem gilt wieder
+    expect(overlayPendingMowSettings({ width: 0.4 }, "m1", 20)).toEqual({ width: 0.4 });
+  });
+});

@@ -1333,6 +1333,7 @@
         <Waypoints
           value={{ points: edit && editCategory === "waypoints" ? rawWaypoints : filteredWaypoints }}
           waypointsId="map-0-waypoints"
+          transits={$socketStore.currentMapTransits}
           cutWidth={$routeStyleStore === 'width' ? Math.max(0.05, $BackendSettings?.mower?.cut_width ?? 0.18) : null}
           {edit}
           {editCategory}
