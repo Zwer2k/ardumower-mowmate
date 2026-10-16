@@ -191,6 +191,9 @@ private:
 // (hält den Randabstand ein), sonst innerhalb des ganzen Perimeters.
 struct ConnectorRouting {
     const FreeSpaceRouter *perimeter = nullptr;
+    // Perimeter mit um distanceToExclusions vergrößerten Exclusions: hält den
+    // Abstand zu den Exclusions, wenn die Mähfläche selbst keinen Weg bietet.
+    const FreeSpaceRouter *spaced = nullptr;
     std::vector<const FreeSpaceRouter *> areas;
     std::vector<Point> route(const Point &from, const Point &to) const;
 };

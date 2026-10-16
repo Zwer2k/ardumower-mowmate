@@ -500,6 +500,10 @@ Polygon ConnectorRouting::route(const Point &from, const Point &to) const {
         // aufgeben. Der Perimeter-Router findet den Weg dann direkt.
         if (area->findRoute(from, to, path, true)) return path;
     }
+    // Ohne Weg in der Mähfläche (z. B. schmale Lücke zwischen Exclusions)
+    // nicht gleich dicht an den Exclusions entlang: erst mit Abstand versuchen.
+    if (spaced && spaced->pointFree(from) && spaced->pointFree(to) &&
+        spaced->findRoute(from, to, path)) return path;
     if (perimeter) return perimeter->route(from, to);
     return {from, to};
 }
@@ -1113,9 +1117,20 @@ static Polygon insertExclusionLaps(const Polygon &pattern,
     for (const auto &lapRings : laps) {
         for (const auto &ring : lapRings) {
             if (ring.size() < 3) continue;
+            // Umgebendes Rechteck der Runde: Sein Abstand ist eine untere
+            // Grenze; liegt er schon über dem besten Treffer, entfällt die
+            // genaue (teure) Prüfung gegen alle Kanten der Runde.
+            double minX = ring[0].X, maxX = ring[0].X, minY = ring[0].Y, maxY = ring[0].Y;
+            for (const auto &p : ring) {
+                minX = std::min(minX, p.X); maxX = std::max(maxX, p.X);
+                minY = std::min(minY, p.Y); maxY = std::max(maxY, p.Y);
+            }
             size_t best = 0;
             double bestDist = std::numeric_limits<double>::max();
             for (size_t i = 0; i < pattern.size(); i++) {
+                const double dx = std::max({minX - pattern[i].X, 0.0, pattern[i].X - maxX});
+                const double dy = std::max({minY - pattern[i].Y, 0.0, pattern[i].Y - maxY});
+                if (dx * dx + dy * dy >= bestDist * bestDist) continue;
                 double d = distance(pattern[i], nearestPointOnPolygon(pattern[i], ring));
                 if (d < bestDist) { bestDist = d; best = i; }
             }
@@ -1575,8 +1590,10 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
     std::vector<FreeSpaceRouter> areaRouters;
     areaRouters.reserve(areasToMow.size());
     for (const auto &area : areasToMow) areaRouters.emplace_back(area, holes, preferredRoutes);
+    const FreeSpaceRouter spacedRouter(perimeter, holes, preferredRoutes);
     ConnectorRouting routing;
     routing.perimeter = &router;
+    if (!holes.empty()) routing.spaced = &spacedRouter;
     for (const auto &r : areaRouters) routing.areas.push_back(&r);
 
     std::vector<Polygon> lapExclusions;
