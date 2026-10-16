@@ -142,8 +142,48 @@ void MowerAdapter::updateCurrentMapMeta() {
       _map.perimeter.size(), _map.exclusions.size(), _map.dockpoints.size(), _map.waypoints.size());
 }
 
+#ifdef ENABLE_MAP
+// Kennung der Geometrie, von der die Verbindungswege abhängen
+static uint32_t transitSignature(const ArduMower::Domain::Robot::MowerMap &map) {
+  uint32_t h = 2166136261u;
+  auto mix = [&](double v) { h = (h ^ (uint32_t)lround(v * 1000.0)) * 16777619u; };
+  auto mixPoints = [&](const std::vector<ArduMower::Domain::Robot::MapPoint> &pts) {
+    mix((double)pts.size());
+    for (const auto &p : pts) { mix(p.X); mix(p.Y); }
+  };
+  mixPoints(map.perimeter);
+  for (const auto &ex : map.exclusions) mixPoints(ex);
+  mixPoints(map.waypoints);
+  return h;
+}
+
+void MowerAdapter::prefillTransitCacheStep() {
+  if (_transitPrefillCombo >= 8 || _map.isReading() || _mapUploadState.active) return;
+  // Ein Weg kostet auf dem ESP 0,1-0,2 s: höchstens einer alle 100 ms, damit
+  // Browser und Mäher dazwischen bedient werden.
+  const uint32_t now = millis();
+  if (now - _transitPrefillLastMs < 100) return;
+  _transitPrefillLastMs = now;
+  ArduMower::Domain::Robot::MowSettings base = settingsFromMap(_map);
+  if (!ArduMower::Modem::PathPlanner::prefillTransitCache(_transitCache, _map.waypoints, _map, base, _transitPrefillCombo)) {
+    Log(INFO, "%sprefillTransitCache: %u Verbindungswege vorausberechnet", _LOG_, (unsigned)_transitCache.size());
+  }
+}
+#endif
+
 void MowerAdapter::refreshCurrentMapCrc() {
-  _currentMapCrc = _mapManager.computeCrc(_map, &_currentMapUploadPoints);
+#ifdef ENABLE_MAP
+  // Andere Geometrie: alte Wege verwerfen und neu vorausberechnen
+  const uint32_t signature = transitSignature(_map);
+  if (signature != _transitCacheSignature) {
+    _transitCacheSignature = signature;
+    _transitCache.clear();
+    _transitPrefillCombo = 0;
+  }
+  _currentMapCrc = _mapManager.computeCrc(_map, &_currentMapUploadPoints, &_currentMapTransits, &_transitCache);
+#else
+  _currentMapCrc = _mapManager.computeCrc(_map, &_currentMapUploadPoints, &_currentMapTransits);
+#endif
 }
 
 void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s) {
@@ -185,7 +225,7 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
     storeCurrentMapDraft();
   }
 
-  Log(INFO, "%ssetMowSettings: pattern=%d width=%.2f angle=%d distToBorder=%d laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusionBorder=%d",
+  Log(INFO, "%ssetMowSettings: pattern=%d width=%.2f angle=%d distToBorder=%.0f laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusionBorder=%d",
       _LOG_, _mowSettings.pattern, _mowSettings.width, _mowSettings.angle, _mowSettings.distanceToBorder, _mowSettings.borderLaps,
       _mowSettings.doMowArea, _mowSettings.doMowPerimeter, _mowSettings.doMowBorder, _mowSettings.doMowExclusionBorder);
 }
@@ -2538,6 +2578,9 @@ void MowerAdapter::loop()
   startMapUploadFromLoop();
   processPendingCommand();
   processMapUpload();
+#ifdef ENABLE_MAP
+  prefillTransitCacheStep();
+#endif
 
   // Poll one command per loop() call to avoid flooding the mower's command
   // parser with back-to-back requests. Each request*() method has its own
@@ -2792,7 +2835,9 @@ void MowerAdapter::updateTransientMapMeta(const String &id, const ArduMower::Dom
       t.area = _mapManager.computeArea(map);
       // Hash bewusst nicht pro Bearbeitungsschritt neu berechnen (teuer);
       // er dient nur der Anzeige und wird beim Speichern ohnehin neu gebildet.
-      t.crc = _mapManager.computeCrc(map);
+      // Für die aktuelle Karte ist der CRC schon berechnet (refreshCurrentMapCrc):
+      // ein zweiter Lauf filterte die Route erneut.
+      t.crc = (&map == &_map) ? _currentMapCrc : _mapManager.computeCrc(map);
       t.rotation = rotation;
       t.timestamp = map.timestamp;
       t.map = map;

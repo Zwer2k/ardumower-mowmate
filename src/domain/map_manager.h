@@ -9,6 +9,7 @@
 
 namespace ArduMower {
     namespace Modem {
+        namespace PathPlanner { class TransitCache; }
 
         struct MapMeta {
             String id;            // Stabiler Slot-Identifier (bei alten Karten = Hash, bei neuen eindeutig)
@@ -52,7 +53,11 @@ namespace ArduMower {
             // CRC der Karte, wie sie zum Mäher geht: Die Wegpunkte werden mit den
             // "Mow areas"-Schaltern der Karte gefiltert. uploadPoints erhält die
             // Anzahl der übertragenen Punkte.
-            static int computeCrc(const ArduMower::Domain::Robot::MowerMap &map, int *uploadPoints = nullptr);
+            // transits (optional): Verbindungswege über ausgeblendete Abschnitte
+            // cache (optional): bereits berechnete Verbindungswege dieser Karte
+            static int computeCrc(const ArduMower::Domain::Robot::MowerMap &map, int *uploadPoints = nullptr,
+                                  std::vector<std::vector<ArduMower::Domain::Robot::MapPoint>> *transits = nullptr,
+                                  PathPlanner::TransitCache *cache = nullptr);
             static double computeArea(const ArduMower::Domain::Robot::MowerMap &map);
 
             // Gibt den in SPIFFS gespeicherten CRC zurück (0 wenn nicht gefunden)

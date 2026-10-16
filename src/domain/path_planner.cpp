@@ -1,5 +1,6 @@
 #ifdef ENABLE_MAP
 #include "path_planner.h"
+#include <memory>
 #include "pathplanner.h"
 #include "route_report.h"
 #include "mower_map.h"
@@ -117,31 +118,34 @@ static PPC::State toPlannerState(const ArduMower::Domain::Robot::State::State *s
     return ps;
 }
 
-Polygon filterRouteByToggles(const Polygon &route,
-    const ArduMower::Domain::Robot::MowerMap &map,
-    const ArduMower::Domain::Robot::MowSettings &settings)
-{
-    if (route.empty()) return route;
-    if (settings.doMowArea && settings.doMowBorder &&
-        settings.doMowExclusions && settings.doMowExclusionBorder) {
-        return route;
+namespace {
+using Tag = ArduMower::Domain::Robot::MapPointTag;
+
+struct Segment {
+    size_t begin;
+    size_t end;
+    uint8_t tag;
+};
+
+bool tagActive(uint8_t tag, const ArduMower::Domain::Robot::MowSettings &s) {
+    switch (static_cast<Tag>(tag)) {
+        case Tag::AREA: return s.doMowArea;
+        case Tag::BORDER: return s.doMowBorder;
+        case Tag::EXCLUSION_BORDER: return s.doMowExclusionBorder;
+        case Tag::TRANSIT:
+        case Tag::NONE: return true;
+        // Mixed connectors: decided below from the categories they join.
+        case Tag::CONNECTOR: return true;
     }
+    return true;
+}
 
-    using Tag = ArduMower::Domain::Robot::MapPointTag;
+bool allActive(const ArduMower::Domain::Robot::MowSettings &s) {
+    return s.doMowArea && s.doMowBorder && s.doMowExclusions && s.doMowExclusionBorder;
+}
 
-    auto tagActive = [](uint8_t tag, const ArduMower::Domain::Robot::MowSettings &s) -> bool {
-        switch (static_cast<Tag>(tag)) {
-            case Tag::AREA: return s.doMowArea;
-            case Tag::BORDER: return s.doMowBorder;
-            case Tag::EXCLUSION_BORDER: return s.doMowExclusionBorder;
-            case Tag::TRANSIT:
-            case Tag::NONE: return true;
-            // Mixed connectors: decided below from the categories they join.
-            case Tag::CONNECTOR: return true;
-        }
-        return true;
-    };
-
+// Zusammenhängende aktive Abschnitte der Route
+std::vector<Segment> activeSegments(const Polygon &route, const ArduMower::Domain::Robot::MowSettings &settings) {
     std::vector<bool> active(route.size(), false);
     for (size_t i = 0; i < route.size(); i++) {
         active[i] = tagActive(route[i].tag, settings);
@@ -165,11 +169,6 @@ Polygon filterRouteByToggles(const Polygon &route,
         active[i] = before && after;
     }
 
-    struct Segment {
-        size_t begin;
-        size_t end;
-        uint8_t tag;
-    };
     std::vector<Segment> segments;
     size_t segStart = 0;
     for (size_t i = 0; i <= route.size(); i++) {
@@ -189,9 +188,16 @@ Polygon filterRouteByToggles(const Polygon &route,
             segStart = i + 1;
         }
     }
+    return segments;
+}
 
-    if (segments.empty()) return {};
+PPC::Polygon plannerOuter(const ArduMower::Domain::Robot::MowerMap &map) {
+    PPC::Polygon outerBoundary;
+    for (const auto &p : map.perimeter) outerBoundary.push_back({p.X, p.Y});
+    return outerBoundary;
+}
 
+std::vector<PPC::Polygon> plannerHoles(const ArduMower::Domain::Robot::MowerMap &map) {
     std::vector<PPC::Polygon> holes;
     for (const auto &ex : map.exclusions) {
         if (ex.size() >= 3) {
@@ -200,8 +206,76 @@ Polygon filterRouteByToggles(const Polygon &route,
             holes.push_back(std::move(h));
         }
     }
-    PPC::Polygon outerBoundary;
-    for (const auto &p : map.perimeter) outerBoundary.push_back({p.X, p.Y});
+    return holes;
+}
+} // namespace
+
+TransitCache::Key TransitCache::key(const Point &a, const Point &b) {
+    // mm-genau: dieselben Wegpunkte ergeben denselben Schlüssel
+    return {(int32_t)lround(a.X * 1000.0), (int32_t)lround(a.Y * 1000.0),
+            (int32_t)lround(b.X * 1000.0), (int32_t)lround(b.Y * 1000.0)};
+}
+
+const std::vector<PPC::Point> *TransitCache::find(const Point &a, const Point &b) const {
+    auto it = paths_.find(key(a, b));
+    return it == paths_.end() ? nullptr : &it->second;
+}
+
+void TransitCache::put(const Point &a, const Point &b, std::vector<PPC::Point> path) {
+    paths_[key(a, b)] = std::move(path);
+}
+
+PPC::FreeSpaceRouter &TransitCache::router(const ArduMower::Domain::Robot::MowerMap &map) {
+    if (!router_) router_.reset(new PPC::FreeSpaceRouter(plannerOuter(map), plannerHoles(map)));
+    return *router_;
+}
+
+std::vector<std::pair<Point, Point>> routeGaps(const Polygon &route,
+    const ArduMower::Domain::Robot::MowSettings &settings)
+{
+    std::vector<std::pair<Point, Point>> gaps;
+    if (route.empty() || allActive(settings)) return gaps;
+    auto segments = activeSegments(route, settings);
+    for (size_t s = 0; s + 1 < segments.size(); s++)
+        gaps.push_back({route[segments[s].end - 1], route[segments[s + 1].begin]});
+    return gaps;
+}
+
+bool prefillTransitCache(TransitCache &cache, const Polygon &route,
+    const ArduMower::Domain::Robot::MowerMap &map,
+    const ArduMower::Domain::Robot::MowSettings &base, int &combo)
+{
+    for (; combo < 8; combo++) {
+        ArduMower::Domain::Robot::MowSettings s = base;
+        s.doMowArea = combo & 1;
+        s.doMowBorder = combo & 2;
+        s.doMowExclusionBorder = combo & 4;
+        s.doMowExclusions = true;
+        for (const auto &gap : routeGaps(route, s)) {
+            if (cache.find(gap.first, gap.second)) continue;
+            cache.put(gap.first, gap.second, cache.router(map).route(
+                PPC::Point{gap.first.X, gap.first.Y}, PPC::Point{gap.second.X, gap.second.Y}));
+            return true;  // höchstens ein Weg je Aufruf
+        }
+    }
+    return false;
+}
+
+Polygon filterRouteByToggles(const Polygon &route,
+    const ArduMower::Domain::Robot::MowerMap &map,
+    const ArduMower::Domain::Robot::MowSettings &settings,
+    std::vector<Polygon> *transits, TransitCache *cache)
+{
+    if (route.empty()) return route;
+    if (allActive(settings)) return route;
+    std::vector<Segment> segments = activeSegments(route, settings);
+    if (segments.empty()) return {};
+
+    // Ein Wegfinder für alle Lücken (über den Cache, sonst lokal), und bereits
+    // berechnete Wege aus dem Cache: Je Lücke einen Wegfinder aufzubauen
+    // kostete auf dem ESP bei jedem Schalterwechsel Sekunden.
+    TransitCache localCache;
+    TransitCache &paths = cache ? *cache : localCache;
 
     Polygon result;
     for (size_t s = 0; s < segments.size(); s++) {
@@ -219,10 +293,26 @@ Polygon filterRouteByToggles(const Polygon &route,
 
             const auto &lastPt = route[seg.end - 1];
             const auto &nextPt = route[next.begin];
-            auto conn = PPC::walkBoundaryWithHoles(
-                PPC::Point{lastPt.X, lastPt.Y},
-                PPC::Point{nextPt.X, nextPt.Y},
-                outerBoundary, holes);
+            const std::vector<PPC::Point> *cached = paths.find(lastPt, nextPt);
+            if (!cached) {
+                paths.put(lastPt, nextPt, paths.router(map).route(
+                    PPC::Point{lastPt.X, lastPt.Y}, PPC::Point{nextPt.X, nextPt.Y}));
+                cached = paths.find(lastPt, nextPt);
+            }
+            const auto &conn = *cached;
+            if (transits) {
+                Polygon transit;
+                transit.reserve(conn.size() + 2);
+                transit.push_back(lastPt);
+                for (const auto &c : conn) {
+                    ArduMower::Domain::Robot::MapPoint tp{c.X, c.Y};
+                    if (std::abs(tp.X - transit.back().X) > 1e-9 || std::abs(tp.Y - transit.back().Y) > 1e-9)
+                        transit.push_back(tp);
+                }
+                if (std::abs(nextPt.X - transit.back().X) > 1e-9 || std::abs(nextPt.Y - transit.back().Y) > 1e-9)
+                    transit.push_back(nextPt);
+                transits->push_back(std::move(transit));
+            }
             for (size_t k = 0; k < conn.size(); k++) {
                 if (!result.empty() &&
                     std::abs(conn[k].X - result.back().X) < 1e-9 &&
