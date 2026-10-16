@@ -2210,7 +2210,11 @@ void MowerAdapter::startMapUploadFromLoop()
   // Die gespeicherte Karte trägt ihre eigenen Mäh-Einstellungen; die aktuellen
   // Runtime-Toggles gehören zur gerade geladenen Karte.
   auto settings = useOverride ? settingsFromMap(snap) : _mowSettings;
-  auto filtered = ArduMower::Modem::PathPlanner::filterRouteByToggles(snap.waypoints, snap, settings);
+  // Die Verbindungswege der aktuellen Karte liegen meist schon im Cache; sie
+  // neu zu berechnen hielt die Anzeige sekundenlang auf "Uploading map".
+  ArduMower::Modem::PathPlanner::TransitCache *cache =
+      transitSignature(snap) == _transitCacheSignature ? &_transitCache : nullptr;
+  auto filtered = ArduMower::Modem::PathPlanner::filterRouteByToggles(snap.waypoints, snap, settings, nullptr, cache);
   snap.waypoints = filtered;
 #else
   Log(INFO, "%sstartMapUploadFromLoop: started (perimeter=%d exclusions=%d dock=%d waypoints=%d)",
