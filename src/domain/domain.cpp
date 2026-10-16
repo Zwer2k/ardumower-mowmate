@@ -394,6 +394,8 @@ void MowSettings::marshal(JsonObject o) const
   o["distanceToExclusions"] = distanceToExclusions;
   o["exclusionLaps"] = exclusionLaps;
   o["mowBorderCcw"] = mowBorderCcw;
+  o["routeOrder"] = routeOrder;
+  o["exclusionLapsWithArea"] = exclusionLapsWithArea;
   o["doMowArea"] = doMowArea;
   o["doMowPerimeter"] = doMowPerimeter;
   o["doMowBorder"] = doMowBorder;

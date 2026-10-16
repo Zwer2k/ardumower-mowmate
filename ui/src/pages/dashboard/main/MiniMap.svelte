@@ -6,7 +6,7 @@
     import { socketStore } from '../../../stores/socket';
     import { mowSettingsStore } from '../../../map/mow-settings';
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
-    import { splitRouteProgress } from '../../../map/core/route-progress';
+    import { splitRouteProgress, routeTransits, mergeTransits } from '../../../map/core/route-progress';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import Obstacles from '../../../map/Obstacles.svelte';
     import MapLoadingOverlay from '../../../map/MapLoadingOverlay.svelte';
@@ -311,7 +311,7 @@
 
                 {#if map.waypoints?.points?.length}
                     {@const settings = $mowSettingsStore}
-                    {@const visibleWaypoints = filterWaypointsByToggles(map.waypoints.points, map, settings)}
+                    {@const visibleWaypoints = mergeTransits(filterWaypointsByToggles(map.waypoints.points, map, settings), $socketStore.currentMapTransits)}
                     {@const progress = splitRouteProgress(visibleWaypoints, completedIndex, isMapSynced)}
                     <!-- wie CaSSAndRA: alle Linien 2 px, offen grün, gemäht blass, aktuelles Teilstück gestrichelt -->
                     {#each progress.done as seg}
@@ -325,6 +325,12 @@
                             stroke-linecap="round"
                             stroke-linejoin="round"
                         />
+                    {/each}
+                    <!-- Lücken, für die noch kein Weg des Modems vorliegt: gestrichelt gerade -->
+                    {#each routeTransits(visibleWaypoints) as [a, b]}
+                        <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                            stroke="#7f7f7f" stroke-opacity="0.7" stroke-width="1"
+                            stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
                     {/each}
                     {#each progress.todo as seg}
                         <polyline

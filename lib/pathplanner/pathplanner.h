@@ -28,6 +28,13 @@ struct Map {
     double rotation = 0.0;
 };
 
+// Abschnitte der Route, in der Reihenfolge von Settings::routeOrder gemäht
+enum RouteBlock : uint8_t {
+    RouteBlockArea = 0,            // Mähfläche (Muster)
+    RouteBlockBorder = 1,          // Runden entlang der Außengrenze
+    RouteBlockExclusionBorder = 2, // Runden um die Exclusions
+};
+
 struct Settings {
     uint32_t timestamp;
     int pattern;
@@ -43,7 +50,14 @@ struct Settings {
     // Berechnung ist immer aktiv; die Laufzeit-Toggles (doMow*) filtern später.
     bool mowArea;
     bool mowExclusionBorder;
+    // Laufrichtung aller Randrunden (Außengrenze und Exclusions).
     bool mowBorderCcw;
+    // Reihenfolge der Abschnitte (RouteBlock, jeder genau einmal). Standard:
+    // Fläche, Außengrenze, Exclusion-Grenzen.
+    uint8_t routeOrder[3];
+    // Exclusion-Runden in die Fläche einfügen, jeweils am Punkt des Musters mit
+    // dem kürzesten Weg zur Runde; RouteBlockExclusionBorder entfällt dann.
+    bool exclusionLapsWithArea;
     // Schwelle der Routenvereinfachung in Metern. Wirkt als Verschmelzungsradius
     // für doppelte Punkte und (halbiert) als erlaubte Abweichung beim Entfernen
     // nahezu kollinearer Punkte. Größere Werte ergeben weniger Wegpunkte.
@@ -54,6 +68,8 @@ struct Settings {
           distanceToBorder(0), borderLaps(0),
           distanceToExclusions(0), exclusionLaps(-1),
           mowArea(true), mowExclusionBorder(true), mowBorderCcw(false),
+          routeOrder{RouteBlockArea, RouteBlockBorder, RouteBlockExclusionBorder},
+          exclusionLapsWithArea(false),
           simplifyEpsilon(0.02f) {}
 };
 
@@ -175,6 +191,9 @@ private:
 // (hält den Randabstand ein), sonst innerhalb des ganzen Perimeters.
 struct ConnectorRouting {
     const FreeSpaceRouter *perimeter = nullptr;
+    // Perimeter mit um distanceToExclusions vergrößerten Exclusions: hält den
+    // Abstand zu den Exclusions, wenn die Mähfläche selbst keinen Weg bietet.
+    const FreeSpaceRouter *spaced = nullptr;
     std::vector<const FreeSpaceRouter *> areas;
     std::vector<Point> route(const Point &from, const Point &to) const;
 };

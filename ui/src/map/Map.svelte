@@ -48,6 +48,7 @@
     buildInitialCandidates,
   } from "./interactions/map-edit";
   import { BackendSettings } from "../stores/backend";
+  import { mergeTransits, routeLength } from "./core/route-progress";
   import { routeStyleStore } from "./route-style";
   import { createMapSelection, gotoStore } from "./interactions/map-goto";
   import GotoControls from "./overlay/GotoControls.svelte";
@@ -615,6 +616,11 @@
   $: fixedPoints = perimeterPoints + dockpointsPoints + exclusionPoints.reduce((a, b) => a + b, 0);
   $: totalPoints = $socketStore.currentMapUploadPoints ?? fixedPoints + filteredWaypoints.length;
   $: uploadWaypointsPoints = Math.max(0, totalPoints - fixedPoints);
+  // Route, wie sie zum Mäher geht (ohne ausgeblendete Bereiche, mit den
+  // Verbindungsfahrten des Modems): Länge und Dauer bei der Mähgeschwindigkeit
+  $: uploadRoute = mergeTransits(filteredWaypoints, $socketStore.currentMapTransits);
+  $: routeLengthM = routeLength(uploadRoute);
+  $: mowSpeed = $socketStore.desiredState?.speed ?? 0;
   // Schätzung, wie viele Punkte in den Speicher des Mähers passen.
   $: mowerCapacity = mowerCapacityFor($socketStore, $MapStore?.map, $mowSettingsStore);
   $: mowerCapacityExceeded = capacityExceeded(mowerCapacity);
@@ -1263,6 +1269,8 @@
       {waypointsPoints}
       {uploadWaypointsPoints}
       {totalPoints}
+      {routeLengthM}
+      {mowSpeed}
       {mowerCapacity}
       {mowerCapacityExceeded}
       needsUpload={sync.needsUpload}
@@ -1331,7 +1339,7 @@
           />
         {/each}
         <Waypoints
-          value={{ points: edit && editCategory === "waypoints" ? rawWaypoints : filteredWaypoints }}
+          value={{ points: edit && editCategory === "waypoints" ? rawWaypoints : uploadRoute }}
           waypointsId="map-0-waypoints"
           cutWidth={$routeStyleStore === 'width' ? Math.max(0.05, $BackendSettings?.mower?.cut_width ?? 0.18) : null}
           {edit}

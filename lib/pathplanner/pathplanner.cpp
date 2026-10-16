@@ -500,6 +500,10 @@ Polygon ConnectorRouting::route(const Point &from, const Point &to) const {
         // aufgeben. Der Perimeter-Router findet den Weg dann direkt.
         if (area->findRoute(from, to, path, true)) return path;
     }
+    // Ohne Weg in der Mähfläche (z. B. schmale Lücke zwischen Exclusions)
+    // nicht gleich dicht an den Exclusions entlang: erst mit Abstand versuchen.
+    if (spaced && spaced->pointFree(from) && spaced->pointFree(to) &&
+        spaced->findRoute(from, to, path)) return path;
     if (perimeter) return perimeter->route(from, to);
     return {from, to};
 }
@@ -987,6 +991,23 @@ LapRings computeLapRings(const Polygon &perimeter, const std::vector<Polygon> &e
     return result;
 }
 
+// Ring in Laufrichtung, geschlossen, beginnend am Punkt nächst near.
+static Polygon orderedRing(const Polygon &input, bool ccw, const Point &near) {
+    Polygon ring = input;
+    bool cw = isClockwise(ring);
+    if (ccw == cw) std::reverse(ring.begin(), ring.end());
+    size_t startIdx = nearestPointIndex(near, ring);
+    Polygon ordered;
+    for (size_t i = 0; i < ring.size(); i++) {
+        size_t idx = (startIdx + i) % ring.size();
+        if (ordered.empty() || distance(ordered.back(), ring[idx]) > 0.01)
+            ordered.push_back(ring[idx]);
+    }
+    if (!ordered.empty() && distance(ordered.back(), ordered[0]) > 0.01)
+        ordered.push_back(ordered[0]);
+    return ordered;
+}
+
 // Hängt die Ringe einer Rundenart an die Route an, jeweils beim nächstgelegenen
 // Ring und Punkt beginnend. Übergänge laufen über den Router.
 static void appendLapRings(Polygon &route, Point &near,
@@ -999,19 +1020,7 @@ static void appendLapRings(Polygon &route, Point &near,
         sortSolutionPolygonsByDistance(boundaries, near);
 
         for (size_t b = 0; b < boundaries.size(); b++) {
-            Polygon ring = boundaries[b];
-            bool cw = isClockwise(ring);
-            if (ccw == cw) std::reverse(ring.begin(), ring.end());
-
-            size_t startIdx = nearestPointIndex(near, ring);
-            Polygon ordered;
-            for (size_t i = 0; i < ring.size(); i++) {
-                size_t idx = (startIdx + i) % ring.size();
-                if (ordered.empty() || distance(ordered.back(), ring[idx]) > 0.01)
-                    ordered.push_back(ring[idx]);
-            }
-            if (!ordered.empty() && distance(ordered.back(), ordered[0]) > 0.01)
-                ordered.push_back(ordered[0]);
+            Polygon ordered = orderedRing(boundaries[b], ccw, near);
 
             // Übergang von der vorherigen Runde: direkt nur, wenn die Linie im
             // freien Raum bleibt, sonst um Exclusions und Buchten herum.
@@ -1041,6 +1050,30 @@ static void appendLapRings(Polygon &route, Point &near,
     }
 }
 
+// Perimeterrunden. Exclusions, die mit dem Perimeter verschmelzen, umfahren
+// die Perimeterrunden; die Stücke entlang ihrer Kante gehören zum
+// Exclusion-Rand und folgen damit dem Schalter "Mow Excl. border", nicht
+// "Mow Border".
+static void appendPerimeterLaps(Polygon &route, Point &near, const LapRings &rings,
+    const std::vector<Polygon> &exclusions, int exclusionLaps, bool ccw,
+    const FreeSpaceRouter *router)
+{
+    const size_t first = route.size();
+    appendLapRings(route, near, rings.perimeterLaps, RouteTagBorder, ccw, router);
+    if (exclusionLaps <= 0) return;
+    const double onEdge = 0.005;
+    for (size_t i = first; i < route.size(); i++) {
+        auto &p = route[i];
+        if (p.tag != RouteTagBorder) continue;
+        for (const auto &ex : exclusions) {
+            if (ex.size() >= 3 && distance(p, nearestPointOnPolygon(p, ex)) < onEdge) {
+                p.tag = RouteTagExclusionBorder;
+                break;
+            }
+        }
+    }
+}
+
 Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &exclusions,
     int borderLaps, int exclusionLaps, bool ccw, const Point &startNear, double width,
     const FreeSpaceRouter *router)
@@ -1048,30 +1081,89 @@ Polygon addBorderLaps(const Polygon &perimeter, const std::vector<Polygon> &excl
     PP_LOG(0, "%saddBorderLaps laps=%d exclusionLaps=%d ccw=%d width=%.3f", _LOG_,
         borderLaps, exclusionLaps, ccw, width);
     if ((borderLaps <= 0 && exclusionLaps <= 0) || perimeter.size() < 3) return {};
-
     LapRings rings = computeLapRings(perimeter, exclusions, borderLaps, exclusionLaps, width);
     Polygon route;
     Point near = startNear;
-    appendLapRings(route, near, rings.perimeterLaps, RouteTagBorder, ccw, router);
-    // Exclusions, die mit dem Perimeter verschmelzen, umfahren die
-    // Perimeterrunden. Die Stücke entlang ihrer Kante gehören zum Exclusion-Rand
-    // und folgen damit dem Schalter "Mow Excl. border", nicht "Mow Border".
-    if (exclusionLaps > 0) {
-        const double onEdge = 0.005;
-        for (auto &p : route) {
-            if (p.tag != RouteTagBorder) continue;
-            for (const auto &ex : exclusions) {
-                if (ex.size() >= 3 && distance(p, nearestPointOnPolygon(p, ex)) < onEdge) {
-                    p.tag = RouteTagExclusionBorder;
-                    break;
-                }
-            }
-        }
-    }
+    appendPerimeterLaps(route, near, rings, exclusions, exclusionLaps, ccw, router);
     appendLapRings(route, near, rings.exclusionLaps, RouteTagExclusionBorder, ccw, router);
-
     PP_LOG(0, "%saddBorderLaps done: %d points", _LOG_, route.size());
     return route;
+}
+
+// Verbindungsfahrt vom Ende der Route nach to (ohne to selbst), über den Router.
+static void appendConnector(Polygon &route, const Point &to, const FreeSpaceRouter &router) {
+    if (route.empty() || distance(route.back(), to) <= 0.01) return;
+    Polygon conn = router.route(route.back(), to);
+    for (const auto &p : conn) {
+        if (distance(route.back(), p) <= 0.01 || distance(p, to) <= 0.01) continue;
+        Point connector = p;
+        connector.tag = RouteTagConnector;
+        route.push_back(connector);
+    }
+}
+
+// Fügt die Exclusion-Runden in das Flächenmuster ein: jede Runde an dem
+// Musterpunkt, von dem aus sie am nächsten liegt (kürzester Umweg). Der
+// Mäher fährt hin, mäht die Runde und kehrt zum selben Punkt zurück, damit
+// keine Bahn des Musters ausgelassen wird. Liegen mehrere Runden am selben
+// Punkt (z. B. mehrere Runden um eine Exclusion), folgen sie direkt
+// aufeinander.
+static Polygon insertExclusionLaps(const Polygon &pattern,
+    const std::vector<std::vector<Polygon>> &laps, bool ccw, const FreeSpaceRouter &router)
+{
+    struct Visit { size_t at; size_t order; Polygon ring; };
+    std::vector<Visit> visits;
+    size_t order = 0;
+    for (const auto &lapRings : laps) {
+        for (const auto &ring : lapRings) {
+            if (ring.size() < 3) continue;
+            // Umgebendes Rechteck der Runde: Sein Abstand ist eine untere
+            // Grenze; liegt er schon über dem besten Treffer, entfällt die
+            // genaue (teure) Prüfung gegen alle Kanten der Runde.
+            double minX = ring[0].X, maxX = ring[0].X, minY = ring[0].Y, maxY = ring[0].Y;
+            for (const auto &p : ring) {
+                minX = std::min(minX, p.X); maxX = std::max(maxX, p.X);
+                minY = std::min(minY, p.Y); maxY = std::max(maxY, p.Y);
+            }
+            size_t best = 0;
+            double bestDist = std::numeric_limits<double>::max();
+            for (size_t i = 0; i < pattern.size(); i++) {
+                const double dx = std::max({minX - pattern[i].X, 0.0, pattern[i].X - maxX});
+                const double dy = std::max({minY - pattern[i].Y, 0.0, pattern[i].Y - maxY});
+                if (dx * dx + dy * dy >= bestDist * bestDist) continue;
+                double d = distance(pattern[i], nearestPointOnPolygon(pattern[i], ring));
+                if (d < bestDist) { bestDist = d; best = i; }
+            }
+            visits.push_back({best, order++, ring});
+        }
+    }
+    if (visits.empty() || pattern.empty()) return pattern;
+    std::stable_sort(visits.begin(), visits.end(),
+        [](const Visit &a, const Visit &b) { return a.at < b.at; });
+
+    Polygon out;
+    size_t v = 0;
+    for (size_t i = 0; i < pattern.size(); i++) {
+        out.push_back(pattern[i]);
+        if (v >= visits.size() || visits[v].at != i) continue;
+        const Point home = pattern[i];
+        while (v < visits.size() && visits[v].at == i) {
+            Polygon ring = orderedRing(visits[v].ring, ccw, out.back());
+            appendConnector(out, ring[0], router);
+            for (const auto &p : ring) {
+                if (distance(out.back(), p) <= 0.01 && out.back().tag == RouteTagExclusionBorder) continue;
+                Point lapPoint = p;
+                lapPoint.tag = RouteTagExclusionBorder;
+                out.push_back(lapPoint);
+            }
+            v++;
+        }
+        appendConnector(out, home, router);
+        out.push_back(home);
+    }
+    PP_LOG(0, "%sinsertExclusionLaps: %d laps into %d pattern points", _LOG_,
+        (int)visits.size(), (int)pattern.size());
+    return out;
 }
 
 void sortSolutionPolygonsByDistance(std::vector<Polygon> &solution, const Point &startPt) {
@@ -1498,8 +1590,10 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
     std::vector<FreeSpaceRouter> areaRouters;
     areaRouters.reserve(areasToMow.size());
     for (const auto &area : areasToMow) areaRouters.emplace_back(area, holes, preferredRoutes);
+    const FreeSpaceRouter spacedRouter(perimeter, holes, preferredRoutes);
     ConnectorRouting routing;
     routing.perimeter = &router;
+    if (!holes.empty()) routing.spaced = &spacedRouter;
     for (const auto &r : areaRouters) routing.areas.push_back(&r);
 
     std::vector<Polygon> lapExclusions;
@@ -1509,15 +1603,11 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
     const int exclusionLaps = !settings.mowExclusionBorder ? 0
         : (settings.exclusionLaps < 0 ? borderLaps : settings.exclusionLaps);
     const bool hasLaps = borderLaps > 0 || (exclusionLaps > 0 && !lapExclusions.empty());
+    LapRings lapRings;
+    if (hasLaps) lapRings = computeLapRings(perimeter, lapExclusions, borderLaps, exclusionLaps, settings.width);
 
-    if (hasLaps && settings.mowBorderCcw) {
-        Polygon laps = addBorderLaps(perimeter, lapExclusions, borderLaps, exclusionLaps, true,
-            startNear, settings.width, &router);
-        route = laps;
-        if (!route.empty()) startNear = route.back();
-    }
-
-    if (settings.mowArea) {
+    // Flächenmuster ab startNear (unverändert gegenüber früher)
+    auto computeAreaPattern = [&](const Point &startNear) -> Polygon {
         std::vector<Polygon> allSegments;
 
         if (settings.pattern == 2) {
@@ -1607,42 +1697,86 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
             }
         }
 
+        Polygon pattern;
         if (!allSegments.empty()) {
             sortSolutionPolygonsByDistance(allSegments, startNear);
-            Polygon pattern;
             connectPolysUsingPathFinding(pattern, allSegments, perimeter, areasToMow, holes, false,
                 preferredRoutes, &routing);
             pattern = pruneOutside(pattern, areasToMow);
-
-            if (!route.empty() && !pattern.empty()) {
-                Polygon conn = router.route(route.back(), pattern[0]);
-                for (size_t k = 0; k < conn.size(); k++) {
-                    if (distance(route.back(), conn[k]) <= 0.01) continue;
-                    Point connector = conn[k];
-                    if (distance(connector, pattern[0]) > 0.01) connector.tag = RouteTagConnector;
-                    route.push_back(connector);
-                }
-            }
-            route.insert(route.end(), pattern.begin(), pattern.end());
-            if (!route.empty()) startNear = route.back();
         }
-    }
+        return pattern;
+    };
 
-    patternProgress.report(1.0);
-    if (hasLaps && !settings.mowBorderCcw) {
-        Polygon lapsRoute = addBorderLaps(perimeter, lapExclusions, borderLaps, exclusionLaps, false,
-            startNear, settings.width, &router);
-        if (!route.empty() && !lapsRoute.empty()) {
-            Polygon conn = router.route(route.back(), lapsRoute[0]);
+    // Reihenfolge der Abschnitte; ungültige Angaben (doppelt, fehlend) ergeben
+    // die Standardreihenfolge Fläche, Außengrenze, Exclusion-Grenzen.
+    uint8_t order[3] = {RouteBlockArea, RouteBlockBorder, RouteBlockExclusionBorder};
+    {
+        bool seen[3] = {false, false, false};
+        bool valid = true;
+        for (int i = 0; i < 3; i++) {
+            uint8_t b = settings.routeOrder[i];
+            if (b > RouteBlockExclusionBorder || seen[b]) { valid = false; break; }
+            seen[b] = true;
+        }
+        if (valid) for (int i = 0; i < 3; i++) order[i] = settings.routeOrder[i];
+    }
+    const bool lapsWithArea = settings.exclusionLapsWithArea && settings.mowArea;
+    PP_LOG(0, "%sroute order %d,%d,%d exclusionLapsWithArea=%d", _LOG_,
+        order[0], order[1], order[2], lapsWithArea);
+
+    // Hängt einen Abschnitt an, die Überfahrt ist ein Verbinder.
+    auto appendPart = [&](const Polygon &part) {
+        if (part.empty()) return;
+        if (!route.empty()) {
+            Polygon conn = router.route(route.back(), part[0]);
             for (size_t k = 0; k < conn.size(); k++) {
                 if (distance(route.back(), conn[k]) <= 0.01) continue;
                 Point connector = conn[k];
-                if (distance(connector, lapsRoute[0]) > 0.01) connector.tag = RouteTagConnector;
+                if (distance(connector, part[0]) > 0.01) connector.tag = RouteTagConnector;
                 route.push_back(connector);
             }
         }
-        route.insert(route.end(), lapsRoute.begin(), lapsRoute.end());
+        route.insert(route.end(), part.begin(), part.end());
+        startNear = route.back();
+    };
+
+    bool exclusionLapsDone = false;
+    for (int i = 0; i < 3; i++) {
+        switch (order[i]) {
+        case RouteBlockArea: {
+            if (!settings.mowArea) break;
+            Polygon pattern = computeAreaPattern(startNear);
+            if (lapsWithArea && !pattern.empty())
+                pattern = insertExclusionLaps(pattern, lapRings.exclusionLaps, settings.mowBorderCcw, router);
+            appendPart(pattern);
+            break;
+        }
+        case RouteBlockBorder: {
+            if (borderLaps <= 0) break;
+            Polygon laps;
+            Point near = startNear;
+            appendPerimeterLaps(laps, near, lapRings, lapExclusions, exclusionLaps, settings.mowBorderCcw, &router);
+            // Folgen die Exclusion-Runden direkt, entstehen sie in einem Zug
+            // (wie früher addBorderLaps): die Überfahrt gehört zum Exclusion-Rand.
+            if (i + 1 < 3 && order[i + 1] == RouteBlockExclusionBorder && exclusionLaps > 0 && !lapsWithArea) {
+                appendLapRings(laps, near, lapRings.exclusionLaps, RouteTagExclusionBorder, settings.mowBorderCcw, &router);
+                exclusionLapsDone = true;
+            }
+            appendPart(laps);
+            break;
+        }
+        case RouteBlockExclusionBorder: {
+            if (exclusionLaps <= 0 || lapsWithArea || exclusionLapsDone) break;
+            Polygon laps;
+            Point near = startNear;
+            appendLapRings(laps, near, lapRings.exclusionLaps, RouteTagExclusionBorder, settings.mowBorderCcw, &router);
+            appendPart(laps);
+            break;
+        }
+        }
+        if (order[i] == RouteBlockArea) patternProgress.report(1.0);
     }
+    patternProgress.report(1.0);
 
     borderProgress.report(1.0);
     route = pruneOutside(route, perimeter);

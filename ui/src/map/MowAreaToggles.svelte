@@ -5,7 +5,7 @@
 <script lang="ts">
   import { Toggle } from "carbon-components-svelte";
   import { mowSettingsStore } from "./mow-settings";
-  import { socketService } from "../stores/socket";
+  import { socketService, mowSettingsPendingStore } from "../stores/socket";
   import { routeStyleStore } from "./route-style";
 
   // showRouteStyle: Schalter für die Bahndarstellung (nur im Karteneditor)
@@ -89,24 +89,32 @@
   {#if showTitle}
     <span class="toggles-title">Mow areas</span>
   {/if}
+  <!-- Gesperrt, bis das Modem die Änderung bestätigt: es filtert die Route neu
+       und schickt Punktzahl, CRC und Verbindungswege, das kann 1-2 s dauern. -->
   <Toggle
     id={areaId}
     labelText="{labelPrefix}Area"
     size="sm"
+    disabled={$mowSettingsPendingStore}
     bind:toggled={doMowArea}
   />
   <Toggle
     id={borderId}
     labelText="{labelPrefix}Border"
     size="sm"
+    disabled={$mowSettingsPendingStore}
     bind:toggled={doMowBorder}
   />
   <Toggle
     id={exclBorderId}
     labelText="{labelPrefix}Excl. border"
     size="sm"
+    disabled={$mowSettingsPendingStore}
     bind:toggled={doMowExclusionBorder}
   />
+  {#if $mowSettingsPendingStore}
+    <span class="pending-hint" aria-live="polite">Updating…</span>
+  {/if}
   <!-- Bahnen zusätzlich in Schnittbreite zeichnen -->
   {#if showRouteStyle}
   <span class="route-style-toggle" title="Draw the tracks as wide as the mower cuts (Settings → Mower → Cut width) to show overlaps and gaps">
@@ -121,6 +129,10 @@
 </div>
 
 <style>
+  .pending-hint {
+    font-size: 0.75rem;
+    color: #525252;
+  }
   .route-style-toggle {
     border-top: 1px solid #e0e0e0;
     padding-top: 0.25rem;

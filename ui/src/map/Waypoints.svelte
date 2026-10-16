@@ -5,6 +5,7 @@
   import Point from "./Point.svelte";
   import Edge from "./Edge.svelte";
   import type { MapArea } from "./model";
+  import { routeTransits } from "./core/route-progress";
 
   export let value: WaypointsModel;
   export let waypointsId: string;
@@ -60,6 +61,11 @@
 {/if}
 
 {#if value.points.length > 1}
+  <!-- Lücken, für die noch kein Weg des Modems vorliegt: gestrichelt gerade -->
+  {#each routeTransits(value.points) as [a, b]}
+    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="blue" stroke-opacity="0.6"
+      stroke-width={lineWidth * 0.6} stroke-dasharray="0.08 0.06" pointer-events="none" />
+  {/each}
   {#each routeSegments as segment}
     {#if segment.length > 1}
       <polyline

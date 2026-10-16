@@ -4,6 +4,9 @@
 #include "domain.h"
 #include "mower_map.h"
 #include "map_manager.h"
+#ifdef ENABLE_MAP
+#include "path_planner.h"
+#endif
 #include "router.h"
 #include <deque>
 #include "encrypt.h"
@@ -118,6 +121,17 @@ namespace ArduMower
       String _currentMapHash;
       int _currentMapCrc = 0;
       int _currentMapUploadPoints = 0;   // Punkte, die beim Upload zum Mäher gehen
+      // Verbindungswege über ausgeblendete Abschnitte (für die Kartenanzeige)
+      std::vector<std::vector<ArduMower::Domain::Robot::MapPoint>> _currentMapTransits;
+#ifdef ENABLE_MAP
+      // Verbindungswege der aktuellen Karte für alle Schalterkombinationen;
+      // loop() rechnet sie nach jeder Kartenänderung schrittweise voraus.
+      ArduMower::Modem::PathPlanner::TransitCache _transitCache;
+      uint32_t _transitCacheSignature = 0;
+      int _transitPrefillCombo = 8;   // 8 = fertig
+      uint32_t _transitPrefillLastMs = 0;
+      void prefillTransitCacheStep();
+#endif
       double _currentMapArea = 0.0;
       bool _currentMapUnsaved = false;
       String _pendingRenameId;
@@ -260,6 +274,7 @@ namespace ArduMower
       virtual String currentMapHash() override;
       virtual int currentMapCrc() override;
       virtual int currentMapUploadPoints() override { return _currentMapUploadPoints; }
+      virtual const std::vector<std::vector<ArduMower::Domain::Robot::MapPoint>> *currentMapTransits() override { return &_currentMapTransits; }
       // CRC und Punktzahl der aktuellen Karte, wie sie zum Mäher gehen
       void refreshCurrentMapCrc();
       virtual double currentMapArea() override;

@@ -4,6 +4,10 @@
 #include <vector>
 #include "mower_map.h"
 #include "domain.h"
+#include <map>
+#include <array>
+#include <memory>
+#include "pathplanner.h"
 
 namespace ArduMower {
 namespace Modem {
@@ -53,10 +57,44 @@ Polygon calculateWaypoints(ArduMower::Domain::Robot::MowerMap &map,
     float mowSpeed = 0.3f,
     const std::function<void(int percent)> &progress = {});
 
+// Zwischenspeicher der Verbindungswege einer Karte: (Start, Ziel) -> Weg um die
+// Exclusions herum. Der ESP32-S3 rechnet double nur in Software; ein Weg kostet
+// dort Zehntelsekunden, alle Lücken einer Karte zusammen Sekunden. Leeren,
+// sobald sich Perimeter, Exclusions oder Wegpunkte ändern.
+class TransitCache {
+public:
+    void clear() { paths_.clear(); router_.reset(); }
+    size_t size() const { return paths_.size(); }
+    const std::vector<PathPlannerCore::Point> *find(const Point &a, const Point &b) const;
+    void put(const Point &a, const Point &b, std::vector<PathPlannerCore::Point> path);
+    // Wegfinder für Perimeter und Exclusions der Karte, einmal aufgebaut
+    PathPlannerCore::FreeSpaceRouter &router(const ArduMower::Domain::Robot::MowerMap &map);
+private:
+    using Key = std::array<int32_t, 4>;
+    static Key key(const Point &a, const Point &b);
+    std::map<Key, std::vector<PathPlannerCore::Point>> paths_;
+    std::unique_ptr<PathPlannerCore::FreeSpaceRouter> router_;
+};
+
+// Lücken (Ende eines Abschnitts, Anfang des nächsten), die das Filtern mit
+// diesen Schaltern überbrücken muss, ohne die Wege zu berechnen.
+std::vector<std::pair<Point, Point>> routeGaps(const Polygon &route,
+    const ArduMower::Domain::Robot::MowSettings &settings);
+
+// Rechnet höchstens einen fehlenden Verbindungsweg voraus, für eine der acht
+// Kombinationen der Mow-areas-Schalter (ab combo). false: alle sind im Cache.
+bool prefillTransitCache(TransitCache &cache, const Polygon &route,
+    const ArduMower::Domain::Robot::MowerMap &map,
+    const ArduMower::Domain::Robot::MowSettings &base, int &combo);
+
 // Filtert eine bereits berechnete Route anhand der Runtime-Toggles.
+// transits (optional) erhält die eingefügten Verbindungswege über
+// ausgeblendete Abschnitte, jeweils vom Ende eines Abschnitts bis zum Anfang
+// des nächsten, damit die Karten sie anzeigen können.
 Polygon filterRouteByToggles(const Polygon &route,
     const ArduMower::Domain::Robot::MowerMap &map,
-    const ArduMower::Domain::Robot::MowSettings &settings);
+    const ArduMower::Domain::Robot::MowSettings &settings,
+    std::vector<Polygon> *transits = nullptr, TransitCache *cache = nullptr);
 
 } // namespace PathPlanner
 } // namespace Modem

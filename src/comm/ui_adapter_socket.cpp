@@ -372,6 +372,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       map.distanceToExclusions = settings.distanceToExclusions;
       map.exclusionLaps = settings.exclusionLaps;
       map.mowBorderCcw = settings.mowBorderCcw;
+      map.routeOrder = settings.routeOrder;
+      map.exclusionLapsWithArea = settings.exclusionLapsWithArea;
       map.doMowArea = settings.doMowArea;
       map.doMowPerimeter = settings.doMowPerimeter;
       map.doMowBorder = settings.doMowBorder;
@@ -411,6 +413,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       if (!jsonData["distanceToExclusions"].isNull()) s.distanceToExclusions = jsonData["distanceToExclusions"];
       if (!jsonData["exclusionLaps"].isNull()) s.exclusionLaps = jsonData["exclusionLaps"];
       if (!jsonData["mowBorderCcw"].isNull()) s.mowBorderCcw = jsonData["mowBorderCcw"];
+      if (jsonData["routeOrder"].is<const char *>()) s.routeOrder = jsonData["routeOrder"].as<String>();
+      if (!jsonData["exclusionLapsWithArea"].isNull()) s.exclusionLapsWithArea = jsonData["exclusionLapsWithArea"];
       if (!jsonData["doMowArea"].isNull()) s.doMowArea = jsonData["doMowArea"];
       if (!jsonData["doMowPerimeter"].isNull()) s.doMowPerimeter = jsonData["doMowPerimeter"];
       if (!jsonData["doMowBorder"].isNull()) s.doMowBorder = jsonData["doMowBorder"];
@@ -418,11 +422,16 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       if (!jsonData["doMowExclusionBorder"].isNull()) s.doMowExclusionBorder = jsonData["doMowExclusionBorder"];
       if (!jsonData["simplifyEpsilon"].isNull()) s.simplifyEpsilon = jsonData["simplifyEpsilon"];
       if (!jsonData["checkTurnRadius"].isNull()) s.checkTurnRadius = jsonData["checkTurnRadius"];
-      Log(INFO, "%s setMowSettings received: pattern=%d width=%.2f angle=%d distToBorder=%d laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusions=%d doMowExclusionBorder=%d simplify=%.3f checkRadius=%.2f",
+      Log(INFO, "%s setMowSettings received: pattern=%d width=%.2f angle=%d distToBorder=%.0f laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusions=%d doMowExclusionBorder=%d simplify=%.3f checkRadius=%.2f",
           _LOG_, s.pattern, s.width, s.angle, s.distanceToBorder, s.borderLaps,
           s.doMowArea, s.doMowPerimeter, s.doMowBorder, s.doMowExclusions, s.doMowExclusionBorder,
           s.simplifyEpsilon, s.checkTurnRadius);
       _socketHandler->setMowSettings(s);
+      // Erst den Status: setMowSettings() hat die Upload-Kennung zurückgesetzt,
+      // ohne ihn hielt der Browser die Karte bis zum nächsten Statusupdate für
+      // synchron und zeigte keinen Upload-Knopf. Dann die Einstellungen; sie
+      // geben die Schalter im Browser wieder frei.
+      _socketHandler->sendData(ResponseDataType::mowerState, NULL, true);
       _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
     }
     break;
@@ -2053,6 +2062,12 @@ void UiSocketHandler::calculateWaypoints() {
     sendProgress("calculate", 0, "Calculation already in progress");
     return;
   }
+  // Eine laufende Kartenübertragung zum Browser (z. B. das Ergebnis der
+  // vorigen Berechnung) unterdrückt alle anderen Nachrichten und sperrt die
+  // Karte. Lief sie weiter, kam kein Fortschritt beim Browser an, und am Ende
+  // verwarf setMap() das neue Ergebnis, weil die Karte noch gelesen wurde.
+  // Die Karte wird ohnehin ersetzt und danach neu übertragen.
+  abortMapChunkSendForMapChange();
   _calculateWaypointsPending = true;
   _calculateWaypointsTimestamp = millis();
   _calculateWaypointsMap = _source.mowerMap();
@@ -2068,6 +2083,8 @@ void UiSocketHandler::processCalculateWaypoints() {
 
   _calculateWaypointsRunning = true;
   _calculateWaypointsPending = false;
+  // Seit dem Einreihen kann eine neue Übertragung begonnen haben (siehe calculateWaypoints())
+  abortMapChunkSendForMapChange();
 
   using namespace ArduMower::Domain::Robot;
   auto map = _calculateWaypointsMap;
@@ -2075,7 +2092,7 @@ void UiSocketHandler::processCalculateWaypoints() {
   map.waypoints.clear();
 #ifdef ENABLE_MAP
   auto settings = _calculateWaypointsSettings;
-  Log(INFO, "%s processCalculateWaypoints: settings pattern=%d width=%.2f angle=%d distToBorder=%d laps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
+  Log(INFO, "%s processCalculateWaypoints: settings pattern=%d width=%.2f angle=%d distToBorder=%.0f laps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
       _LOG_, settings.pattern, settings.width, settings.angle, settings.distanceToBorder, settings.borderLaps,
       settings.doMowArea, settings.doMowBorder, settings.doMowExclusionBorder);
   auto state = _source.state();
@@ -2221,6 +2238,20 @@ void UiSocketHandler::sendBufferedTerminalTo(UiSocketItem* item, uint16_t maxChu
 }
 #endif
 
+// Verbindungswege über ausgeblendete Abschnitte als [[[x,y],...],...] (cm-genau)
+static void addMapTransits(JsonObject o, const std::vector<std::vector<ArduMower::Domain::Robot::MapPoint>> *transits) {
+  JsonArray arr = o["transits"].to<JsonArray>();
+  if (!transits) return;
+  for (const auto &t : *transits) {
+    JsonArray line = arr.add<JsonArray>();
+    for (const auto &p : t) {
+      JsonArray xy = line.add<JsonArray>();
+      xy.add(roundf(p.X * 100.0f) / 100.0f);
+      xy.add(roundf(p.Y * 100.0f) / 100.0f);
+    }
+  }
+}
+
 template<typename T>
 bool UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, T &&data, bool force)
 {
@@ -2275,6 +2306,7 @@ bool UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
     // hängen von den "Mow areas"-Schaltern ab
     _j["mapCrc"] = _source.currentMapCrc();
     _j["uploadPoints"] = _source.currentMapUploadPoints();
+    addMapTransits(_j, _source.currentMapTransits());
   }
 
   if (dataType == ResponseDataType::mowerState && !_progressOp.isEmpty()) {
@@ -2372,6 +2404,7 @@ void UiSocketHandler::sendMapOpResult(UiSocketItem *sendTo, const char *op, bool
   if (!ok) Log(WARN, "%s map operation %s failed: %s", _LOG_, op, error ? error : "");
 }
 
+
 void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted)
 {
   // Jede Bearbeitung (alle 250 ms) bestätigt hier: Früher kostete das eine
@@ -2390,6 +2423,7 @@ void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool acc
   data["hash"] = "";
   data["crc"] = _source.currentMapCrc();
   data["uploadPoints"] = _source.currentMapUploadPoints();
+  addMapTransits(data, _source.currentMapTransits());
   data["area"] = _source.currentMapArea();
   data["rotation"] = _source.currentMapRotation();
   data["unsaved"] = true;

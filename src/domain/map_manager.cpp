@@ -196,7 +196,10 @@ namespace ArduMower {
             return md5.toString();
         }
 
-        int MapManager::computeCrc(const ArduMower::Domain::Robot::MowerMap &map, int *uploadPoints) {
+        int MapManager::computeCrc(const ArduMower::Domain::Robot::MowerMap &map, int *uploadPoints,
+                                   std::vector<std::vector<ArduMower::Domain::Robot::MapPoint>> *transits,
+                                   PathPlanner::TransitCache *cache) {
+            if (transits) transits->clear();
             size_t fixedPoints = map.perimeter.size() + map.dockpoints.size();
             for (const auto &ex : map.exclusions) fixedPoints += ex.size();
 #ifdef ENABLE_MAP
@@ -208,13 +211,14 @@ namespace ArduMower {
                 s.doMowBorder = map.doMowBorder;
                 s.doMowExclusions = map.doMowExclusions;
                 s.doMowExclusionBorder = map.doMowExclusionBorder;
-                auto filtered = PathPlanner::filterRouteByToggles(map.waypoints, map, s);
+                auto filtered = PathPlanner::filterRouteByToggles(map.waypoints, map, s, transits, cache);
                 int waypointsCrc = 0;
                 int crc = map.computeMapCrcDetail(nullptr, nullptr, nullptr, &waypointsCrc);
                 if (uploadPoints) *uploadPoints = (int)(fixedPoints + filtered.size());
                 return crc - waypointsCrc + ArduMower::Domain::Robot::MowerMap::pointsCrc(filtered);
             }
 #endif
+            (void)cache;
             if (uploadPoints) *uploadPoints = (int)(fixedPoints + map.waypoints.size());
             return map.computeMapCrc();
         }

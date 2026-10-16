@@ -42,6 +42,8 @@ export interface WebappMapJson {
   distanceToExclusions?: number;
   exclusionLaps?: number;
   mowBorderCcw?: boolean;
+  routeOrder?: string;
+  exclusionLapsWithArea?: boolean;
   doMowArea?: boolean;
   doMowPerimeter?: boolean;
   doMowBorder?: boolean;
@@ -160,6 +162,8 @@ export function importMowerMap(
       // viele Runden um jede Exclusion wie um den Perimeter.
       exclusionLaps: parsed.exclusionLaps ?? (needsBorderDefaults ? 1 : (parsed.borderLaps ?? 0)),
       mowBorderCcw: parsed.mowBorderCcw ?? false,
+      routeOrder: parsed.routeOrder ?? "",
+      exclusionLapsWithArea: parsed.exclusionLapsWithArea ?? false,
       doMowArea: parsed.doMowArea ?? true,
       doMowPerimeter: parsed.doMowPerimeter ?? true,
       doMowBorder: parsed.doMowBorder ?? (parsed.doPerimeterBorder ?? false),
@@ -186,6 +190,8 @@ export function exportMowerMap(
     distanceToExclusions: s.distanceToExclusions ?? 0,
     exclusionLaps: s.exclusionLaps ?? 0,
     mowBorderCcw: s.mowBorderCcw,
+    ...(s.routeOrder ? { routeOrder: s.routeOrder } : {}),
+    ...(s.exclusionLapsWithArea ? { exclusionLapsWithArea: true } : {}),
     doMowArea: s.doMowArea,
     doMowPerimeter: s.doMowPerimeter,
     doMowBorder: s.doMowBorder,
