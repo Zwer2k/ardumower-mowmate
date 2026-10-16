@@ -20,7 +20,7 @@ describe("pending mow settings", () => {
     rememberPendingMowSettings({ doMowArea: false }, "m1", 0);
     expect(overlayPendingMowSettings({ doMowArea: true }, "m2", 100)).toEqual({ doMowArea: true });
     rememberPendingMowSettings({ doMowArea: false }, "m1", 0);
-    expect(overlayPendingMowSettings({ doMowArea: true }, "m1", 6000)).toEqual({ doMowArea: true });
+    expect(overlayPendingMowSettings({ doMowArea: true }, "m1", 31000)).toEqual({ doMowArea: true });
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { splitRouteProgress, routeTransits, routeTransitPaths } from "../core/route-progress";
+import { splitRouteProgress, routeTransits, mergeTransits, routeLength } from "../core/route-progress";
 
 const pts = [0, 1, 2, 3, 4].map((i) => ({ x: i, y: 0 }));
 
@@ -32,11 +32,20 @@ describe("route transits", () => {
   });
 });
 
-describe("route transit paths", () => {
-  it("uses the modem's path when start and end match, a straight line otherwise", () => {
+describe("merge transits", () => {
+  it("inserts the modem's path as waypoints and closes the gap", () => {
     const pts = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 5, y: 5, routeBreakBefore: true }, { x: 6, y: 5 }];
     const modem = [[{ x: 1, y: 0.01 }, { x: 3, y: 2 }, { x: 5, y: 5 }]];
-    expect(routeTransitPaths(pts, modem)).toEqual([{ path: modem[0], exact: true }]);
-    expect(routeTransitPaths(pts, null)).toEqual([{ path: [pts[1], pts[2]], exact: false }]);
+    const merged = mergeTransits(pts, modem);
+    expect(merged.map((p) => [p.x, p.y])).toEqual([[0, 0], [1, 0], [3, 2], [5, 5], [6, 5]]);
+    expect(routeTransits(merged)).toEqual([]);
+    // ohne Weg bleibt die Lücke
+    expect(routeTransits(mergeTransits(pts, null))).toEqual([[pts[1], pts[2]]]);
+  });
+});
+
+describe("route length", () => {
+  it("sums the segment lengths", () => {
+    expect(routeLength([{ x: 0, y: 0 }, { x: 3, y: 4 }, { x: 3, y: 10 }])).toBeCloseTo(11);
   });
 });

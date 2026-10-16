@@ -12,6 +12,16 @@
   /** Wegpunkte, die zum Mäher gehen (nur eingeschaltete "Mow areas") */
   export let uploadWaypointsPoints: number = waypointsPoints;
   export let totalPoints: number;
+  /** Fahrstrecke der Route zum Mäher (m) */
+  export let routeLengthM = 0;
+  /** Mähgeschwindigkeit (m/s) für die Zeitschätzung; 0 = unbekannt */
+  export let mowSpeed = 0;
+
+  function formatDuration(seconds: number): string {
+    const min = Math.round(seconds / 60);
+    if (min < 60) return `${min} min`;
+    return `${Math.floor(min / 60)} h ${min % 60} min`;
+  }
   export let mowerCapacity: MowerCapacity | null = null;
   export let mowerCapacityExceeded = false;
   export let needsUpload: boolean;
@@ -71,6 +81,13 @@
       : undefined}>
       <strong>Way:</strong> {uploadWaypointsPoints}{#if uploadWaypointsPoints !== waypointsPoints}<span class="capacity"> / {waypointsPoints}</span>{/if}
     </div>
+    {#if routeLengthM > 0}
+      <div title={mowSpeed > 0
+        ? `Distance the mower drives along the route, at ${mowSpeed.toFixed(2)} m/s without turns and stops`
+        : "Distance the mower drives along the route"}>
+        <strong>Route:</strong> {routeLengthM >= 1000 ? `${(routeLengthM / 1000).toFixed(2)} km` : `${Math.round(routeLengthM)} m`}{#if mowSpeed > 0}<span class="capacity"> · ≈{formatDuration(routeLengthM / mowSpeed)}</span>{/if}
+      </div>
+    {/if}
     {#if needsUpload && onUploadMap}
       <button class="sync-btn sync-warn" on:click={onUploadMap} title="Upload this map to the mower">
         ⚠ not synced — upload

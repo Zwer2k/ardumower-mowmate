@@ -66,26 +66,47 @@ export function routeTransits<P extends RoutePoint>(points: P[]): [P, P][] {
   return transits;
 }
 
-export interface RouteTransit {
-  path: { x: number; y: number }[];
-  /** true: der Weg des Modems; false: gerade Linie, bis er vorliegt */
-  exact: boolean;
-}
-
 const TRANSIT_MATCH_M = 0.05;
 
 /**
- * Wie routeTransits(), aber mit dem Weg, den das Modem für die Lücke
- * berechnet hat (um Exclusions herum), sofern Anfang und Ende passen.
+ * Fügt die Wege, mit denen das Modem ausgeblendete Abschnitte überbrückt, als
+ * Wegpunkte (conn) in die gefilterte Route ein, wie beim Upload. Damit sind
+ * sie normale Weglinien, und der Fortschritt des Mähers (mow_point_index, der
+ * diese Punkte mitzählt) passt wieder zur Anzeige. Lücken ohne passenden Weg
+ * bleiben Lücken (routeTransits).
  */
-export function routeTransitPaths<P extends RoutePoint>(
+export function mergeTransits<P extends RoutePoint>(
   points: P[],
   modemTransits: { x: number; y: number }[][] | null | undefined
-): RouteTransit[] {
+): (P | (RoutePoint & { conn: true }))[] {
+  if (!modemTransits || modemTransits.length === 0) return points;
   const near = (a: { x: number; y: number }, b: { x: number; y: number }) =>
     Math.hypot(a.x - b.x, a.y - b.y) < TRANSIT_MATCH_M;
-  return routeTransits(points).map(([a, b]) => {
-    const t = modemTransits?.find((line) => line.length >= 2 && near(line[0], a) && near(line[line.length - 1], b));
-    return t ? { path: t, exact: true } : { path: [a, b], exact: false };
-  });
+  const out: (P | (RoutePoint & { conn: true }))[] = [];
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    if (p.routeBreakBefore && i > 0) {
+      const a = points[i - 1];
+      const t = modemTransits.find((line) => line.length >= 2 && near(line[0], a) && near(line[line.length - 1], p));
+      if (t) {
+        for (let k = 1; k < t.length - 1; k++) out.push({ x: t[k].x, y: t[k].y, conn: true });
+        out.push({ ...p, routeBreakBefore: false });
+        continue;
+      }
+    }
+    out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Fahrstrecke der Route in Metern. Lücken ohne Weg des Modems zählen als
+ * gerade Strecke (der tatsächliche Weg um Exclusions ist etwas länger).
+ */
+export function routeLength(points: { x: number; y: number }[]): number {
+  let length = 0;
+  for (let i = 1; i < points.length; i++) {
+    length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  }
+  return length;
 }

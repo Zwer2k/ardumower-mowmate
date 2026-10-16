@@ -164,7 +164,9 @@ export const motorPlotStore = writable<ConsoleLine[]>([]);
 // frühere Änderung kennt eine spätere noch nicht und ließe den Schalter kurz
 // zurückspringen. Bestätigt ist eine Änderung, sobald eine Antwort ihren Wert
 // enthält; nach PENDING_MOW_SETTINGS_MS gilt wieder, was das Modem meldet.
-const PENDING_MOW_SETTINGS_MS = 5000;
+// Ohne vorausberechnete Verbindungswege braucht das Modem auf großen Karten
+// über 5 s, daher großzügig; bei einer Trennung wird sofort freigegeben.
+const PENDING_MOW_SETTINGS_MS = 30000;
 const pendingMowSettings = new Map<string, { value: unknown; mapId: string; at: number }>();
 
 /** true, solange eine gesendete Änderung der Mäh-Einstellungen unbestätigt ist */
@@ -198,6 +200,12 @@ export function overlayPendingMowSettings<T extends object>(data: T, mapId: stri
   }
   updatePendingState();
   return merged as T;
+}
+
+/** Verbindung getrennt: keine Antwort mehr zu erwarten */
+export function clearPendingMowSettings() {
+  pendingMowSettings.clear();
+  updatePendingState();
 }
 
 export function rememberPendingMowSettings(data: Record<string, unknown>, mapId: string, now: number) {
@@ -480,6 +488,7 @@ class SocketService {
           }
 
           this.clearAllTimers();
+          clearPendingMowSettings();
           socketStore.update((s) => ({ ...s, socket: null, connected: false }));
           // Nach einem Reconnect kann das Netz ein anderes sein – erneut fragen.
           resetFirmwareStatus();
