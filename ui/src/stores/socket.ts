@@ -31,7 +31,17 @@ import {
   type RouteReportData,
 } from "../model";
 import { routeReportStore, clearRouteReport } from "../map/route-report";
-import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer, resetMapTransferTracking } from "../map/map-chunk-buffer";
+import { applyMowJobChunk, type MowJobChunk } from "./mow-job";
+
+/** Antwort auf requestAreas: Bereiche einer Hauptkarte für den Export */
+export interface AreaExportData {
+  mapId: string;
+  /** Perimeter, Exclusions, Dock der Hauptkarte (für die Zeitplaner-Vorschau) */
+  geometry?: import("./mow-job").RawOutline;
+  areas: { id: string; name: string; parentId: string; map?: Record<string, unknown> }[];
+}
+export const areaExportStore = writable<AreaExportData | null>(null);
+import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer, resetMapTransferTracking, mapSelectionStore } from "../map/map-chunk-buffer";
 import { MapPointType } from "../map/map-chunk-buffer";
 import { mowSettingsStore } from "../map/mow-settings";
 import { currentMapRotationStore, updateDrivenTrack } from "../map/service";
@@ -650,6 +660,8 @@ class SocketService {
                     break;
                   }
                   if (data && data.meta) {
+                    const sel = (data.meta as { selection?: number[][] }).selection;
+                    mapSelectionStore.set(Array.isArray(sel) ? sel.map(([X, Y]) => ({ X, Y } as import("../model").MapPoint)) : []);
                     const meta = { hash: data.meta.hash, crc: data.meta.crc || 0, area: data.meta.area, rotation: data.meta.rotation || 0 };
                     newState.currentMapMeta = meta;
                     mapMetaStore.set(meta);
@@ -952,6 +964,12 @@ class SocketService {
                   break;
                 case ResponseDataType.routeReport:
                   routeReportStore.set(jsonData.data as RouteReportData);
+                  break;
+                case ResponseDataType.mowJob:
+                  applyMowJobChunk(jsonData.data as MowJobChunk);
+                  break;
+                case ResponseDataType.areaExport:
+                  areaExportStore.set(jsonData.data as AreaExportData);
                   break;
                 default:
               }
@@ -1331,6 +1349,8 @@ class SocketService {
     };
     this.sendMessage(req);
     clearWaypointsBuffer();
+    // Ohne Route gibt es keinen Bericht mehr
+    clearRouteReport();
   }
 
   sendCalculateWaypoints() {
@@ -1357,6 +1377,53 @@ class SocketService {
     const req: RequestSocketMessage = {
       type: RequestDataType.createMap,
       data: { name },
+    };
+    this.sendMessage(req);
+  }
+
+  /** Neue Subkarte (Bereich) unter parentId anlegen; das Modem lädt sie danach. */
+  sendCreateArea(parentId: string, name: string) {
+    startPendingOperation("createArea", "Creating area...");
+    const req: RequestSocketMessage = {
+      type: RequestDataType.createArea,
+      data: { parentId, name } as unknown as RequestSocketMessage["data"],
+    };
+    this.sendMessage(req);
+  }
+
+  /** Auftrag aus diesen Bereichen nur zusammensetzen und als Vorschau anzeigen */
+  sendPreviewJob(areaIds: string[], overlapOnce: boolean) {
+    startPendingOperation("previewJob", "Putting the job together...");
+    this.sendMessage({
+      type: RequestDataType.previewJob,
+      data: { areaIds, overlapOnce } as unknown as RequestSocketMessage["data"],
+    });
+  }
+
+  /** Vorschau verwerfen: wieder die Route der geladenen Karte */
+  sendClearJob() {
+    this.sendMessage({ type: RequestDataType.clearJob, data: {} as unknown as RequestSocketMessage["data"] });
+  }
+
+  /** Den Auftrag der Vorschau hochladen (ohne zu starten) */
+  sendUploadJob() {
+    startPendingOperation("upload", "Uploading job...");
+    this.sendMessage({
+      type: RequestDataType.startJob,
+      data: { areaIds: [], overlapOnce: false, start: false } as unknown as RequestSocketMessage["data"],
+    });
+  }
+
+  /** Den hochgeladenen Auftrag starten; Teilaufträge laufen als Serie */
+  sendRunJob() {
+    this.sendMessage({ type: RequestDataType.runJob, data: {} as unknown as RequestSocketMessage["data"] });
+  }
+
+  /** Mähauftrag: Bereiche in dieser Reihenfolge hochladen und (start) danach mähen. */
+  sendStartJob(areaIds: string[], overlapOnce: boolean, start: boolean = true) {
+    const req: RequestSocketMessage = {
+      type: RequestDataType.startJob,
+      data: { areaIds, overlapOnce, start } as unknown as RequestSocketMessage["data"],
     };
     this.sendMessage(req);
   }
@@ -1452,10 +1519,22 @@ class SocketService {
 
   /** Ergebnis einer Kartenoperation vom Modem (create, copy, load, save, rename, delete, discard, setActive, import). */
   private handleMapOpResult(result: { op: string; ok: boolean; error?: string; mapId?: string }) {
+    // Antwort da: die Anzeige "läuft" endet spätestens jetzt
+    if (result.op === "createArea" || result.op === "previewJob") clearPendingOperation(result.op);
+    if (result.op === "previewJob" || result.op === "clearJob" || result.op === "runJob") {
+      if (!result.ok) toastStore.set({ msg: result.error || "The job operation failed.", type: "error" });
+      return;
+    }
     if (result.op === "import") {
       const settings = this.pendingImportSettings;
       this.pendingImportSettings = null;
       if (result.ok && settings) this.sendMowSettings(settings as import("../model").MowSettingsData);
+    }
+    if (result.op === "startJob") {
+      toastStore.set(result.ok
+        ? { msg: "Job uploaded", type: "success" }
+        : { msg: result.error || "The job could not be started.", type: "error" });
+      return;
     }
     if (result.ok) {
       if (result.op === "import") toastStore.set({ msg: "Map imported", type: "success" });
@@ -1471,12 +1550,23 @@ class SocketService {
     toastStore.set({ msg: message, type: "error" });
   }
 
+  /** Bereiche (Auswahl, Einstellungen) der Hauptkarte mapId für den Export anfordern */
+  requestAreas(mapId: string) {
+    areaExportStore.set(null);
+    const req: RequestSocketMessage = {
+      type: RequestDataType.requestAreas,
+      data: { mapId } as unknown as RequestSocketMessage["data"],
+    };
+    this.sendMessage(req);
+  }
+
   sendImportMap(json: string, name: string, rotation: number = 0,
-                settings?: Partial<import("../model").MowSettingsData>) {
+                settings?: Partial<import("../model").MowSettingsData>,
+                areas: import("../map/core/mower-map").ExportedArea[] = []) {
     this.pendingImportSettings = settings ?? null;
     const req: RequestSocketMessage = {
       type: RequestDataType.importMap,
-      data: { json, name, rotation },
+      data: (areas.length > 0 ? { json, name, rotation, areas } : { json, name, rotation }) as unknown as RequestSocketMessage["data"],
     };
     this.sendMessage(req);
   }

@@ -14,6 +14,8 @@ namespace {
   const char *_t_name = "name";
   const char *_t_mapId = "mapId";
   const char *_t_mapName = "mapName";
+  const char *_t_areaIds = "areaIds";
+  const char *_t_overlapOnce = "overlapOnce";
   const char *_t_mode = "mode";
   const char *_t_hour = "hour";
   const char *_t_minute = "minute";
@@ -28,6 +30,9 @@ void Entry::marshal(JsonObject o) const
   o[_t_name] = name;
   o[_t_mapId] = mapId;
   o[_t_mapName] = mapName;
+  auto ids = o[_t_areaIds].to<JsonArray>();
+  for (const auto &id : areaIds) ids.add(id);
+  if (overlapOnce) o[_t_overlapOnce] = true;
   o[_t_mode] = static_cast<int>(mode);
   o[_t_hour] = hour;
   o[_t_minute] = minute;
@@ -42,6 +47,14 @@ bool Entry::unmarshal(JsonObject o)
   name = o[_t_name] | "";
   mapId = o[_t_mapId] | "";
   mapName = o[_t_mapName] | "";
+  areaIds.clear();
+  for (JsonVariant v : o[_t_areaIds].as<JsonArray>()) {
+    String id = v | "";
+    if (id.length() > 0) areaIds.push_back(id);
+  }
+  if (areaIds.empty() && mapId.length() > 0) areaIds.push_back(mapId);
+  if (!areaIds.empty()) mapId = areaIds[0];
+  overlapOnce = o[_t_overlapOnce] | false;
   int modeInt = o[_t_mode] | 0;
   if (modeInt < 0 || modeInt > 2) modeInt = 0;
   mode = static_cast<Mode>(modeInt);

@@ -5,6 +5,7 @@
   import IconStar from "carbon-icons-svelte/lib/Star.svelte";
   import IconNew from "carbon-icons-svelte/lib/DocumentAdd.svelte";
   import IconCopy from "carbon-icons-svelte/lib/Copy.svelte";
+  import IconArea from "carbon-icons-svelte/lib/AreaCustom.svelte";
   import IconImportExport from "carbon-icons-svelte/lib/Cloud.svelte";
   import type { MapWorkflow } from "../workflow/map-workflow-store";
 
@@ -19,6 +20,8 @@
   export let onSetDefaultMap: () => void;
   export let onNewMap: () => void;
   export let onCopyMap: () => void;
+  export let onNewArea: () => void;
+  export let canNewArea: boolean;
   export let onOpenMowerMap: () => void;
   export let workflowBusy: boolean;
 </script>
@@ -65,6 +68,16 @@
         iconDescription="New map"
       >
         <span class="btn-label">New</span>
+      </Button>
+      <Button
+        kind="secondary"
+        size="small"
+        disabled={!canNewArea || workflow.renameMode || workflowBusy}
+        on:click={onNewArea}
+        icon={IconArea}
+        iconDescription={canNewArea ? "New area of this map" : "Save the map before adding an area"}
+      >
+        <span class="btn-label">Area</span>
       </Button>
       <Button
         kind="secondary"

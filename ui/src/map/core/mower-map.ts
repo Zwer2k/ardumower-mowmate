@@ -25,6 +25,18 @@ import { get } from "svelte/store";
 // (positive y is South/screen coordinates). We flip Y on import/export so that
 // coordinates are visually consistent in both applications.
 
+/**
+ * Bereich (Subkarte) im Export: Name, Elternbereich als Index in der Liste
+ * (-1 = die Hauptkarte, Eltern stehen immer vor ihren Kindern) und sein
+ * eigener Teil im Format des Modems (Auswahl, Mäh-Einstellungen). Routen
+ * gehören nicht dazu; sie werden nach dem Import neu berechnet.
+ */
+export interface ExportedArea {
+  name: string;
+  parent: number;
+  map: Record<string, unknown>;
+}
+
 export interface WebappMapJson {
   dateTime?: string;
   source?: string;
@@ -49,6 +61,83 @@ export interface WebappMapJson {
   doMowBorder?: boolean;
   doMowExclusions?: boolean;
   doExclusionsBorder?: boolean;
+  areas?: ExportedArea[];
+}
+
+/** Liest die Bereiche einer Datei; ungültige (und ihre Kinder) entfallen. */
+export function parseAreas(raw: unknown): ExportedArea[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ExportedArea[] = [];
+  const newIndex: number[] = [];
+  raw.forEach((a, i) => {
+    newIndex[i] = -2;
+    if (typeof a !== "object" || a === null) return;
+    const area = a as { name?: unknown; parent?: unknown; map?: unknown };
+    const parent = typeof area.parent === "number" && Number.isInteger(area.parent) ? area.parent : -1;
+    if (parent >= i) return;
+    const mappedParent = parent < 0 ? -1 : newIndex[parent];
+    if (mappedParent === -2) return;
+    if (typeof area.map !== "object" || area.map === null) return;
+    newIndex[i] = out.length;
+    out.push({
+      name: typeof area.name === "string" && area.name ? area.name : `Area ${out.length + 1}`,
+      parent: mappedParent,
+      map: area.map as Record<string, unknown>,
+    });
+  });
+  return out;
+}
+
+/** Bereichsliste des Modems (requestAreas) im Exportformat */
+export function areasFromModem(
+  list: { id: string; name: string; parentId: string; map?: Record<string, unknown> }[],
+  rootId: string
+): ExportedArea[] {
+  const index: Record<string, number> = {};
+  const out: ExportedArea[] = [];
+  for (const a of list) {
+    const parent = a.parentId === rootId ? -1 : index[a.parentId];
+    if (parent === undefined) continue;
+    index[a.id] = out.length;
+    out.push({ name: a.name, parent, map: a.map ?? {} });
+  }
+  return out;
+}
+
+/** Nur die gewählten Bereiche; ein Bereich ohne gewählten Elternbereich entfällt. */
+export function selectAreas(areas: ExportedArea[], keep: boolean[]): ExportedArea[] {
+  const out: ExportedArea[] = [];
+  const newIndex: number[] = [];
+  areas.forEach((a, i) => {
+    newIndex[i] = -2;
+    if (!keep[i]) return;
+    const parent = a.parent < 0 ? -1 : newIndex[a.parent];
+    if (parent === -2) return;
+    newIndex[i] = out.length;
+    out.push({ ...a, parent });
+  });
+  return out;
+}
+
+/** An: auch alle Elternbereiche an. Aus: auch alle Unterbereiche aus. */
+export function toggleArea(areas: ExportedArea[], keep: boolean[], index: number, on: boolean): boolean[] {
+  const next = [...keep];
+  next[index] = on;
+  if (on) {
+    for (let p = areas[index]?.parent ?? -1; p >= 0; p = areas[p].parent) next[p] = true;
+  } else {
+    for (let i = index + 1; i < areas.length; i++) {
+      if (areas[i].parent >= 0 && !next[areas[i].parent]) next[i] = false;
+    }
+  }
+  return next;
+}
+
+/** Tiefe eines Bereichs im Baum (0 = direkt unter der Hauptkarte) */
+export function areaDepth(areas: ExportedArea[], index: number): number {
+  let depth = 0;
+  for (let p = areas[index]?.parent ?? -1; p >= 0 && depth < 9; p = areas[p].parent) depth++;
+  return depth;
 }
 
 function flip(p: { X: number; Y: number }): Point {
@@ -100,7 +189,7 @@ function normalizePoint(p: unknown): { X: number; Y: number; delta?: number; tim
 
 export function importMowerMap(
   json: string
-): { map: Map; rotation: number; dateTime?: string; source?: string; settings?: Partial<MowSettings> } | null {
+): { map: Map; rotation: number; dateTime?: string; source?: string; settings?: Partial<MowSettings>; areas: ExportedArea[] } | null {
   let parsed: WebappMapJson;
   try {
     parsed = JSON.parse(json) as WebappMapJson;
@@ -151,6 +240,7 @@ export function importMowerMap(
     rotation: parsed.rotation ?? 0,
     dateTime: parsed.dateTime,
     source: parsed.source,
+    areas: parseAreas(parsed.areas),
     settings: {
       pattern: parsed.patternRings ? 2 : 0,
       width: parsed.mowOfs ?? 0.3,
@@ -175,13 +265,29 @@ export function importMowerMap(
 
 export function exportMowerMap(
   map: Map,
-  options: { rotation?: number; dateTime?: string; source?: string; settings?: MowSettings } = {}
+  options: { rotation?: number; dateTime?: string; source?: string; settings?: MowSettings; areas?: ExportedArea[] } = {}
 ): string {
   const s = options.settings ?? get(mowSettingsStore);
   const payload: WebappMapJson = {
     dateTime: options.dateTime ?? new Date().toISOString(),
     source: options.source ?? "MowMate",
     rotation: options.rotation ?? 0,
+    ...settingsFields(s),
+    perimeter: closedRing(map.perimeter.points.map(unflip)),
+    exclusions: map.exclusions.map((ex) => closedRing(ex.points.map(unflip))),
+    // Dockpoints and calculated waypoints are ordered routes, not polygon
+    // rings. Closing them would create a false segment from the final point
+    // (often a Border lap) back to the first Area point.
+    dockpoints: map.dockpoints.points.map(unflip),
+    waypoints: map.waypoints.points.map(unflip),
+    ...(options.areas && options.areas.length > 0 ? { areas: options.areas } : {}),
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+/** Mäh-Einstellungen in den Feldnamen der Datei (wie MowerMap::fromJson im Modem) */
+export function settingsFields(s: Partial<MowSettings>): Partial<WebappMapJson> {
+  return {
     patternAngle: s.angle,
     mowOfs: s.width,
     patternRings: s.pattern === 2,
@@ -197,15 +303,7 @@ export function exportMowerMap(
     doMowBorder: s.doMowBorder,
     doMowExclusions: s.doMowExclusions,
     doExclusionsBorder: s.doMowExclusionBorder,
-    perimeter: closedRing(map.perimeter.points.map(unflip)),
-    exclusions: map.exclusions.map((ex) => closedRing(ex.points.map(unflip))),
-    // Dockpoints and calculated waypoints are ordered routes, not polygon
-    // rings. Closing them would create a false segment from the final point
-    // (often a Border lap) back to the first Area point.
-    dockpoints: map.dockpoints.points.map(unflip),
-    waypoints: map.waypoints.points.map(unflip),
   };
-  return JSON.stringify(payload, null, 2);
 }
 
 export function isValidMowerMap(json: string): boolean {

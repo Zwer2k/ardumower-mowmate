@@ -378,6 +378,8 @@ export interface MowSettings {
   routeOrder?: string;
   /** Mow the exclusion laps on the way while mowing the area */
   exclusionLapsWithArea?: boolean;
+  /** Area (sub-map): border laps also along the selection edge */
+  selectionEdgeLaps?: boolean;
   // Runtime toggles: already calculated areas can be switched on/off at runtime
   doMowArea: boolean;
   doMowPerimeter: boolean;
@@ -468,14 +470,22 @@ export enum ResponseDataType {
   firmwareStatus,
   routeReport,
   mapOpResult,
+  mowJob,
+  areaExport,
 }
 
 export interface ScheduleEntry {
   id: number;
   enabled: boolean;
   name: string;
+  /** First area of the job (older entries: the only map) */
   mapId: string;
+  /** Display name; with several areas all names in job order */
   mapName: string;
+  /** Areas (or whole maps) of one main map, mowed in this order */
+  areaIds?: string[];
+  /** Mow overlapping parts only once */
+  overlapOnce?: boolean;
   mode: 0 | 1 | 2; // daily | weekly | monthly
   hour: number;
   minute: number;
@@ -545,6 +555,10 @@ export interface MapMeta {
   timestamp: number;
   unsaved: boolean;
   requiresRename?: boolean;
+  /** Sub-map (area): id of the parent map; missing for main maps */
+  parentId?: string;
+  /** Area whose route no longer matches the map geometry or its selection */
+  outdated?: boolean;
 }
 
 export interface MapListData {
@@ -595,6 +609,12 @@ export enum RequestDataType {
   requestClock,
   ping,
   requestFirmwareStatus,
+  createArea,
+  startJob,
+  requestAreas,
+  previewJob,
+  clearJob,
+  runJob,
 }
 
 export interface MowSettingsData {
@@ -609,6 +629,7 @@ export interface MowSettingsData {
   mowBorderCcw: boolean;
   routeOrder?: string;
   exclusionLapsWithArea?: boolean;
+  selectionEdgeLaps?: boolean;
   doMowArea: boolean;
   doMowPerimeter: boolean;
   doMowBorder: boolean;
@@ -642,6 +663,8 @@ export interface MapSetData {
   dockpoints: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number }[];
   searchWire: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number }[];
   waypoints: { x: number; y: number; delta?: number; timestamp?: string; sol?: number; conn?: boolean; tag?: number }[];
+  /** Sub-map (area): selected part of the map */
+  selection?: { x: number; y: number }[];
   rotation: number;
   dateTime?: string;
   source?: string;

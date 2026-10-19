@@ -481,6 +481,8 @@ namespace ArduMower
         String routeOrder;
         // Exclusion-Runden beim Vorbeifahren in die Fläche einfügen
         bool exclusionLapsWithArea = false;
+        // Teilbereich: Randrunden auch entlang der Auswahlkante
+        bool selectionEdgeLaps = false;
         // Neue Laufzeit-Toggles: Karte wird berechnet, diese Schalter entscheiden,
         // welche bereits berechneten Bereiche tatsächlich gemäht werden.
         bool doMowArea = true;
@@ -500,7 +502,7 @@ namespace ArduMower
             : timestamp(0), pattern(0), width(0.3f), angle(0),
               distanceToBorder(0.0f), borderLaps(0),
               distanceToExclusions(0.0f), exclusionLaps(0), mowBorderCcw(false),
-              routeOrder(""), exclusionLapsWithArea(false),
+              routeOrder(""), exclusionLapsWithArea(false), selectionEdgeLaps(false),
               doMowArea(true), doMowPerimeter(true), doMowBorder(false),
               doMowExclusions(true), doMowExclusionBorder(false),
               simplifyEpsilon(0.02f), checkTurnRadius(0.30f) {}
@@ -517,6 +519,7 @@ namespace ArduMower
               && mowBorderCcw == other.mowBorderCcw
               && routeOrder == other.routeOrder
               && exclusionLapsWithArea == other.exclusionLapsWithArea
+              && selectionEdgeLaps == other.selectionEdgeLaps
               && doMowArea == other.doMowArea
               && doMowPerimeter == other.doMowPerimeter
               && doMowBorder == other.doMowBorder
@@ -539,6 +542,30 @@ namespace ArduMower
         uint32_t timestamp = 0;
         bool unsaved = false;
         bool requiresRename = false;
+        String parentId;   // Subkarte: übergeordnete Karte, sonst leer
+        bool outdated = false; // Subkarte: Route passt nicht zu Geometrie/Auswahl
+      };
+
+      // Mähauftrag aus mehreren Bereichen, wie er zuletzt hochgeladen wurde
+      struct MowJob {
+        String id;                     // "job:<id>,<id>"; leer = kein Auftrag
+        int crc = 0;                   // Sunray-CRC der Auftragskarte
+        bool overlapOnce = false;      // Überlappungen nur einmal gemäht
+        uint32_t timestamp = 0;        // millis() beim Zusammensetzen
+        std::vector<String> areaIds;
+        std::vector<String> names;
+        std::vector<uint32_t> starts;  // erster Wegpunkt je Bereich
+        std::vector<float> xy;         // ganze Route: x0,y0,x1,y1,...
+        // Teilaufträge, wenn die Route nicht in den Speicher des Mähers passt:
+        // erster Wegpunkt je Teil; Teil k reicht bis einschließlich zum ersten
+        // Punkt von Teil k+1. crc gehört zum Teil segment, der auf dem Mäher ist.
+        std::vector<uint32_t> segmentStarts{0};
+        uint32_t segment = 0;
+        uint32_t segmentStart() const { return segment < segmentStarts.size() ? segmentStarts[segment] : 0; }
+        uint32_t segmentEnd() const {
+          const uint32_t total = xy.size() / 2;
+          return segment + 1 < segmentStarts.size() ? segmentStarts[segment + 1] + 1 : total;
+        }
       };
 
       class StateSource
@@ -553,6 +580,9 @@ namespace ArduMower
         virtual ArduMower::Domain::Robot::Stats::Stats *statsP() = 0;
         virtual ArduMower::Domain::Robot::Properties *propsP() = 0;
         virtual DesiredState *desiredStateP() = 0;
+        virtual const MowJob *mowJob() { return nullptr; }
+        // Geometrie des Auftrags (Perimeter, Exclusions, Dock), für die Anzeige
+        virtual const ArduMower::Domain::Robot::MowerMap *mowJobGeometry() { return nullptr; }
         virtual SensorSummary sensorSummary() = 0;
         virtual SensorSummary *sensorSummaryP() = 0;
         virtual MotorRpm motorRpm() = 0;
@@ -585,6 +615,21 @@ namespace ArduMower
         virtual void clearMapListDirty() {}
         virtual bool createMap(const String &name) { (void)name; return false; }
         virtual bool copyMap(const String &name) { (void)name; return false; }
+        // Neue Subkarte (Bereich) unter parentId anlegen, speichern und laden
+        virtual bool createArea(const String &parentId, const String &name,
+                                const std::function<void(int percent)> &progress = {}) {
+          (void)parentId; (void)name; (void)progress; return false;
+        }
+        // Export: Bereiche der Hauptkarte rootId (Eltern vor Kindern) mit
+        // Auswahl und Mäh-Einstellungen, ohne Route
+        virtual bool exportAreas(const String &rootId, JsonArray out) { (void)rootId; (void)out; return false; }
+        // Perimeter, Exclusions und Dock einer gespeicherten Karte als [[x,y],...]
+        virtual bool mapGeometry(const String &id, JsonObject out) { (void)id; (void)out; return false; }
+        // Import: Bereich mit Auswahl und Einstellungen aus own unter parentId
+        // anlegen (ohne Route, gilt damit als veraltet). Rückgabe: neue ID.
+        virtual String importArea(const String &parentId, const String &name, JsonObject own) {
+          (void)parentId; (void)name; (void)own; return "";
+        }
         // Nur die Dockpunkte, ohne die ganze Karte zu kopieren (die Statusnachricht
         // braucht sie bei jedem Senden).
         virtual std::vector<ArduMower::Domain::Robot::MapPoint> dockpoints() { return mowerMap().dockpoints; }
@@ -657,6 +702,18 @@ namespace ArduMower
         // Upload the persisted version of a map without making it the current
         // map (used by the scheduler). Must not touch RAM drafts.
         virtual bool uploadSavedMapToMower(const String &id) { (void)id; return false; }
+        // Mähauftrag: gespeicherte Bereiche (oder ganze Karten) einer Hauptkarte
+        // in dieser Reihenfolge zusammensetzen und hochladen.
+        virtual bool uploadJobToMower(const std::vector<String> &ids, bool overlapOnce) {
+          (void)ids; (void)overlapOnce; return false;
+        }
+        // Nur zusammensetzen (Vorschau), nicht hochladen; clearJob verwirft ihn
+        virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce) {
+          (void)ids; (void)overlapOnce; return false;
+        }
+        virtual void clearJob() {}
+        // Teil index des zuletzt zusammengesetzten Auftrags hochladen
+        virtual bool uploadJobSegment(uint32_t index) { (void)index; return false; }
         virtual bool uploadMapToMowerActive() { return false; }
         virtual bool uploadMapToMowerSuccess() { return false; }
         // Grund des letzten fehlgeschlagenen Uploads zum Mäher (leer = unbekannt).

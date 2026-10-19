@@ -64,6 +64,9 @@
         iconDescription="Redo (Ctrl+Y)"
         on:click={onRedo}
       />
+      {#if editCategory === "selection"}
+        <span class="selection-hint">Drag the points of the selection. A new one is drawn under Calculate waypoints.</span>
+      {:else}
       <Button
         kind={drawActive ? "primary" : "tertiary"}
         size="small"
@@ -118,6 +121,7 @@
         icon={IconTrashCan}
         iconDescription="Delete (Del)"
       />
+      {/if}
     </div>
   </div>
 </Row>
@@ -137,6 +141,11 @@
   }
   .edit-actions {
     flex: 0 0 auto;
+  }
+  .selection-hint {
+    align-self: center;
+    font-size: 0.75rem;
+    color: #525252;
   }
   .btn-label {
     margin-left: 0.25rem;

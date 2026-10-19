@@ -7,6 +7,7 @@
 #include "settings.h"
 #include "mower_map.h"
 #include "path_planner.h"
+#include "mem_policy.h"
 #include <SPIFFS.h>
 
 #define _LOG_ "MowerAdapter::"
@@ -108,7 +109,11 @@ void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
   }
   const bool wasUnsaved = _currentMapUnsaved;
   const double oldArea = _currentMapArea;
+  // Die UI kennt den Schlüssel der letzten Berechnung nicht (nur der Planer
+  // setzt ihn); er bleibt erhalten.
+  const uint32_t routeKey = _map.routeKey;
   _map = map;
+  if (_map.routeKey == 0) _map.routeKey = routeKey;
   _map.timestamp = millis();
   _lastUploadedMapId = "";
   _lastUploadedMapCrc = 0;
@@ -203,6 +208,7 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   _map.mowBorderCcw = _mowSettings.mowBorderCcw;
   _map.routeOrder = _mowSettings.routeOrder;
   _map.exclusionLapsWithArea = _mowSettings.exclusionLapsWithArea;
+  _map.selectionEdgeLaps = _mowSettings.selectionEdgeLaps;
   _map.doMowArea = _mowSettings.doMowArea;
   _map.doMowPerimeter = _mowSettings.doMowPerimeter;
   _map.doMowBorder = _mowSettings.doMowBorder;
@@ -241,6 +247,7 @@ void MowerAdapter::syncMowSettingsFromMap() {
   _mowSettings.mowBorderCcw = _map.mowBorderCcw;
   _mowSettings.routeOrder = _map.routeOrder;
   _mowSettings.exclusionLapsWithArea = _map.exclusionLapsWithArea;
+  _mowSettings.selectionEdgeLaps = _map.selectionEdgeLaps;
   _mowSettings.doMowArea = _map.doMowArea;
   _mowSettings.doMowPerimeter = _map.doMowPerimeter;
   _mowSettings.doMowBorder = _map.doMowBorder;
@@ -266,6 +273,12 @@ std::vector<ArduMower::Domain::Robot::MapInfo> MowerAdapter::mapList() {
     info.crc = m.crc;
     info.rotation = m.rotation;
     info.timestamp = m.timestamp;
+    info.parentId = m.parentId;
+    if (info.parentId.length() > 0) {
+      // Die geladene Subkarte nach ihrem Stand im RAM (z. B. Auswahl geändert)
+      info.outdated = info.id == _currentMapId ? _map.routeKey != _map.planKey()
+                                               : _mapManager.isOutdated(info.id);
+    }
     if (_currentMapUnsaved && info.id == _currentMapId) {
       info.unsaved = true;
       if (_pendingRenameId == _currentMapId && _pendingRenameName.length() > 0) {
@@ -372,6 +385,87 @@ bool MowerAdapter::copyMap(const String &name) {
   _mapListDirty = true;
   Log(INFO, "%scopyMap: transiente Kopie %s als '%s' angelegt", _LOG_, _currentMapId.c_str(), mapName.c_str());
   return true;
+}
+
+bool MowerAdapter::createArea(const String &parentId, const String &name,
+                              const std::function<void(int percent)> &progress) {
+  if (_map.isReading()) {
+    Log(WARN, "%screateArea: Map-Lesevorgang läuft, anlegen abgelehnt", _LOG_);
+    return false;
+  }
+  // Die Elternkarte muss gespeichert sein: Die Subkarte erbt ihre gespeicherte
+  // Geometrie, nicht ungespeicherte Änderungen.
+  ArduMower::Domain::Robot::MowerMap parent;
+  if (parentId.startsWith("__t_") || !_mapManager.load(parentId, parent)) {
+    Log(WARN, "%screateArea: übergeordnete Karte %s nicht gespeichert", _LOG_, parentId.c_str());
+    return false;
+  }
+  String baseName = name.length() > 0 ? name : String("Area");
+  String areaName = baseName;
+  for (int suffix = 2; isNameUsed(areaName); suffix++) areaName = baseName + " " + String(suffix);
+  // Anfangs wie die Elternkarte: deren Auswahl (bei einer Hauptkarte keine,
+  // also die ganze Karte), Route und Einstellungen. Die Route einer Hauptkarte
+  // gilt als passend zu ihrer Geometrie; die eines Bereichs bringt ihren
+  // eigenen Schlüssel mit.
+  if (!_mapManager.isArea(parentId)) {
+    parent.routeKey = parent.geometryKey();
+    parent.selection.clear();
+  }
+  const String id = _mapManager.save(parent, areaName, "", parent.rotation, progress, parentId);
+  if (id.length() == 0) return false;
+  Log(INFO, "%screateArea: Bereich '%s' (%s) unter %s angelegt", _LOG_, areaName.c_str(), id.c_str(), parentId.c_str());
+  _mapListDirty = true;
+  return loadMap(id);
+}
+
+bool MowerAdapter::exportAreas(const String &rootId, JsonArray out) {
+  if (!_mapManager.begin()) return false;
+  const std::vector<String> ids = _mapManager.descendants(rootId);
+  for (const auto &id : ids) {
+    JsonObject area = out.add<JsonObject>();
+    String name;
+    for (const auto &m : _mapManager.list())
+      if (m.id == id) name = m.name;
+    area["id"] = id;
+    area["name"] = name;
+    area["parentId"] = _mapManager.parentOf(id);
+    if (!_mapManager.readAreaOwn(id, area["map"].to<JsonObject>())) {
+      Log(WARN, "%sexportAreas: area %s could not be read", _LOG_, id.c_str());
+    }
+    yield();
+  }
+  return true;
+}
+
+bool MowerAdapter::mapGeometry(const String &id, JsonObject out) {
+  ArduMower::Domain::Robot::MowerMap map;
+  if (id.startsWith("__t_") || !_mapManager.load(id, map)) return false;
+  map.marshalOutline(out);
+  return true;
+}
+
+String MowerAdapter::importArea(const String &parentId, const String &name, JsonObject own) {
+  if (_map.isReading()) return "";
+  ArduMower::Domain::Robot::MowerMap parent;
+  if (parentId.startsWith("__t_") || !_mapManager.load(parentId, parent)) {
+    Log(WARN, "%simportArea: parent %s not saved", _LOG_, parentId.c_str());
+    return "";
+  }
+  ArduMower::Domain::Robot::MowerMap area;
+  area.fromJson(own, false);
+  parent.copySettingsFrom(area);
+  parent.selection = area.selection;
+  parent.waypoints.clear();
+  parent.routeKey = 0;  // ohne Route: muss neu berechnet werden
+  String baseName = name.length() > 0 ? name : String("Area");
+  String areaName = baseName;
+  for (int suffix = 2; isNameUsed(areaName); suffix++) areaName = baseName + " " + String(suffix);
+  const String id = _mapManager.save(parent, areaName, "", parent.rotation, {}, parentId);
+  if (id.length() > 0) {
+    _mapListDirty = true;
+    Log(INFO, "%simportArea: '%s' (%s) under %s", _LOG_, areaName.c_str(), id.c_str(), parentId.c_str());
+  }
+  return id;
 }
 
 String MowerAdapter::saveMap(const String &name, double rotation,
@@ -503,6 +597,7 @@ bool MowerAdapter::renameMap(const String &id, const String &name) {
 
 bool MowerAdapter::deleteMap(const String &id) {
   const bool wasCurrent = (_currentMapId == id);
+  bool wasCurrentTree = false;   // aktuelle Karte ist ein gelöschter Unterbereich
   if (id.startsWith("__t_")) {
     // Transiente (RAM-only) Karte direkt aus dem RAM entfernen.
     if (!removeTransientMap(id)) {
@@ -510,10 +605,16 @@ bool MowerAdapter::deleteMap(const String &id) {
       return false;
     }
   } else {
+    // Unterbereiche werden mit gelöscht, ihre Entwürfe auch
+    std::vector<String> removed = _mapManager.descendants(id);
+    removed.push_back(id);
     if (!_mapManager.remove(id)) return false;
-    removeMapDraft(id);
+    for (const auto &removedId : removed) {
+      removeMapDraft(removedId);
+      if (removedId == _currentMapId) wasCurrentTree = true;
+    }
   }
-  if (wasCurrent) loadReplacementMap();
+  if (wasCurrent || wasCurrentTree) loadReplacementMap();
   _mapListDirty = true;
   Log(INFO, "%sdeleteMap: Karte %s gelöscht", _LOG_, id.c_str());
   return true;
@@ -639,18 +740,24 @@ void MowerAdapter::begin()
 
   // Persistierte Kartenverwaltung initialisieren und aktive Karte laden
   if (_mapManager.begin()) {
+    const uint32_t loadStart = millis();
     ArduMower::Domain::Robot::MowerMap loaded;
     if (_mapManager.loadActive(loaded)) {
       _currentMapId = _mapManager.activeId();
       _map = loaded;
-      _currentMapHash = _mapManager.computeHash(_map);
-      _currentMapHashDirty = false;
+      // Hash, CRC mit den Verbindungswegen über ausgeschaltete "Mow areas" und
+      // die Punktzahl kosten bei großen Karten Sekunden. Sie liefen hier vor
+      // dem Start von Webserver und WebSocket, MowMate war so lange nach
+      // einem Neustart (z. B. Firmware-Update) nicht erreichbar. Jetzt gilt
+      // vorerst der gespeicherte CRC; berechnet wird kurz nach dem Start.
+      _currentMapHashDirty = true;
       _currentMapArea = _mapManager.computeArea(_map);
-      refreshCurrentMapCrc();
-      _mapManager.updateCrc(_mapManager.activeId(), _currentMapCrc);
+      _currentMapCrc = _mapManager.getCrc(_currentMapId);
+      _currentMapUploadPoints = -1;  // unbekannt bis zur Berechnung
+      _bootCrcRefreshAt = millis() + 3000;
       syncMowSettingsFromMap();
-      Log(INFO, "%s begin: aktive Karte '%s' aus SPIFFS geladen, CRC %d (%.1f m²)",
-          _LOG_, _mapManager.activeId().c_str(), _currentMapCrc, _currentMapArea);
+      Log(INFO, "%s begin: aktive Karte '%s' aus SPIFFS geladen in %lu ms, gespeicherter CRC %d (%.1f m²)",
+          _LOG_, _mapManager.activeId().c_str(), (unsigned long)(millis() - loadStart), _currentMapCrc, _currentMapArea);
     } else if (_mapManager.activeId().length() > 0) {
       // Aktive ID verweist auf nicht mehr vorhandene Datei -> Index bereinigen
       _mapManager.setActive("");
@@ -2108,6 +2215,8 @@ bool MowerAdapter::uploadSavedMapToMower(const String &id)
     Log(WARN, "%suploadSavedMapToMower: map %s could not be loaded", _LOG_, id.c_str());
     return false;
   }
+  _job = ArduMower::Domain::Robot::MowJob();
+  _jobGeometry = ArduMower::Domain::Robot::MowerMap();
   _mapUploadOverride = loaded;
   _mapUploadOverrideId = id;
   _mapUploadOverridePending = true;
@@ -2118,6 +2227,197 @@ bool MowerAdapter::uploadSavedMapToMower(const String &id)
   _mapUploadState.phase = MapUploadState::idle;
   _mapUploadPending = true;
   Log(INFO, "%suploadSavedMapToMower: queued saved map %s", _LOG_, id.c_str());
+  return true;
+}
+
+// Wie mower-capacity.ts in der UI: Sunray sammelt die Punkte beim Upload in
+// einer wachsenden Liste (rund 8 Byte je Punkt) und bricht unter 5000 Byte
+// freiem Speicher ab. Die bisher geladene Karte (4 Byte je Punkt) gibt es
+// vorher frei. 10 % Reserve, weil free_memory nur eine Momentaufnahme ist.
+uint32_t MowerAdapter::jobWaypointLimit(size_t fixedPoints)
+{
+  const uint32_t freeMemory = _stats.freeMemory;
+  if (freeMemory == 0 || freeMemory >= 1024u * 1024u) return 0;
+  const uint32_t loaded = (_state.mapCrc != 0 && _state.mapCrc == _lastUploadedMapCrc) ? _lastUploadedPoints : 0;
+  const int64_t available = (int64_t)freeMemory + (int64_t)loaded * 4 - 5000;
+  const int64_t maxPoints = available / 8 * 9 / 10;
+  const int64_t limit = maxPoints - (int64_t)fixedPoints;
+  return limit < 1 ? 1 : (uint32_t)limit;
+}
+
+// Schnittstellen der Teilaufträge: höchstens limit Wegpunkte je Teil, wenn es
+// ohne zu kleine Teile geht an einer Bereichsgrenze.
+static std::vector<uint32_t> splitJob(uint32_t total, const std::vector<uint32_t> &partStarts, uint32_t limit)
+{
+  std::vector<uint32_t> starts{0};
+  if (limit == 0 || total <= limit) return starts;
+  uint32_t pos = 0;
+  // Teil k reicht bis einschließlich zum ersten Punkt von Teil k+1
+  const uint32_t step = limit > 1 ? limit - 1 : 1;
+  while (total - pos > limit) {
+    uint32_t cut = pos + step;
+    for (auto it = partStarts.rbegin(); it != partStarts.rend(); ++it) {
+      if (*it <= cut && *it > pos && *it >= pos + step / 2) { cut = *it; break; }
+    }
+    starts.push_back(cut);
+    pos = cut;
+  }
+  return starts;
+}
+
+bool MowerAdapter::uploadJobToMower(const std::vector<String> &ids, bool overlapOnce)
+{
+  if (_mapUploadState.active || _mapUploadPending) {
+    Log(WARN, "%suploadJobToMower: upload already in progress", _LOG_);
+    _mapUploadError = "Another map upload is in progress.";
+    return false;
+  }
+  return composeJob(ids, overlapOnce) && uploadJobSegment(0);
+}
+
+void MowerAdapter::clearJob()
+{
+  _job = ArduMower::Domain::Robot::MowJob();
+  _jobGeometry = ArduMower::Domain::Robot::MowerMap();
+}
+
+bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce)
+{
+  if (ids.empty()) {
+    _mapUploadError = "No area selected.";
+    return false;
+  }
+#ifdef ENABLE_MAP
+  auto rootOf = [this](const String &id) {
+    String root = id;
+    for (int depth = 0; depth < 9; depth++) {
+      const String parent = _mapManager.parentOf(root);
+      if (parent.length() == 0) break;
+      root = parent;
+    }
+    return root;
+  };
+  const String root = rootOf(ids[0]);
+  for (const auto &id : ids) {
+    String name;
+    for (const auto &m : _mapManager.list())
+      if (m.id == id) name = m.name;
+    if (name.length() == 0) {
+      _mapUploadError = "Area " + id + " not found.";
+      return false;
+    }
+    if (rootOf(id) != root) {
+      _mapUploadError = "All areas of a job must belong to the same map.";
+      return false;
+    }
+    if (_mapManager.isOutdated(id)) {
+      _mapUploadError = "The route of " + name + " is outdated. Calculate it again first.";
+      return false;
+    }
+  }
+
+  ArduMower::Modem::PathPlanner::JobBuilder builder;
+  ArduMower::Domain::Robot::MowerMap job;
+  ArduMower::Domain::Robot::MowJob info;
+  info.overlapOnce = overlapOnce;
+  info.id = "job:";
+  {
+    ArduMower::Modem::MemPolicy::HeavyAllocScope heavyAlloc;
+    for (size_t i = 0; i < ids.size(); i++) {
+      ArduMower::Domain::Robot::MowerMap area;
+      if (!_mapManager.load(ids[i], area)) {
+        _mapUploadError = "Area " + ids[i] + " could not be loaded.";
+        return false;
+      }
+      builder.add(area, settingsFromMap(area));
+      if (i == 0) {
+        job.perimeter = area.perimeter;
+        job.exclusions = area.exclusions;
+        job.dockpoints = area.dockpoints;
+        job.searchWire = area.searchWire;
+        job.rotation = area.rotation;
+      }
+      if (i > 0) info.id += ",";
+      info.id += ids[i];
+      info.areaIds.push_back(ids[i]);
+      for (const auto &m : _mapManager.list())
+        if (m.id == ids[i]) info.names.push_back(m.name);
+      yield();
+    }
+    std::vector<size_t> starts;
+    job.waypoints = builder.build(job, overlapOnce, &starts);
+    for (size_t s : starts) info.starts.push_back((uint32_t)s);
+  }
+  if (job.waypoints.empty()) {
+    _mapUploadError = "The selected areas have no route.";
+    return false;
+  }
+  info.xy.reserve(job.waypoints.size() * 2);
+  for (const auto &p : job.waypoints) {
+    info.xy.push_back((float)p.X);
+    info.xy.push_back((float)p.Y);
+  }
+  size_t fixedPoints = job.perimeter.size() + job.dockpoints.size();
+  for (const auto &ex : job.exclusions) fixedPoints += ex.size();
+  const uint32_t total = job.waypoints.size();
+  const uint32_t limit = jobWaypointLimit(fixedPoints);
+  if (limit != 0 && limit < 20) {
+    _mapUploadError = "The mower has too little free memory for this map.";
+    return false;
+  }
+  info.segmentStarts = splitJob(total, info.starts, limit);
+  Log(INFO, "%scomposeJob: %u areas, %u waypoints (overlap %s), limit %u -> %u part(s)",
+      _LOG_, (unsigned)ids.size(), (unsigned)total, overlapOnce ? "once" : "twice",
+      (unsigned)limit, (unsigned)info.segmentStarts.size());
+
+  job.waypoints.clear();
+  job.waypoints.shrink_to_fit();
+  // Neuer Zeitstempel schon für die Vorschau: Daran erkennen die Browser einen
+  // neuen Auftrag (vorher erst beim Upload gesetzt, eine Vorschau kam nur bei
+  // neu verbundenen Browsern an).
+  info.timestamp = millis();
+  if (info.timestamp == 0 || info.timestamp == _job.timestamp) info.timestamp = _job.timestamp + 1;
+  _jobGeometry = std::move(job);
+  _job = std::move(info);
+  return true;
+#else
+  (void)overlapOnce;
+  _mapUploadError = "Jobs need the map feature.";
+  return false;
+#endif
+}
+
+bool MowerAdapter::uploadJobSegment(uint32_t index)
+{
+  if (_job.id.length() == 0 || index >= _job.segmentStarts.size()) {
+    _mapUploadError = "No job part to upload.";
+    return false;
+  }
+  if (_mapUploadState.active || _mapUploadPending) {
+    _mapUploadError = "Another map upload is in progress.";
+    return false;
+  }
+  _job.segment = index;
+  ArduMower::Domain::Robot::MowerMap part = _jobGeometry;
+  const uint32_t from = _job.segmentStart(), to = _job.segmentEnd();
+  part.waypoints.reserve(to - from);
+  for (uint32_t i = from; i < to; i++) {
+    ArduMower::Domain::Robot::MapPoint p{_job.xy[i * 2], _job.xy[i * 2 + 1]};
+    part.waypoints.push_back(p);
+  }
+  // Schon gefiltert: der Upload soll nichts mehr ausblenden
+  part.doMowArea = part.doMowPerimeter = part.doMowBorder = true;
+  part.doMowExclusions = part.doMowExclusionBorder = true;
+  part.timestamp = millis();
+  _job.crc = part.computeMapCrc();
+  _job.timestamp = millis();
+  Log(INFO, "%suploadJobSegment: part %u/%u, waypoints %u..%u, CRC %d", _LOG_, (unsigned)index + 1,
+      (unsigned)_job.segmentStarts.size(), (unsigned)from, (unsigned)to - 1, _job.crc);
+  _mapUploadOverride = std::move(part);
+  _mapUploadOverrideId = _job.id;
+  _mapUploadOverridePending = true;
+  _mapUploadState.phase = MapUploadState::idle;
+  _mapUploadPending = true;
   return true;
 }
 
@@ -2134,6 +2434,7 @@ ArduMower::Domain::Robot::MowSettings MowerAdapter::settingsFromMap(const ArduMo
   s.mowBorderCcw = map.mowBorderCcw;
   s.routeOrder = map.routeOrder;
   s.exclusionLapsWithArea = map.exclusionLapsWithArea;
+  s.selectionEdgeLaps = map.selectionEdgeLaps;
   s.doMowArea = map.doMowArea;
   s.doMowPerimeter = map.doMowPerimeter;
   s.doMowBorder = map.doMowBorder;
@@ -2152,6 +2453,8 @@ bool MowerAdapter::uploadMapToMower()
     return false;
   }
 
+  _job = ArduMower::Domain::Robot::MowJob();
+  _jobGeometry = ArduMower::Domain::Robot::MowerMap();
   _mapUploadState.phase = MapUploadState::idle;
   _mapUploadPending = true;
   Log(INFO, "%suploadMapToMower: queued", _LOG_);
@@ -2552,6 +2855,8 @@ void MowerAdapter::processMapUpload()
       const auto uploadedExclusions = _mapUploadState.snapshot.exclusions.size();
       const auto uploadedDockpoints = _mapUploadState.snapshot.dockpoints.size();
       const auto uploadedWaypoints = _mapUploadState.snapshot.waypoints.size();
+      size_t uploadedExclusionPoints = 0;
+      for (const auto &ex : _mapUploadState.snapshot.exclusions) uploadedExclusionPoints += ex.size();
       if (_mapUploadLockedMap) _map.endRead();
       _mapUploadLockedMap = false;
       _mapUploadState.snapshot = ArduMower::Domain::Robot::MowerMap();
@@ -2560,6 +2865,7 @@ void MowerAdapter::processMapUpload()
       // ID der tatsächlich hochgeladenen Karte (nicht zwingend die aktuelle).
       _lastUploadedMapId = _mapUploadSourceId;
       _lastUploadedMapCrc = uploadedCrc;
+      _lastUploadedPoints = (uint32_t)(uploadedPerimeter + uploadedExclusionPoints + uploadedDockpoints + uploadedWaypoints);
       Log(INFO, "%sprocessMapUpload: Map upload complete (%d perimeter, %d exclusions, %d dockpoints, %d waypoints) CRC %d",
           _LOG_, uploadedPerimeter, uploadedExclusions, uploadedDockpoints, uploadedWaypoints, uploadedCrc);
       Log(INFO, "%sprocessMapUpload: upload complete", _LOG_);
@@ -2578,6 +2884,18 @@ void MowerAdapter::processMapUpload()
 
 void MowerAdapter::loop()
 {
+  if (_bootCrcRefreshAt != 0 && (int32_t)(millis() - _bootCrcRefreshAt) >= 0 && !_map.isReading()) {
+    // Nachgeholt aus begin(): genauer CRC, Punktzahl und Verbindungswege
+    _bootCrcRefreshAt = 0;
+    const uint32_t start = millis();
+    const int stored = _currentMapCrc;
+    refreshCurrentMapCrc();
+    _mapManager.updateCrc(_currentMapId, _currentMapCrc);
+    _mowSettings.timestamp = millis();  // Browser bekommen Punktzahl und Wege neu
+    _mapListDirty = true;
+    Log(INFO, "%sloop: CRC der Startkarte berechnet in %lu ms (%d, gespeichert %d)",
+        _LOG_, (unsigned long)(millis() - start), _currentMapCrc, stored);
+  }
   flushCommandQueue();
   startMapUploadFromLoop();
   processPendingCommand();

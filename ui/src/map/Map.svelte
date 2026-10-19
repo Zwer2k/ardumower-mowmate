@@ -19,6 +19,7 @@
   import { mapWorkflowStore, isMapDirty, generateUniqueName } from "./map-workflow";
   import { isMowerMapSynced, setMapDirty } from "./services/map-sync";
   import { get } from "svelte/store";
+  import { settingsFields } from "./core/mower-map";
   import MowSettingsDialog from "./MowSettingsDialog.svelte";
   import RouteReportDialog from "./RouteReportDialog.svelte";
   import MapFindingHighlight from "./overlay/MapFindingHighlight.svelte";
@@ -27,7 +28,6 @@
   import MapManagementToolbar from "./toolbar/MapManagementToolbar.svelte";
   import MapEditToolbar from "./toolbar/MapEditToolbar.svelte";
   import MapCalculateToolbar from "./toolbar/MapCalculateToolbar.svelte";
-  import MapScheduleToolbar from "./toolbar/MapScheduleToolbar.svelte";
   import MowerMapDialog from "./MowerMapDialog.svelte";
   import MapStatusOverlay from "./overlay/MapStatusOverlay.svelte";
   import MapGotoOverlay from "./overlay/MapGotoOverlay.svelte";
@@ -48,6 +48,8 @@
     buildInitialCandidates,
   } from "./interactions/map-edit";
   import { BackendSettings } from "../stores/backend";
+  import Selection from "./Selection.svelte";
+  import SelectionDrawTool from "./SelectionDrawTool.svelte";
   import { mergeTransits, routeLength } from "./core/route-progress";
   import { routeStyleStore } from "./route-style";
   import { createMapSelection, gotoStore } from "./interactions/map-goto";
@@ -79,12 +81,11 @@
   let showMowSettings = false;
   let showMowerMapDialog = false;
   let showRouteReport = false;
-  // Open the report by itself once a fresh one arrives, but never re-open it
-  // for a report the user has already dismissed.
-  let lastShownReport: unknown = null;
-  $: if ($routeReportStore && $routeReportStore !== lastShownReport) {
-    lastShownReport = $routeReportStore;
-    showRouteReport = true;
+  // Ein neuer Bericht öffnet sich nicht mehr von selbst: Nach der Berechnung
+  // wird nur der Knopf "Report" freigegeben.
+  let lastReport: unknown = null;
+  $: if ($routeReportStore !== lastReport) {
+    lastReport = $routeReportStore;
     // The indices of the previous report do not apply to the new route.
     highlightedFindingIdx = [];
   }
@@ -120,6 +121,11 @@
     { id: "exclusion", text: "Edit exclusions" },
     { id: "waypoints", text: "Edit waypoints" },
   ];
+  // Bei einem Bereich gehört die Geometrie der Hauptkarte: nur Auswahl und Wegpunkte
+  const areaCategoryOptions: { id: string; text: string }[] = [
+    { id: "selection", text: "Edit selection" },
+    { id: "waypoints", text: "Edit waypoints" },
+  ];
 
   function defaultMapName(): string {
     return `Map ${$socketStore.maps.length + 1}`;
@@ -152,7 +158,6 @@
   // ─── Map management ────────────────────────────────────────────────────────
   let showManage = false;
   let showCalculate = false;
-  let showSchedule = false;
   let selectedMapId: string = "";
   let dropdownSelectedId: string = "";
 
@@ -160,7 +165,6 @@
     showManage = false;
     edit = false;
     showCalculate = false;
-    showSchedule = false;
     editItemId = null;
     stopDraw();
   }
@@ -172,7 +176,6 @@
       showManage = true;
       edit = false;
       showCalculate = false;
-      showSchedule = false;
       stopDraw();
     }
   }
@@ -185,7 +188,6 @@
       edit = true;
       showManage = false;
       showCalculate = false;
-      showSchedule = false;
     }
   }
 
@@ -195,19 +197,6 @@
     } else {
       showCalculate = true;
       showManage = false;
-      showSchedule = false;
-      edit = false;
-      stopDraw();
-    }
-  }
-
-  function toggleSchedule() {
-    if (showSchedule) {
-      closePanels();
-    } else {
-      showSchedule = true;
-      showManage = false;
-      showCalculate = false;
       edit = false;
       stopDraw();
     }
@@ -237,25 +226,37 @@
         text: `${name} ● (unsaved)`,
       });
     }
-    // Nach Namen sortiert (Zahlen numerisch: "Map 2" vor "Map 10").
-    const sorted = [...$socketStore.maps].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+    // Als Baum: Hauptkarten nach Namen sortiert (Zahlen numerisch: "Map 2"
+    // vor "Map 10"), darunter eingerückt ihre Bereiche (Subkarten).
+    const byName = (a: { name: string }, b: { name: string }) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+    const ids = new Set($socketStore.maps.map((m) => m.id));
+    const children = new Map<string, typeof $socketStore.maps>();
+    for (const m of $socketStore.maps) {
+      const parent = m.parentId && ids.has(m.parentId) ? m.parentId : "";
+      if (!children.has(parent)) children.set(parent, []);
+      children.get(parent)!.push(m);
+    }
     const mowerCrc = $socketStore.state?.map_crc ?? 0;
-    for (const m of sorted) {
-      if (seen.has(m.id)) continue;
+    const addNode = (m: (typeof $socketStore.maps)[number], depth: number) => {
+      if (seen.has(m.id) || depth > 8) return;
       seen.add(m.id);
       // Gespeicherte Karten haben ein Änderungsdatum (Unix-Zeit, 0 = unbekannt).
       const modified = m.timestamp > 1600000000
         ? ` · ${new Date(m.timestamp * 1000).toLocaleDateString()}`
         : "";
+      // Einrückung mit Geviertleerzeichen: normale Leerzeichen fasst HTML zusammen
+      const indent = depth > 0 ? "\u2003".repeat(depth - 1) + "\u2003└ " : "";
       opts.push({
         id: m.id,
         // "●" marks a map with unsaved changes, so drafts stay recognizable
         // after switching away from them. "on mower": its CRC matches the
         // map the mower reports.
-        text: `${m.name}${m.unsaved ? ' ●' : ''} (${m.area.toFixed(1)} m²)${mowerCrc !== 0 && m.crc === mowerCrc ? ' ⇡ on mower' : ''}${m.id === $socketStore.activeMapId ? ' ★ default' : ''}${modified}`,
+        text: `${indent}${m.name}${m.unsaved ? ' ●' : ''} (${m.area.toFixed(1)} m²)${mowerCrc !== 0 && m.crc === mowerCrc ? ' ⇡ on mower' : ''}${m.id === $socketStore.activeMapId ? ' ★ default' : ''}${m.outdated ? ' ⚠ recalculate' : ''}${modified}`,
       });
-    }
+      for (const c of [...(children.get(m.id) ?? [])].sort(byName)) addNode(c, depth + 1);
+    };
+    for (const m of [...(children.get("") ?? [])].sort(byName)) addNode(m, 0);
     return opts;
   })();
 
@@ -284,6 +285,39 @@
   $: effectiveMapId = $socketStore.currentMapId || "";
   $: effectiveMap = $socketStore.maps.find((m) => m.id === effectiveMapId);
   $: effectiveMapName = effectiveMap?.name || "";
+  // Subkarte (Bereich): Geometrie gehört der Hauptkarte und ist hier gesperrt
+  $: isAreaMap = !!effectiveMap?.parentId;
+  $: parentMapName = isAreaMap ? ($socketStore.maps.find((m) => m.id === effectiveMap?.parentId)?.name ?? "") : "";
+  $: visibleCategoryOptions = isAreaMap ? areaCategoryOptions : categoryOptions;
+  $: if (isAreaMap && editCategory !== "waypoints" && editCategory !== "selection") editCategory = "selection";
+  $: if (!isAreaMap && editCategory === "selection") editCategory = "perimeter";
+  // Zeichenwerkzeug für die Auswahl (Leiste "Calculate waypoints"); endet mit
+  // dem Schließen der Leiste
+  let selectionTool: "rect" | "lasso" | null = null;
+  $: if (!showCalculate || !isAreaMap) selectionTool = null;
+
+  function setSelection(points: import("./model").Point[]) {
+    MapStore.update((s) => ({
+      ...s,
+      map: { ...cloneMap(s.map), selection: { points: points.map((p) => ({ x: p.x, y: p.y })) } },
+    }));
+    setMapDirty(true);
+    // Die Auswahl entsteht meist in der Leiste "Calculate waypoints", nicht im
+    // Editor, der seine Änderungen sonst beim Schließen schickt: sofort ans
+    // Modem, sonst berechnet es noch ohne sie (die ganze Karte).
+    if (!edit) {
+      const mapData = buildMapSetData(get(MapStore).map, compassRotation);
+      lastSyncedMap = JSON.stringify(mapData);
+      socketService.sendMap(mapData);
+    }
+  }
+
+  function onSelectionDone(points: import("./model").Point[]) {
+    selectionTool = null;
+    setSelection(points);
+  }
+  // Ein Bereich erbt die gespeicherte Geometrie: Karte muss gespeichert sein
+  $: canNewArea = !!effectiveMapId && !effectiveMapId.startsWith("__") && !isDirty;
   $: isDirty = $isMapDirty;
   $: selectedIsCurrentMap = selectedMapId === (effectiveMapId || "__unsaved__");
   $: canSave = isDirty && selectedIsCurrentMap && !$mapWorkflowStore.renameMode && !workflowBusy;
@@ -387,6 +421,12 @@
     mapWorkflowStore.startNewMap(defaultName);
     socketService.sendCreateMap(defaultName);
     showManage = true;
+  }
+
+  function onNewArea() {
+    if (!canNewArea) return;
+    stopEditForMapChange();
+    socketService.sendCreateArea(effectiveMapId, `${effectiveMapName || "Map"} area`);
   }
 
   function onCopyMap() {
@@ -493,7 +533,6 @@
       edit = true;
       showManage = false;
       showCalculate = false;
-      showSchedule = false;
       stopDraw();
     }
   }
@@ -546,9 +585,21 @@
     const scheduleNote = scheduled.length > 0
       ? ` It is used by ${scheduled.length} scheduled mowing ${scheduled.length === 1 ? "entry" : "entries"} (${scheduled.map((e) => e.name).join(", ")}), which will be disabled.`
       : "";
+    // Unterbereiche werden mit gelöscht
+    const descendants: string[] = [];
+    const open = [target];
+    while (open.length > 0 && descendants.length < $socketStore.maps.length) {
+      const parent = open.pop();
+      for (const m of $socketStore.maps) {
+        if (m.parentId === parent) { descendants.push(m.name); open.push(m.id); }
+      }
+    }
+    const areaNote = descendants.length > 0
+      ? ` Its ${descendants.length === 1 ? "area" : `${descendants.length} areas`} (${descendants.join(", ")}) ${descendants.length === 1 ? "is" : "are"} deleted as well.`
+      : "";
     const choice = await openConfirm({
       title: "Delete map",
-      message: `Really delete this map? This cannot be undone.${scheduleNote}`,
+      message: `Really delete this map? This cannot be undone.${areaNote}${scheduleNote}`,
       confirmText: "Delete",
       cancelText: "Cancel",
       kind: "danger",
@@ -573,6 +624,7 @@
     dateTime?: string,
     source?: string,
     settings?: Partial<import("../model").MowSettingsData>,
+    areas: import("./core/mower-map").ExportedArea[] = [],
   ) {
     // Karte und Einstellungen erst übernehmen, wenn das Modem den Import
     // bestätigt (mapOpResult): Es legt eine neue Karte an und schickt sie
@@ -594,15 +646,20 @@
         searchWire: map.searchWire.points.map(toBackendPoint),
         waypoints: map.waypoints.points.map(toBackendPoint),
         rotation,
+        // Mit Bereichen speichert das Modem die Karte sofort; die Einstellungen
+        // gehören dann schon in die Datei.
+        ...(settings ? settingsFields(settings as Partial<import("../model").MowSettings>) : {}),
       }),
       generateUniqueName(source ? `Import ${source}` : "Imported map"),
       rotation,
-      settings,
+      areas.length > 0 ? undefined : settings,
+      areas,
     );
   }
 
   // ─── Point counts & sync state ─────────────────────────────────────────────
-  $: busy = !!$socketStore.state?.progressOp;
+  // 100 % beendet den Vorgang; die Meldung bleibt bis zum nächsten Status stehen
+  $: busy = !!$socketStore.state?.progressOp && ($socketStore.state?.progressPct ?? 0) < 100;
   $: perimeterPoints = $MapStore.map?.perimeter.points.length ?? 0;
   $: exclusionPoints = $MapStore.map?.exclusions.map((e) => e.points.length) ?? [];
   $: dockpointsPoints = $MapStore.map?.dockpoints.points.length ?? 0;
@@ -1136,7 +1193,7 @@
     }
     if (edit) return;
     if (!hasMap) return;
-    if (showManage || showCalculate || showSchedule) return;
+    if (showManage || showCalculate) return;
     if (gotoSelection.click()) gotoStore.setTarget(x, y);
   }
 
@@ -1156,7 +1213,7 @@
 </script>
 
 <div class="map-dashboard">
-  <div class="map-toolbar-wrap" class:schedule-open={showSchedule}>
+  <div class="map-toolbar-wrap">
     <Grid class="map-toolbar">
       <Row class="map-toolbar-main">
         <div class="toolbar-main-group">
@@ -1174,6 +1231,12 @@
                 on:select={onSelectMap}
               />
             {/if}
+            {#if isAreaMap}
+              <span class="area-badge" title="An area of this map: it uses the perimeter, exclusions and docking points of {parentMapName}, which can only be edited there">Area of {parentMapName}</span>
+              {#if effectiveMap?.outdated}
+                <span class="area-badge outdated" title="The map geometry or the selection changed after the route was calculated. Calculate the route again.">⚠ Route outdated</span>
+              {/if}
+            {/if}
           </div>
           <MapToolbar
             {workflowBusy}
@@ -1181,7 +1244,6 @@
             {showManage}
             {edit}
             {showCalculate}
-            {showSchedule}
             {canSave}
             {canRevert}
             canConfirmRename={!!$mapWorkflowStore.pendingName && (
@@ -1192,7 +1254,6 @@
             onToggleManage={toggleManage}
             onToggleEdit={toggleEdit}
             onToggleCalculate={toggleCalculate}
-            onToggleSchedule={toggleSchedule}
             onSaveMap={onSaveMap}
             onDiscardMap={onDiscardMap}
             onConfirmRename={confirmRename}
@@ -1214,6 +1275,8 @@
           onDeleteMap={onDeleteMap}
           onSetDefaultMap={onSetDefaultMap}
           onNewMap={onNewMap}
+          onNewArea={onNewArea}
+          {canNewArea}
           onCopyMap={onCopyMap}
           onOpenMowerMap={() => (showMowerMapDialog = true)}
         />
@@ -1223,7 +1286,7 @@
         <MapEditToolbar
           {edit}
           {editCategory}
-          categoryItems={categoryOptions}
+          categoryItems={visibleCategoryOptions}
           {editPoint}
           {editEdge}
           {drawActive}
@@ -1250,15 +1313,17 @@
           onOpenMowSettings={() => (showMowSettings = true)}
           onOpenRouteReport={() => (showRouteReport = true)}
           hasRouteReport={$routeReportStore != null}
+          isArea={isAreaMap}
+          {selectionTool}
+          onSelectionTool={(tool) => (selectionTool = tool)}
+          onSelectionWhole={() => { selectionTool = null; setSelection([]); }}
         />
       {/if}
 
-      {#if showSchedule}
-        <MapScheduleToolbar />
-      {/if}
     </Grid>
   </div>
-  <div class="map-canvas-wrapper" class:hidden={showSchedule}>
+  <div class="map-body">
+  <div class="map-canvas-wrapper">
     <MapLoadingOverlay />
     <MapStatusOverlay
       compassRotation={compassRotation}
@@ -1288,6 +1353,7 @@
     >
       {#if $MapStore && $MapStore.map}
         <Track />
+        <g class:geometry-locked={isAreaMap}>
         <Perimeter
           value={$MapStore.map.perimeter}
           perimiterId="map-0-perimeter"
@@ -1338,6 +1404,18 @@
             }}
           />
         {/each}
+        </g>
+        {#if isAreaMap}
+          <Selection
+            value={$MapStore.map.selection ?? { points: [] }}
+            selectionId="map-0-selection"
+            {edit}
+            {editCategory}
+            {drawActive}
+            bind:editItemId
+            onMove={setSelection}
+          />
+        {/if}
         <Waypoints
           value={{ points: edit && editCategory === "waypoints" ? rawWaypoints : uploadRoute }}
           waypointsId="map-0-waypoints"
@@ -1357,6 +1435,7 @@
             setMapDirty(true);
           }}
         />
+        <g class:geometry-locked={isAreaMap}>
         <Dockpoints
           value={$MapStore.map.dockpoints}
           dockpointsId="map-0-dockpoints"
@@ -1375,7 +1454,9 @@
             setMapDirty(true);
           }}
         />
+        </g>
         <MowerPosition position={mowerPos} />
+        <SelectionDrawTool mode={showCalculate && isAreaMap ? selectionTool : null} onDone={onSelectionDone} />
         <Obstacles obstacles={$socketStore.obstacles} />
 
         {#if drawActive && floatingPoint}
@@ -1400,16 +1481,17 @@
         <MapGotoOverlay
           {targetPos}
           {mowerPos}
-          showTarget={targetSet && !showManage && !edit && !showCalculate && !showSchedule}
-          showLine={targetSet && !!mowerPos && (mowerPos.x !== 0 || mowerPos.y !== 0) && !showManage && !edit && !showCalculate && !showSchedule}
+          showTarget={targetSet && !showManage && !edit && !showCalculate}
+          showLine={targetSet && !!mowerPos && (mowerPos.x !== 0 || mowerPos.y !== 0) && !showManage && !edit && !showCalculate}
         />
       {/if}
     </Canvas>
-    <GotoControls hint={$gotoHint} visible={!showManage && !edit && !showCalculate && !showSchedule} />
+    <GotoControls hint={$gotoHint} visible={!showManage && !edit && !showCalculate} />
+  </div>
   </div>
 </div>
 
-<MowSettingsDialog bind:open={showMowSettings} />
+<MowSettingsDialog bind:open={showMowSettings} isArea={isAreaMap} />
 <RouteReportDialog bind:open={showRouteReport} onSelectFinding={focusFinding} />
 
 <MowerMapDialog
@@ -1420,6 +1502,31 @@
 />
 
 <style>
+  /* Geometrie der Hauptkarte bei einem Bereich: nur anzeigen */
+  .geometry-locked {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+  .area-badge {
+    display: inline-block;
+    margin-top: 2px;
+    padding: 0 0.375rem;
+    font-size: 0.75rem;
+    color: #0043ce;
+    background: #edf5ff;
+    border: 1px solid #a6c8ff;
+    border-radius: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .area-badge.outdated {
+    margin-left: 0.25rem;
+    color: #8e6a00;
+    background: #fcf4d6;
+    border-color: #f1c21b;
+  }
   .map-dashboard {
     position: relative;
     width: 100%;
@@ -1438,27 +1545,17 @@
     max-width: 1000px;
     margin: 0 auto;
   }
-  .map-toolbar-wrap.schedule-open {
+  .map-body {
     flex: 1 1 auto;
     min-height: 0;
-    overflow: hidden;
     display: flex;
     flex-direction: column;
-  }
-  .map-toolbar-wrap.schedule-open :global(.map-toolbar) {
-    flex: 1 1 auto;
-    min-height: 0;
-    height: 100%;
-    width: 100%;
   }
   .map-canvas-wrapper {
     position: relative;
     flex: 1;
     min-height: 0;
     overflow: hidden;
-  }
-  .map-canvas-wrapper.hidden {
-    display: none;
   }
   :global(.map-toolbar .bx--row) {
     flex-wrap: wrap;
@@ -1474,10 +1571,12 @@
   :global(.map-toolbar .bx--list-box__menu) {
     top: 32px;
   }
+  /* Oben ausrichten: Die Hinweise unter der Kartenauswahl ("Area of …")
+     machen die Zeile höher und schoben die Knöpfe sonst nach unten. */
   .toolbar-main-group {
     display: flex;
     flex: 1 1 auto;
-    align-items: center;
+    align-items: flex-start;
     gap: 0.25rem;
     min-width: 0;
   }

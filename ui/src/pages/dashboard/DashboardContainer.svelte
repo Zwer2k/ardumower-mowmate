@@ -21,7 +21,7 @@
         if (browser && $page.url) {
             const dashboard = $page.url.searchParams.get('dashboard') || 'main';
             const validDashboards = ['main', 'status', 'log', 'terminal', 'tests'];
-            if (mapEnabled) validDashboards.push('map');
+            if (mapEnabled) validDashboards.push('map', 'schedule');
             if (gpsDashboardEnabled) validDashboards.push('gps');
             if (liveMapEnabled) validDashboards.push('livemap');
             if (validDashboards.includes(dashboard)) {
@@ -66,6 +66,13 @@
         {/await}
     </div>
     {/if}
+    {#if mapEnabled}
+    <div class="dashboard-panel" class:active={currentDashboard === 'schedule'}>
+        {#await import('./schedule/ScheduleDashboard.svelte') then { default: ScheduleComp }}
+            <ScheduleComp />
+        {/await}
+    </div>
+    {/if}
     {#if gpsDashboardEnabled}
     <div class="dashboard-panel" class:active={currentDashboard === 'gps'}>
         <GpsDashboard />
@@ -96,6 +103,8 @@
         bottom: 0;
         left: 0;
         overflow: hidden;
+        /* clip: auch per Fokus/scrollIntoView nicht verschiebbar */
+        overflow: clip;
     }
 
     .dashboard-panel {

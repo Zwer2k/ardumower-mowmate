@@ -23,8 +23,13 @@ namespace ArduMower
         uint8_t id = 0;
         bool enabled = true;
         String name;
-        String mapId;
-        String mapName;
+        String mapId;              // erster Bereich (für ältere Clients)
+        String mapName;            // Anzeigename, bei mehreren Bereichen alle Namen
+        // Mähauftrag: Bereiche (oder ganze Karten) einer Hauptkarte in dieser
+        // Reihenfolge. Ältere Einträge kennen nur mapId und werden beim Lesen
+        // zur Liste mit dieser Karte.
+        std::vector<String> areaIds;
+        bool overlapOnce = false;
         Mode mode = Mode::Daily;
         uint8_t hour = 8;
         uint8_t minute = 0;

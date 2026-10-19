@@ -4,6 +4,8 @@
   import type { MowerCapacity } from "../services/mower-capacity";
 
   export let compassRotation: number;
+  /** Schalter "Mow areas"; in der Zeitplaner-Vorschau ohne Bedeutung */
+  export let showMowAreas = true;
   export let socketState: SocketState;
   export let perimeterPoints: number;
   export let exclusionPoints: number[];
@@ -105,7 +107,9 @@
       </div>
     {/if}
   </div>
-  <MowAreaToggles showRouteStyle={true} />
+  {#if showMowAreas}
+    <MowAreaToggles showRouteStyle={true} />
+  {/if}
 </div>
 
 <style>

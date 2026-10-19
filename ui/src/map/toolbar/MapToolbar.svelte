@@ -3,7 +3,6 @@
   import IconEdit from "carbon-icons-svelte/lib/Edit.svelte";
   import IconTools from "carbon-icons-svelte/lib/Tools.svelte";
   import IconMagicWand from "carbon-icons-svelte/lib/MagicWand.svelte";
-  import IconCalendar from "carbon-icons-svelte/lib/Calendar.svelte";
   import IconSave from "carbon-icons-svelte/lib/Save.svelte";
   import IconUndo from "carbon-icons-svelte/lib/Undo.svelte";
   import IconCheckmark from "carbon-icons-svelte/lib/Checkmark.svelte";
@@ -14,14 +13,12 @@
   export let showManage: boolean;
   export let edit: boolean;
   export let showCalculate: boolean;
-  export let showSchedule: boolean;
   export let canConfirmRename: boolean;
   export let canSave: boolean;
   export let canRevert: boolean;
   export let onToggleManage: () => void;
   export let onToggleEdit: () => void;
   export let onToggleCalculate: () => void;
-  export let onToggleSchedule: () => void;
   export let onSaveMap: () => void;
   export let onDiscardMap: () => void;
   export let onConfirmRename: () => void;
@@ -73,14 +70,6 @@
       iconDescription="Calculate waypoints"
       tooltipPosition="top"
       on:click={onToggleCalculate}
-    />
-    <Button
-      kind={showSchedule ? "primary" : "secondary"}
-      size="small"
-      icon={IconCalendar}
-      iconDescription="Schedule"
-      tooltipPosition="top"
-      on:click={onToggleSchedule}
     />
     <Button
       kind="primary"

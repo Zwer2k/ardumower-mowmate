@@ -4,12 +4,20 @@
   import IconTrashCan from "carbon-icons-svelte/lib/TrashCan.svelte";
   import IconMagicWand from "carbon-icons-svelte/lib/MagicWand.svelte";
   import IconReport from "carbon-icons-svelte/lib/Report.svelte";
+  import IconSelectWindow from "carbon-icons-svelte/lib/SelectWindow.svelte";
+  import IconLasso from "carbon-icons-svelte/lib/Lasso.svelte";
+  import IconFitToScreen from "carbon-icons-svelte/lib/FitToScreen.svelte";
   import { socketService } from "../../stores/socket";
 
   export let busy: boolean;
   export let onOpenMowSettings: () => void;
   export let onOpenRouteReport: () => void = () => {};
   export let hasRouteReport = false;
+  // Bereich (Subkarte): Auswahlfläche für die Berechnung zeichnen
+  export let isArea = false;
+  export let selectionTool: "rect" | "lasso" | null = null;
+  export let onSelectionTool: (tool: "rect" | "lasso" | null) => void = () => {};
+  export let onSelectionWhole: () => void = () => {};
 </script>
 
 <Row class="map-calc-row">
@@ -22,6 +30,35 @@
         iconDescription="Mow settings"
         on:click={onOpenMowSettings}
       />
+      {#if isArea}
+        <Button
+          kind={selectionTool === "rect" ? "primary" : "tertiary"}
+          size="small"
+          disabled={busy}
+          icon={IconSelectWindow}
+          iconDescription="Select a rectangle"
+          tooltipPosition="top"
+          on:click={() => onSelectionTool(selectionTool === "rect" ? null : "rect")}
+        />
+        <Button
+          kind={selectionTool === "lasso" ? "primary" : "tertiary"}
+          size="small"
+          disabled={busy}
+          icon={IconLasso}
+          iconDescription="Select with lasso"
+          tooltipPosition="top"
+          on:click={() => onSelectionTool(selectionTool === "lasso" ? null : "lasso")}
+        />
+        <Button
+          kind="tertiary"
+          size="small"
+          disabled={busy}
+          icon={IconFitToScreen}
+          iconDescription="Select the whole map"
+          tooltipPosition="top"
+          on:click={onSelectionWhole}
+        />
+      {/if}
       <Button
         kind="danger"
         size="small"

@@ -26,6 +26,9 @@ struct Map {
     std::vector<Point> waypoints;
     std::vector<Point> dockpoints;
     double rotation = 0.0;
+    // Subkarte (Bereich): Auswahlflächen, auf deren Schnitt mit dem Perimeter
+    // gemäht wird (eigene Auswahl und die der übergeordneten Bereiche).
+    std::vector<std::vector<Point>> selections;
 };
 
 // Abschnitte der Route, in der Reihenfolge von Settings::routeOrder gemäht
@@ -58,6 +61,9 @@ struct Settings {
     // Exclusion-Runden in die Fläche einfügen, jeweils am Punkt des Musters mit
     // dem kürzesten Weg zur Runde; RouteBlockExclusionBorder entfällt dann.
     bool exclusionLapsWithArea;
+    // Bei einer Auswahl: Randabstand und Randrunden auch an der Auswahlkante
+    // (sonst nur an der echten Außengrenze; die Runden werden gekürzt).
+    bool selectionEdgeLaps;
     // Schwelle der Routenvereinfachung in Metern. Wirkt als Verschmelzungsradius
     // für doppelte Punkte und (halbiert) als erlaubte Abweichung beim Entfernen
     // nahezu kollinearer Punkte. Größere Werte ergeben weniger Wegpunkte.
@@ -69,7 +75,7 @@ struct Settings {
           distanceToExclusions(0), exclusionLaps(-1),
           mowArea(true), mowExclusionBorder(true), mowBorderCcw(false),
           routeOrder{RouteBlockArea, RouteBlockBorder, RouteBlockExclusionBorder},
-          exclusionLapsWithArea(false),
+          exclusionLapsWithArea(false), selectionEdgeLaps(false),
           simplifyEpsilon(0.02f) {}
 };
 
@@ -267,6 +273,25 @@ Polygon walkBoundaryWithHoles(const Point &from, const Point &to,
 
 Polygon calculateWaypoints(Map &map, Settings &settings, const State *state = nullptr,
     const ProgressCallback &progress = {});
+
+// Ein Bereich eines Mähauftrags: seine bereits gefilterte Route und seine
+// Fläche, der Schnitt aller Polygone in region (die Auswahl). Leer = ganze
+// Karte: Dann liegt jeder Punkt der Route darin. Der Perimeter gehört nicht
+// dazu: Randrunden liegen genau auf ihm, und die Prüfung auf seiner Kante ist
+// nicht eindeutig.
+struct JobPart {
+    Polygon route;
+    std::vector<Polygon> region;
+};
+
+// Setzt einen Mähauftrag zusammen: die Routen der Bereiche in ihrer
+// Reihenfolge, dazwischen Fahrten des Wegfinders um die Exclusions (Tag
+// transitTag). overlapOnce: Strecken in der Fläche eines früheren Bereichs
+// entfallen; die Reststücke verbindet ebenfalls der Wegfinder. Neu geplant
+// wird nichts. partStarts erhält je Bereich den Index seines ersten Punkts
+// (die Fahrt dorthin gehört schon zu ihm; leerer Bereich: Index des nächsten).
+Polygon composeJob(const std::vector<JobPart> &parts, const FreeSpaceRouter &router,
+    bool overlapOnce, uint8_t transitTag, std::vector<size_t> *partStarts = nullptr);
 
 } // namespace PathPlannerCore
 } // namespace Modem

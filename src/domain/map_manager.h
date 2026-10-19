@@ -20,6 +20,16 @@ namespace ArduMower {
             double rotation = 0.0; // Kartenausrichtung in Grad
             uint32_t timestamp = 0;
             String file;          // SPIFFS-Dateiname, z.B. /maps/map_0.json
+            // Subkarte (Bereich): ID der übergeordneten Karte; leer bei Hauptkarten.
+            // Ihre Datei enthält nur Auswahl, Mäh-Einstellungen und Route, die
+            // Geometrie erbt sie von der Hauptkarte.
+            String parentId;
+            // Kennung "veraltet": Hauptkarte geomKey = geometryKey(), Subkarte
+            // selKey = Schlüssel der eigenen Auswahl, routeKey = planKey() bei
+            // der Berechnung ihrer Route (siehe MowerMap::planKey()).
+            uint32_t geomKey = 0;
+            uint32_t selKey = 0;
+            uint32_t routeKey = 0;
 
             void marshal(JsonObject obj) const;
             void unmarshal(JsonObject obj);
@@ -34,14 +44,32 @@ namespace ArduMower {
             // Ansonsten wird eine neue Karte erstellt (oder eine Karte mit gleichem Hash aktualisiert).
             // Rückgabe: ID oder leerer String bei Fehler.
             // progress meldet 0..100 %; den Großteil der Zeit kostet das Schreiben.
+            // parentId: neue Subkarte unter dieser Karte anlegen. Eine bestehende
+            // Subkarte (currentId) bleibt Subkarte. Bei Subkarten wird nur
+            // ihr eigener Teil geschrieben (Auswahl, Einstellungen, Route).
             String save(const ArduMower::Domain::Robot::MowerMap &map, const String &name, const String &currentId = "", double rotation = 0.0,
-                        const std::function<void(int percent)> &progress = {});
+                        const std::function<void(int percent)> &progress = {}, const String &parentId = "");
 
+            // Bei Subkarten: die wirksame Karte, also die Geometrie der
+            // Hauptkarte plus Auswahl, Einstellungen und Route der Subkarte.
             bool load(const String &id, ArduMower::Domain::Robot::MowerMap &out);
             bool loadActive(ArduMower::Domain::Robot::MowerMap &out);
 
             bool rename(const String &id, const String &name);
+            // Löscht auch alle Unterbereiche der Karte.
             bool remove(const String &id);
+
+            bool isArea(const String &id) const;
+            // Wie MowerMap::planKey() der geladenen Karte, nur aus dem Index;
+            // 0, wenn die Hauptkarte noch keinen Geometrie-Schlüssel hat.
+            uint32_t planKey(const String &id) const;
+            // Subkarte, deren Route nicht zur aktuellen Geometrie/Auswahl passt
+            bool isOutdated(const String &id) const;
+            String parentOf(const String &id) const;
+            // Alle Unterbereiche (auch Sub-Sub-Karten) von id
+            std::vector<String> descendants(const String &id) const;
+            // Eigener Teil einer Subkarte (Auswahl, Einstellungen) ohne Route
+            bool readAreaOwn(const String &id, JsonObject out);
 
             const std::vector<MapMeta>& list() const { return _index.maps; }
 
@@ -83,6 +111,7 @@ namespace ArduMower {
             static constexpr const char *INDEX_FILE = "/maps/index.json";
 
             bool loadIndex();
+            bool loadChain(const String &id, ArduMower::Domain::Robot::MowerMap &out, int depth);
             bool saveIndex();
             String allocateFileName();
             MapMeta* findMeta(const String &id);

@@ -11,6 +11,7 @@
     import { SensorDescriptions } from '../../../model';
     import { page } from '$app/stores';
     import { browser } from '$app/environment';
+    import { mowJobStore, isJobOnMower, jobRouteIndex } from '../../../stores/mow-job';
 
     type TagType = "green" | "red" | "blue" | "cyan" | "teal" | "gray" | "warm-gray" | "magenta" | "purple";
 
@@ -45,7 +46,9 @@
     const desired = $derived($socketStore.desiredState);
     const desc = $derived($socketStore.valueDescriptions);
     const pos = $derived(mower?.position);
-    const totalPoints = $derived($MapStore?.map?.waypoints?.points?.length ?? 0);
+    const totalPoints = $derived(isJobOnMower($mowJobStore, $socketStore.state)
+        ? ($mowJobStore?.total ?? 0)
+        : ($MapStore?.map?.waypoints?.points?.length ?? 0));
     const hasMap = $derived(($MapStore?.map?.perimeter?.points?.length ?? 0) > 0);
     const mapSynced = $derived(isMowerMapSynced(mower, $socketStore.currentMapId, $socketStore.currentMapMeta?.crc ?? 0));
 
@@ -195,7 +198,7 @@
                 <StatusRow label="Position" value={`E ${(pos?.x ?? 0).toFixed(2)} · N ${(pos?.y ?? 0).toFixed(2)}`} unit="m" />
                 <StatusRow label="Richtung" value={pos?.delta != null ? ((pos.delta * 180) / Math.PI).toFixed(0) : undefined} unit="°" />
                 <StatusRow label="Ziel" value={mower?.target ? `E ${mower.target.x.toFixed(2)} · N ${mower.target.y.toFixed(2)}` : undefined} unit="m" />
-                <StatusRow label="Wegpunkt" value={`${(pos?.mow_point_index ?? -1) + 1} / ${totalPoints}`} />
+                <StatusRow label="Wegpunkt" value={`${(isJobOnMower($mowJobStore, $socketStore.state) ? jobRouteIndex($mowJobStore, pos?.mow_point_index ?? -1) : (pos?.mow_point_index ?? -1)) + 1} / ${totalPoints}`} />
             </StatusCard>
 
             <StatusCard title="Mähstatistik" icon="📊">

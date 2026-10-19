@@ -8,6 +8,7 @@
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
     import { splitRouteProgress, routeTransits, mergeTransits } from '../../../map/core/route-progress';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
+    import { mowJobStore, isJobOnMower, isJobPreview, jobPartProgress, jobRouteIndex, outlineAsMap } from '../../../stores/mow-job';
     import Obstacles from '../../../map/Obstacles.svelte';
     import MapLoadingOverlay from '../../../map/MapLoadingOverlay.svelte';
     import MapGotoOverlay from '../../../map/overlay/MapGotoOverlay.svelte';
@@ -16,11 +17,14 @@
 
     export let mowPointIndex: number = -1;
 
-    $: map = $MapStore?.map;
-    $: presentation = $MapStore?.presentation;
+    // Bei einem Auftrag (Vorschau oder auf dem Mäher) dessen Karte zeichnen: Er
+    // gehört nicht zwingend zur geladenen Karte
+    $: jobOutline = (jobOnMower || jobPreview) ? $mowJobStore?.geometry : undefined;
+    $: map = jobOutline ? (outlineAsMap(jobOutline) as unknown as import('../../../map/model').Map) : $MapStore?.map;
+    $: presentation = jobOutline ? undefined : $MapStore?.presentation;
     $: mowerPos = $socketStore?.state?.position ?? null;
     $: track = $drivenTrackStore;
-    $: mapRotation = $socketStore?.currentMapMeta?.rotation ?? 0;
+    $: mapRotation = jobOutline ? jobOutline.rotation : ($socketStore?.currentMapMeta?.rotation ?? 0);
     $: waypoints = map?.waypoints?.points ?? [];
     $: completedIndex = mowPointIndex ?? -1;
 
@@ -40,7 +44,18 @@
                          (map?.exclusions ?? []).some((ex) => (ex.points?.length ?? 0) > 0);
 
     $: storedCrc = $socketStore?.currentMapMeta?.crc ?? 0;
-    $: isMapSynced = isMowerMapSynced($socketStore.state, $socketStore.currentMapId, storedCrc);
+    // Ein Mähauftrag aus mehreren Bereichen ersetzt die Route der geladenen Karte
+    $: jobOnMower = isJobOnMower($mowJobStore, $socketStore.state);
+    // Vorschau: zusammengesetzt, noch nicht hochgeladen
+    $: jobPreview = isJobPreview($mowJobStore, $socketStore.state);
+    function jobStatusText(job: typeof $mowJobStore): string {
+        if (!job) return '';
+        const names = job.parts.map((p) => p.name).join(', ');
+        return job.segmentStarts.length > 1
+            ? `Auftrag: ${names} · Teil ${job.segment + 1}/${job.segmentStarts.length}`
+            : `Auftrag: ${names}`;
+    }
+    $: isMapSynced = jobOnMower || isMowerMapSynced($socketStore.state, $socketStore.currentMapId, storedCrc);
     $: uploadOp = ($socketStore?.state as any)?.progressOp;
     $: uploadMsg = $socketStore?.state?.progressMsg ?? '';
     $: uploadPct = $socketStore?.state?.progressPct ?? 0;
@@ -49,13 +64,15 @@
         ? { text: uploadMsg || 'Hochladen...', synced: false, warn: false }
         : !hasAnyMapData
             ? { text: 'Keine Karte', synced: false, warn: false }
+            : jobPreview
+                ? { text: `Vorschau: ${($mowJobStore?.parts ?? []).map((p) => p.name).join(', ')} · nicht hochgeladen`, synced: false, warn: true }
             : isMapSynced
-                ? { text: 'Karte synchron', synced: true, warn: false }
+                ? { text: jobOnMower ? jobStatusText($mowJobStore) : 'Karte synchron', synced: true, warn: false }
                 : { text: 'Karte nicht synchron', synced: false, warn: true };
 
     $: viewBoxValid = isViewBoxValid(presentation?.viewBox);
     $: derivedViewBox = deriveViewBox(map, presentation?.viewBox);
-    $: safeViewBox = viewBoxValid ? presentation?.viewBox : derivedViewBox;
+    $: safeViewBox = (viewBoxValid ? presentation?.viewBox : undefined) ?? derivedViewBox;
 
     $: transformAttr = viewBoxValid || derivedViewBox !== '0 0 1 1'
         ? `translate(${safeNumber(currentTransform.x).toFixed(4)}, ${safeNumber(currentTransform.y).toFixed(4)}) scale(${safeNumber(currentTransform.k).toFixed(4)})`
@@ -309,7 +326,26 @@
                     />
                 {/if}
 
-                {#if map.waypoints?.points?.length}
+                {#if (jobOnMower || jobPreview) && $mowJobStore}
+                    <!-- Mähauftrag: jeder Bereich in eigener Farbe, gemäht blass -->
+                    {#each jobPartProgress($mowJobStore.points, $mowJobStore.parts, jobRouteIndex($mowJobStore, completedIndex), jobOnMower) as part}
+                        {#each part.done as seg}
+                            <polyline points={seg.map((p) => `${p.x},${p.y}`).join(' ')} fill="none"
+                                stroke="rgba(127, 127, 127, 0.25)" stroke-opacity="0.5" stroke-width="2"
+                                vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
+                        {/each}
+                        {#each part.todo as seg}
+                            <polyline points={seg.map((p) => `${p.x},${p.y}`).join(' ')} fill="none"
+                                stroke={part.color} stroke-opacity="0.7" stroke-width="2"
+                                vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" />
+                        {/each}
+                        {#if part.current}
+                            <polyline points={part.current.map((p) => `${p.x},${p.y}`).join(' ')} fill="none"
+                                stroke="black" stroke-opacity="0.8" stroke-width="2" stroke-dasharray="4 3"
+                                vector-effect="non-scaling-stroke" />
+                        {/if}
+                    {/each}
+                {:else if map.waypoints?.points?.length}
                     {@const settings = $mowSettingsStore}
                     {@const visibleWaypoints = mergeTransits(filterWaypointsByToggles(map.waypoints.points, map, settings), $socketStore.currentMapTransits)}
                     {@const progress = splitRouteProgress(visibleWaypoints, completedIndex, isMapSynced)}

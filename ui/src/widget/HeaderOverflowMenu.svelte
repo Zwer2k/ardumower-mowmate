@@ -267,4 +267,15 @@
         background: #eee;
         margin: 4px 12px;
     }
+    /* Schmale Handys: wie die Menüknöpfe in +layout.svelte */
+    @media only screen and (max-width: 500px) {
+        .hom-trigger {
+            width: 42px;
+        }
+    }
+    @media only screen and (max-width: 400px) {
+        .hom-trigger {
+            width: 38px;
+        }
+    }
 </style>

@@ -174,6 +174,9 @@ namespace ArduMower
       // Der Geometrie-Hash (MD5 über das serialisierte JSON) wird erst bei
       // Bedarf berechnet; updateCurrentMapMeta() markiert ihn nur als veraltet.
       bool _currentMapHashDirty = false;
+      // CRC, Punktzahl und Verbindungswege der beim Start geladenen Karte:
+      // erst nach dem Start der Netzdienste berechnen (millis() ab wann, 0 = nichts offen)
+      uint32_t _bootCrcRefreshAt = 0;
       // Scheduler-Upload einer gespeicherten Karte, ohne die aktuelle Karte
       // (und einen evtl. offenen Editor) anzufassen.
       ArduMower::Domain::Robot::MowerMap _mapUploadOverride;
@@ -264,6 +267,10 @@ namespace ArduMower
       virtual void clearMapListDirty() override;
       virtual bool createMap(const String &name) override;
       virtual bool copyMap(const String &name) override;
+      virtual bool createArea(const String &parentId, const String &name,
+                              const std::function<void(int percent)> &progress = {}) override;
+      virtual bool exportAreas(const String &rootId, JsonArray out) override;
+      virtual String importArea(const String &parentId, const String &name, JsonObject own) override;
       virtual String saveMap(const String &name, double rotation = 0.0,
                              const std::function<void(int percent)> &progress = {}) override;
       virtual bool loadMap(const String &id) override;
@@ -328,6 +335,21 @@ namespace ArduMower
       virtual bool powerOff();
       virtual bool uploadMapToMower() override;
       virtual bool uploadSavedMapToMower(const String &id) override;
+      virtual bool uploadJobToMower(const std::vector<String> &ids, bool overlapOnce) override;
+      virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce) override;
+      virtual void clearJob() override;
+      virtual const ArduMower::Domain::Robot::MowJob *mowJob() override { return _job.id.length() ? &_job : nullptr; }
+      virtual const ArduMower::Domain::Robot::MowerMap *mowJobGeometry() override { return _job.id.length() ? &_jobGeometry : nullptr; }
+      virtual bool mapGeometry(const String &id, JsonObject out) override;
+      // Zuletzt zusammengesetzter Mähauftrag (für die Anzeige der Route)
+      ArduMower::Domain::Robot::MowJob _job;
+      // Geometrie des Auftrags (ohne Wegpunkte) für die Teil-Uploads
+      ArduMower::Domain::Robot::MowerMap _jobGeometry;
+      virtual bool uploadJobSegment(uint32_t index) override;
+      // Wegpunkte, die bei dieser Geometrie in den Speicher des Mähers passen; 0 = unbegrenzt
+      uint32_t jobWaypointLimit(size_t fixedPoints);
+      // Punkte der zuletzt hochgeladenen Karte (Speicher, den Sunray beim Upload freigibt)
+      uint32_t _lastUploadedPoints = 0;
       virtual bool uploadMapToMowerActive() override { return _mapUploadState.active; }
       virtual bool uploadMapToMowerSuccess() override { return _mapUploadState.phase == MapUploadState::done; }
       virtual String uploadMapToMowerError() override { return _mapUploadError; }

@@ -17,6 +17,7 @@
     import IconDashboard from "carbon-icons-svelte/lib/Dashboard.svelte";
     import IconMap from "carbon-icons-svelte/lib/Map.svelte";
     import IconGps from "carbon-icons-svelte/lib/Location.svelte";
+    import IconCalendar from "carbon-icons-svelte/lib/Calendar.svelte";
     import IconTest from "carbon-icons-svelte/lib/Tools.svelte";
 
     import { Busy } from "../stores/busy";
@@ -132,6 +133,13 @@
         icon={IconMap}
         iconDescription="Map">
         <span class="button-text">Map</span>
+    </Button>
+    <Button
+        href="/?dashboard=schedule"
+        kind="tertiary"
+        icon={IconCalendar}
+        iconDescription="Schedule">
+        <span class="button-text">Schedule</span>
     </Button>
     {/if}
     {#if import.meta.env.VITE_ENABLE_LIVE_MAP === 'true'}
@@ -259,6 +267,25 @@
     :global(.bx--header__action svg) {
         width: 18px !important;
         height: 18px !important;
+    }
+
+    /* Sechs Menüknöpfe und die Symbole rechts passen sonst nicht auf schmale
+       Handys (das Menü ganz rechts wurde abgeschnitten) */
+    :global(.bx--header .bx--btn--tertiary) {
+        min-width: 42px !important;
+        width: 42px !important;
+    }
+    :global(.bx--header .bx--header__action) {
+        min-width: 42px !important;
+        width: 42px !important;
+    }
+}
+
+@media only screen and (max-width: 400px) {
+    :global(.bx--header .bx--btn--tertiary),
+    :global(.bx--header .bx--header__action) {
+        min-width: 38px !important;
+        width: 38px !important;
     }
 }
 

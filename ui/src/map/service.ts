@@ -9,6 +9,7 @@ import {
   exclusionsStore,
   waypointsStore,
   mapSnapshotStore,
+  mapSelectionStore,
 } from "./map-chunk-buffer";
 import { calculatePresentation } from "./core/presentation";
 import { cloneMap, emptyMap, emptyPresentation } from "./core/map-utils";
@@ -135,6 +136,7 @@ export function buildMapSetData(map: Map, rotation: number = 0): MapSetData {
     dockpoints: map.dockpoints.points.map(toMapPoint),
     searchWire: map.searchWire.points.map(toMapPoint),
     waypoints: map.waypoints.points.map(toMapPoint),
+    selection: (map.selection?.points ?? []).map((p) => ({ x: p.x, y: p.y })),
     rotation,
   };
 }
@@ -168,6 +170,7 @@ function updateMapStore() {
     map.perimeter = { points: snapshot.perimeter.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
     map.dockpoints = { points: snapshot.dockpoints.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
     map.searchWire = { points: snapshot.searchWire.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })) };
+    map.selection = { points: get(mapSelectionStore).map(({ X, Y }) => ({ x: X, y: -Y })) };
     map.exclusions = snapshot.exclusions.map((arr) => ({
       points: arr.map(({ X, Y, delta, timestamp, sol }) => ({ x: X, y: -Y, delta, timestamp, sol })),
     }));

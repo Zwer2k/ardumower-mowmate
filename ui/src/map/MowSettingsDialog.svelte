@@ -4,6 +4,8 @@
   import { socketService } from "../stores/socket";
 
   export let open = false;
+  /** Settings of an area (sub-map): offers the border laps along the selection edge */
+  export let isArea = false;
 
   let pattern: number = 0;
   let width: number = 0.3;
@@ -24,6 +26,7 @@
   };
   let order: RouteBlock[] = ["area", "border", "exclusions"];
   let exclusionLapsWithArea = false;
+  let selectionEdgeLaps = false;
 
   function parseOrder(text: string | undefined, ccw: boolean): RouteBlock[] {
     const parts = (text ?? "").split(",").map((t) => t.trim()).filter(Boolean) as RouteBlock[];
@@ -86,6 +89,7 @@
     mowBorderCcw = s.mowBorderCcw;
     order = parseOrder(s.routeOrder, s.mowBorderCcw);
     exclusionLapsWithArea = s.exclusionLapsWithArea ?? false;
+    selectionEdgeLaps = s.selectionEdgeLaps ?? false;
     simplifyEpsilon = s.simplifyEpsilon ?? 0.02;
     checkTurnRadius = s.checkTurnRadius ?? 0.3;
   }
@@ -104,6 +108,7 @@
       mowBorderCcw,
       routeOrder: order.join(","),
       exclusionLapsWithArea,
+      selectionEdgeLaps,
       simplifyEpsilon,
       checkTurnRadius,
     });
@@ -175,6 +180,18 @@
       max={6}
       step={1}
     />
+
+    {#if isArea}
+      <Toggle
+        labelText="Border laps along the selection edge"
+        toggled={selectionEdgeLaps}
+        on:toggle={(e) => { selectionEdgeLaps = e.detail.toggled; }}
+      />
+      <p class="route-order-help">
+        Off: the area is mowed up to the selection edge, border laps only run where the selection meets the perimeter.
+        On: the selection edge is treated like the perimeter, with distance to border and border laps.
+      </p>
+    {/if}
 
     <NumberInput
       label="Distance to exclusions"
