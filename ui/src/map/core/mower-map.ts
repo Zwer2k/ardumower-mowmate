@@ -88,19 +88,26 @@ export function parseAreas(raw: unknown): ExportedArea[] {
   return out;
 }
 
-/** Bereichsliste des Modems (requestAreas) im Exportformat */
+/** Bereichsliste des Modems (requestAreas) im Exportformat. Als Baum
+ * geordnet (jeder Bereich direkt nach seinem Elternbereich, Geschwister nach
+ * Namen): Das Modem liefert sie in anderer Reihenfolge, und die Einrückung
+ * ließ Unterbereiche dann unter dem falschen Bereich erscheinen. */
 export function areasFromModem(
   list: { id: string; name: string; parentId: string; map?: Record<string, unknown> }[],
   rootId: string
 ): ExportedArea[] {
-  const index: Record<string, number> = {};
+  const byName = (a: { name: string }, b: { name: string }) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
   const out: ExportedArea[] = [];
-  for (const a of list) {
-    const parent = a.parentId === rootId ? -1 : index[a.parentId];
-    if (parent === undefined) continue;
-    index[a.id] = out.length;
-    out.push({ name: a.name, parent, map: a.map ?? {} });
-  }
+  const add = (parentId: string, parentIndex: number, depth: number) => {
+    if (depth > 8) return;
+    for (const a of list.filter((x) => x.parentId === parentId).sort(byName)) {
+      const index = out.length;
+      out.push({ name: a.name, parent: parentIndex, map: a.map ?? {} });
+      add(a.id, index, depth + 1);
+    }
+  };
+  add(rootId, -1, 0);
   return out;
 }
 
