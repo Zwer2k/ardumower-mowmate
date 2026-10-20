@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <cmath>
 
 
 #include <ArduinoJson.h>
@@ -94,6 +95,14 @@ namespace ArduMower {
                 // never sent to Sunray because the AT+W protocol has no type
                 // for a Search-Wire geometry.
                 std::vector<MapPoint> searchWire;
+                // Subkarte (Bereich): Auswahlfläche, leer = ganze Karte.
+                // Begrenzt nur durch Perimeter und Exclusions, auch bei
+                // Unterbereichen (nicht durch die Auswahl des Elternbereichs).
+                // Hauptkarten haben keine.
+                std::vector<MapPoint> selection;
+                // planKey() zum Zeitpunkt der Routenberechnung, 0 = unbekannt.
+                // Weicht er vom aktuellen ab, ist die Route eines Bereichs veraltet.
+                uint32_t routeKey = 0;
 
                 // Kartenausrichtung in Grad (0 = Norden/oben), nicht Teil des Geometrie-Hashes
                 double rotation = 0.0;
@@ -114,6 +123,8 @@ namespace ArduMower {
                 // kommagetrennt); leer: wie früher aus mowBorderCcw
                 String routeOrder = "";
                 bool exclusionLapsWithArea = false;
+                // Teilbereich: Randrunden auch entlang der Auswahlkante.
+                bool selectionEdgeLaps = false;
                 // Runtime-Flags (können unterwegs ein-/ausgeschaltet werden)
                 bool doMowArea = true;
                 bool doMowExclusions = true; // true: Aussparungen umfahren (immer geometrisch); false: Nur Perimeter
@@ -141,6 +152,86 @@ namespace ArduMower {
                 void beginRead() { if (readLock.count < 255) readLock.count++; }
                 void endRead() { if (readLock.count > 0) readLock.count--; }
                 bool isReading() const { return readLock.count > 0; }
+
+                // Mäh-Einstellungen von o übernehmen. Subkarten erben die
+                // Geometrie, haben aber eigene Einstellungen.
+                void copySettingsFrom(const MowerMap &o) {
+                    pattern = o.pattern;
+                    mowOfs = o.mowOfs;
+                    patternAngle = o.patternAngle;
+                    distanceToBorder = o.distanceToBorder;
+                    borderLaps = o.borderLaps;
+                    distanceToExclusions = o.distanceToExclusions;
+                    exclusionLaps = o.exclusionLaps;
+                    mowBorderCcw = o.mowBorderCcw;
+                    routeOrder = o.routeOrder;
+                    exclusionLapsWithArea = o.exclusionLapsWithArea;
+                    selectionEdgeLaps = o.selectionEdgeLaps;
+                    doMowArea = o.doMowArea;
+                    doMowExclusions = o.doMowExclusions;
+                    doMowPerimeter = o.doMowPerimeter;
+                    doMowBorder = o.doMowBorder;
+                    doMowExclusionBorder = o.doMowExclusionBorder;
+                    simplifyEpsilon = o.simplifyEpsilon;
+                    checkTurnRadius = o.checkTurnRadius;
+                }
+
+                // Perimeter, Exclusions und Dockpunkte kompakt als [[x,y],...]
+                // (Anzeige von Aufträgen und Vorschauen im Browser)
+                void marshalOutline(JsonObject o) const {
+                    auto ring = [](JsonArray arr, const std::vector<MapPoint> &pts) {
+                        for (const auto &p : pts) {
+                            JsonArray xy = arr.add<JsonArray>();
+                            xy.add(roundf((float)p.X * 100.0f) / 100.0f);
+                            xy.add(roundf((float)p.Y * 100.0f) / 100.0f);
+                        }
+                    };
+                    ring(o["perimeter"].to<JsonArray>(), perimeter);
+                    JsonArray ex = o["exclusions"].to<JsonArray>();
+                    for (const auto &e : exclusions) ring(ex.add<JsonArray>(), e);
+                    ring(o["dockpoints"].to<JsonArray>(), dockpoints);
+                    o["rotation"] = rotation;
+                }
+
+                // Schlüssel für die Kennung "veraltet": Punkte auf cm gerundet,
+                // damit Speichern und Laden ihn nicht verändern.
+                static uint32_t keyMix(uint32_t k, uint32_t v) {
+                    for (int i = 0; i < 4; i++) { k ^= (v >> (i * 8)) & 0xff; k *= 16777619u; }
+                    return k;
+                }
+                static uint32_t pointsKey(uint32_t k, const std::vector<MapPoint> &pts) {
+                    k = keyMix(k, (uint32_t)pts.size());
+                    for (const auto &p : pts) {
+                        k = keyMix(k, (uint32_t)(int32_t)lround(p.X * 100.0));
+                        k = keyMix(k, (uint32_t)(int32_t)lround(p.Y * 100.0));
+                    }
+                    return k;
+                }
+                // Perimeter, Exclusions und Dockpunkte der Hauptkarte
+                uint32_t geometryKey() const {
+                    uint32_t k = pointsKey(2166136261u, perimeter);
+                    k = keyMix(k, (uint32_t)exclusions.size());
+                    for (const auto &ex : exclusions) k = pointsKey(k, ex);
+                    k = pointsKey(k, dockpoints);
+                    return k ? k : 1;
+                }
+                // Schlüssel einer Auswahl, 0 = keine (ganze Elternfläche)
+                static uint32_t selectionKey(const std::vector<MapPoint> &sel) {
+                    if (sel.size() < 3) return 0;
+                    const uint32_t k = pointsKey(2166136261u, sel);
+                    return k ? k : 1;
+                }
+                // Eine Auswahl in den Schlüssel einrechnen; leere Auswahl ändert nichts
+                static uint32_t chainKey(uint32_t k, uint32_t selKey) {
+                    if (!selKey) return k;
+                    k = keyMix(k, selKey);
+                    return k ? k : 1;
+                }
+                // Alles, wovon die Route eines Bereichs geometrisch abhängt
+                uint32_t planKey() const {
+                    uint32_t k = geometryKey();
+                    return chainKey(k, selectionKey(selection));
+                }
 
                 // Kanonische Serialisierung nur der Geometrie (für Hash/Vergleich)
                 void marshalGeometry(JsonObject obj) const {
@@ -214,11 +305,14 @@ namespace ArduMower {
                 // Mower format uses lower-case {x,y} arrays, a top-level
                 // "perimeter" ring, "exclusions" array of rings, optional
                 // "mowPoints"/"dockPoints"/"wayPoints" and meta fields.
-                bool fromJson(JsonObject obj) {
+                // requirePerimeter = false: Datei einer Subkarte, die keine
+                // eigene Geometrie enthält (nur Auswahl, Einstellungen, Route).
+                bool fromJson(JsonObject obj, bool requirePerimeter = true) {
                     perimeter.clear();
                     exclusions.clear();
                     dockpoints.clear();
                     searchWire.clear();
+                    selection.clear();
                     waypoints.clear();
 
                     JsonArray perim = obj["perimeter"];
@@ -228,7 +322,7 @@ namespace ArduMower {
                             perimeter.push_back(unmarshalMapPoint(p));
                         }
                     }
-                    if (perimeter.size() < 3) return false;
+                    if (requirePerimeter && perimeter.size() < 3) return false;
                     // Ensure closed ring
                     if (perimeter.size() > 0 &&
                         (perimeter.front().X != perimeter.back().X ||
@@ -267,6 +361,11 @@ namespace ArduMower {
                         }
                     }
 
+                    JsonArray sel = obj["selection"];
+                    if (sel) {
+                        for (JsonObject p : sel) selection.push_back(unmarshalMapPoint(p));
+                    }
+
                     JsonArray wps = obj["wayPoints"];
                     if (!wps) wps = obj["waypoints"];
                     if (wps) {
@@ -299,6 +398,8 @@ namespace ArduMower {
                     if (obj["mowBorderCcw"].is<JsonVariant>()) mowBorderCcw = obj["mowBorderCcw"];
                     routeOrder = obj["routeOrder"].is<const char *>() ? obj["routeOrder"].as<String>() : String("");
                     exclusionLapsWithArea = obj["exclusionLapsWithArea"] | false;
+                    selectionEdgeLaps = obj["selectionEdgeLaps"] | false;
+                    routeKey = obj["routeKey"] | 0u;
                     // Legacy Webapp verwendet doMowArea/doPerimeterBorder/doExclusionsBorder
                     // als Berechnungs-Flags. Wir importieren sie als Runtime-Flags,
                     // damit alte Karten weiter funktionieren.
@@ -369,6 +470,8 @@ namespace ArduMower {
                     obj["mowBorderCcw"] = mowBorderCcw;
                     if (routeOrder.length() > 0) obj["routeOrder"] = routeOrder;
                     if (exclusionLapsWithArea) obj["exclusionLapsWithArea"] = true;
+                    if (selectionEdgeLaps) obj["selectionEdgeLaps"] = true;
+                    if (routeKey) obj["routeKey"] = routeKey;
                     // Runtime-Flags (können unterwegs umgeschaltet werden)
                     obj["doMowExclusions"] = doMowExclusions;
                     obj["doMowPerimeter"] = doMowPerimeter;
@@ -392,6 +495,11 @@ namespace ArduMower {
 
                     JsonArray wire = obj["searchWire"].to<JsonArray>();
                     writeRing(wire, searchWire);
+
+                    if (!selection.empty()) {
+                        JsonArray sel = obj["selection"].to<JsonArray>();
+                        writeRing(sel, selection);
+                    }
 
                     JsonArray wps = obj["wayPoints"].to<JsonArray>();
                     writeWaypoints(wps, waypoints);

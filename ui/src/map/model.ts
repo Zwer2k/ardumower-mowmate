@@ -39,6 +39,8 @@ export interface Map {
   dockpoints: Dockpoints;
   searchWire: SearchWire;
   waypoints: Waypoints;
+  /** Sub-map (area): selected part of the map, limited only by the perimeter; empty = whole map */
+  selection?: Area;
 }
 
 export interface MapPresentation {
@@ -51,7 +53,7 @@ export interface MapPresentation {
   viewBox: string;
 }
 
-export type MapArea = "perimeter" | "exclusion" | "dockpoints" | "waypoints";
+export type MapArea = "perimeter" | "exclusion" | "dockpoints" | "waypoints" | "selection";
 
 export interface MapSelection {
   area: MapArea;

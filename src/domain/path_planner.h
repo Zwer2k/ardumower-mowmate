@@ -96,6 +96,22 @@ Polygon filterRouteByToggles(const Polygon &route,
     const ArduMower::Domain::Robot::MowSettings &settings,
     std::vector<Polygon> *transits = nullptr, TransitCache *cache = nullptr);
 
+// Setzt einen Mähauftrag aus mehreren Bereichen zusammen. Die Bereiche werden
+// nacheinander geladen und angefügt, damit nie alle Karten gleichzeitig im
+// Speicher liegen.
+class JobBuilder {
+public:
+    // Route des Bereichs, gefiltert mit dessen eigenen Mow-areas-Schaltern
+    void add(const ArduMower::Domain::Robot::MowerMap &area,
+             const ArduMower::Domain::Robot::MowSettings &settings);
+    size_t size() const { return parts_.size(); }
+    // Auftragsroute für die Geometrie von map; partStarts wie composeJob()
+    Polygon build(const ArduMower::Domain::Robot::MowerMap &map, bool overlapOnce,
+                  std::vector<size_t> *partStarts = nullptr);
+private:
+    std::vector<PathPlannerCore::JobPart> parts_;
+};
+
 } // namespace PathPlanner
 } // namespace Modem
 } // namespace ArduMower

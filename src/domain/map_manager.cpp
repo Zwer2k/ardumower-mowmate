@@ -21,6 +21,10 @@ namespace ArduMower {
             obj["rotation"] = rotation;
             obj["timestamp"] = timestamp;
             obj["file"] = file;
+            if (parentId.length() > 0) obj["parentId"] = parentId;
+            if (geomKey) obj["geomKey"] = geomKey;
+            if (selKey) obj["selKey"] = selKey;
+            if (routeKey) obj["routeKey"] = routeKey;
         }
 
         void MapMeta::unmarshal(JsonObject obj) {
@@ -32,6 +36,10 @@ namespace ArduMower {
             rotation = obj["rotation"] | 0.0;
             timestamp = obj["timestamp"] | 0u;
             file = obj["file"] | "";
+            parentId = obj["parentId"] | "";
+            geomKey = obj["geomKey"] | 0u;
+            selKey = obj["selKey"] | 0u;
+            routeKey = obj["routeKey"] | 0u;
         }
 
         bool MapManager::begin() {
@@ -165,6 +173,9 @@ namespace ArduMower {
         }
 
         double MapManager::computeArea(const ArduMower::Domain::Robot::MowerMap &map) {
+            // Subkarte: ihre Auswahl (die genaue Schnittfläche mit der
+            // Elternkarte ergibt sich erst bei der Berechnung)
+            if (map.selection.size() >= 3) return std::abs(polygonArea(map.selection));
             double area = std::abs(polygonArea(map.perimeter));
             for (const auto &ex : map.exclusions) {
                 area -= std::abs(polygonArea(ex));
@@ -238,7 +249,7 @@ namespace ArduMower {
         }
 
         String MapManager::save(const ArduMower::Domain::Robot::MowerMap &map, const String &name, const String &currentId, double rotation,
-                                const std::function<void(int percent)> &progress) {
+                                const std::function<void(int percent)> &progress, const String &parentIdIn) {
             if (!_initialized && !begin()) return "";
             auto report = [&](int percent) { if (progress) progress(percent); };
             // Alle Änderungen am Index erst nach erfolgreichem Schreiben gelten
@@ -248,13 +259,26 @@ namespace ArduMower {
             auto rollback = [&]() { _index = indexBackup; return String(""); };
             report(0);
 
+            // Subkarte: neu unter parentIdIn oder eine bestehende Subkarte
+            String parentId = parentIdIn;
+            if (parentId.length() == 0 && currentId.length() > 0) {
+                const MapMeta *existing = findMeta(currentId);
+                if (existing) parentId = existing->parentId;
+            }
+            const bool isAreaMap = parentId.length() > 0;
+            if (isAreaMap && findMeta(parentId) == nullptr) {
+                Log(WARN, "%s save: übergeordnete Karte %s nicht gefunden", _LOG_, parentId.c_str());
+                return "";
+            }
+
             if (!isMapValid(map)) {
                 Log(WARN, "%s save: Karte ist ungültig, speichern abgelehnt", _LOG_);
                 return "";
             }
 
-            String hash = computeHash(map);
-            if (hash.length() == 0) {
+            // Die Geometrie einer Subkarte gehört der Hauptkarte: kein eigener Hash.
+            String hash = isAreaMap ? String("") : computeHash(map);
+            if (!isAreaMap && hash.length() == 0) {
                 Log(ERR, "%s save: Hash-Berechnung fehlgeschlagen", _LOG_);
                 return "";
             }
@@ -295,11 +319,12 @@ namespace ArduMower {
                     MapMeta newMeta;
                     // Die ID bleibt aus Kompatibilität der Geometrie-Hash; ist
                     // er bereits vergeben, wird sie über die Datei-Nummer
-                    // eindeutig gemacht.
-                    newMeta.id = hash;
-                    if (findMeta(newMeta.id) != nullptr) {
+                    // eindeutig gemacht. Subkarten haben keinen Hash.
+                    newMeta.id = isAreaMap ? String("area-") + String(_index.nextFileId) : hash;
+                    if (!isAreaMap && findMeta(newMeta.id) != nullptr) {
                         newMeta.id = hash + "-" + String(_index.nextFileId);
                     }
+                    newMeta.parentId = parentId;
                     newMeta.name = displayName;
                     newMeta.area = area;
                     newMeta.hash = hash;
@@ -313,13 +338,34 @@ namespace ArduMower {
                 }
             }
 
+            if (meta) {
+                if (isAreaMap) {
+                    meta->selKey = ArduMower::Domain::Robot::MowerMap::selectionKey(map.selection);
+                    meta->routeKey = map.routeKey;
+                } else {
+                    meta->geomKey = map.geometryKey();
+                }
+            }
+
             // JSON-Dokumente vorab bauen, um Speicherbedarf prüfen zu können
             JsonDocument mapDoc;
             JsonObject mapRoot = mapDoc.to<JsonObject>();
             JsonObject metaObj = mapRoot["meta"].to<JsonObject>();
             if (meta) meta->marshal(metaObj);
             JsonObject mapObj = mapRoot["map"].to<JsonObject>();
-            map.toJson(mapObj);
+            if (isAreaMap) {
+                // Nur der eigene Teil der Subkarte, ohne Geometrie
+                ArduMower::Domain::Robot::MowerMap own;
+                own.copySettingsFrom(map);
+                own.selection = map.selection;
+                own.waypoints = map.waypoints;
+                own.routeKey = map.routeKey;
+                own.rotation = map.rotation;
+                own.timestamp = map.timestamp;
+                own.toJson(mapObj);
+            } else {
+                map.toJson(mapObj);
+            }
 
             JsonDocument indexDoc;
             JsonObject indexRoot = indexDoc.to<JsonObject>();
@@ -377,7 +423,15 @@ namespace ArduMower {
         }
 
         bool MapManager::load(const String &id, ArduMower::Domain::Robot::MowerMap &out) {
+            return loadChain(id, out, 0);
+        }
+
+        bool MapManager::loadChain(const String &id, ArduMower::Domain::Robot::MowerMap &out, int depth) {
             if (!_initialized && !begin()) return false;
+            if (depth > 8) {
+                Log(ERR, "%s load: Kette der Subkarten zu tief (Zyklus?) bei %s", _LOG_, id.c_str());
+                return false;
+            }
             const MapMeta *meta = findMeta(id);
             if (!meta) {
                 Log(WARN, "%s load: Karte %s nicht gefunden", _LOG_, id.c_str());
@@ -396,9 +450,100 @@ namespace ArduMower {
                 Log(ERR, "%s load: Deserialisierung fehlgeschlagen: %s", _LOG_, err.c_str());
                 return false;
             }
+            if (meta->parentId.length() > 0) {
+                // Subkarte: Geometrie von der Elternkarte (rekursiv bis zur
+                // Hauptkarte), Auswahl, Einstellungen und Route aus der eigenen Datei
+                ArduMower::Domain::Robot::MowerMap own;
+                own.fromJson(doc.as<JsonObject>()["map"], false);
+                const String parentId = meta->parentId;
+                if (!loadChain(parentId, out, depth + 1)) return false;
+                out.selection = own.selection;
+                out.waypoints = own.waypoints;
+                out.routeKey = own.routeKey;
+                out.copySettingsFrom(own);
+                out.timestamp = millis();
+                return true;
+            }
             out.fromJson(doc.as<JsonObject>()["map"]);
+            // Karten von vor den Teilbereichen: Geometrie-Schlüssel nachtragen
+            if (meta->geomKey == 0) {
+                MapMeta *m = findMeta(id);
+                if (m) {
+                    m->geomKey = out.geometryKey();
+                    saveIndex();
+                }
+            }
             out.rotation = meta->rotation;
             out.timestamp = millis();
+            return true;
+        }
+
+        uint32_t MapManager::planKey(const String &id) const {
+            const MapMeta *meta = findMeta(id);
+            for (int depth = 0; meta && depth <= 8; depth++) {
+                if (meta->parentId.length() == 0) {
+                    if (!meta->geomKey) return 0;
+                    // Geometrie der Hauptkarte und die eigene Auswahl; die
+                    // Auswahl der Elternbereiche begrenzt einen Bereich nicht
+                    const MapMeta *own = findMeta(id);
+                    return ArduMower::Domain::Robot::MowerMap::chainKey(meta->geomKey,
+                        own && own != meta ? own->selKey : 0u);
+                }
+                meta = findMeta(meta->parentId);
+            }
+            return 0;
+        }
+
+        bool MapManager::isOutdated(const String &id) const {
+            const MapMeta *meta = findMeta(id);
+            if (!meta || meta->parentId.length() == 0) return false;
+            const uint32_t key = planKey(id);
+            return key != 0 && meta->routeKey != key;
+        }
+
+        bool MapManager::isArea(const String &id) const {
+            const MapMeta *meta = findMeta(id);
+            return meta && meta->parentId.length() > 0;
+        }
+
+        String MapManager::parentOf(const String &id) const {
+            const MapMeta *meta = findMeta(id);
+            return meta ? meta->parentId : String("");
+        }
+
+        std::vector<String> MapManager::descendants(const String &id) const {
+            std::vector<String> result;
+            std::vector<String> open{id};
+            while (!open.empty() && result.size() < _index.maps.size()) {
+                const String parent = open.back();
+                open.pop_back();
+                for (const auto &m : _index.maps) {
+                    if (m.parentId == parent) {
+                        result.push_back(m.id);
+                        open.push_back(m.id);
+                    }
+                }
+            }
+            return result;
+        }
+
+        bool MapManager::readAreaOwn(const String &id, JsonObject out) {
+            const MapMeta *meta = findMeta(id);
+            if (!meta || meta->parentId.length() == 0) return false;
+            ArduMower::Util::recoverAtomicFile(SPIFFS, meta->file);
+            File file = SPIFFS.open(meta->file);
+            if (!file || file.isDirectory()) return false;
+            JsonDocument doc;
+            auto err = deserializeJson(doc, file);
+            file.close();
+            if (err) return false;
+            JsonObject map = doc["map"];
+            if (!map) return false;
+            for (JsonPair kv : map) {
+                const char *key = kv.key().c_str();
+                if (strcmp(key, "waypoints") == 0 || strcmp(key, "routeKey") == 0) continue;
+                out[key] = kv.value();
+            }
             return true;
         }
 
@@ -431,32 +576,41 @@ namespace ArduMower {
 
         bool MapManager::remove(const String &id) {
             if (!_initialized && !begin()) return false;
-            for (auto it = _index.maps.begin(); it != _index.maps.end(); ++it) {
-                if (it->id == id) {
-                    // Erst den Index schreiben, dann die Dateien löschen: Schlägt
-                    // der Index fehl, bleibt die Karte vollständig erhalten.
-                    const auto indexBackup = _index;
-                    const String file = it->file;
-                    const bool wasActive = (_index.activeId == id);
+            if (findMeta(id) == nullptr) return false;
+            // Die Karte und alle ihre Unterbereiche
+            std::vector<String> ids = descendants(id);
+            ids.insert(ids.begin(), id);
+            // Erst den Index schreiben, dann die Dateien löschen: Schlägt
+            // der Index fehl, bleibt die Karte vollständig erhalten.
+            const auto indexBackup = _index;
+            std::vector<String> files;
+            bool activeRemoved = false;
+            for (const auto &removeId : ids) {
+                for (auto it = _index.maps.begin(); it != _index.maps.end(); ++it) {
+                    if (it->id != removeId) continue;
+                    files.push_back(it->file);
+                    if (_index.activeId == removeId) activeRemoved = true;
                     _index.maps.erase(it);
-                    // Beim Löschen der Default-Karte sofort auf die erste
-                    // verbleibende Karte umschalten – dieselbe Reparatur, die
-                    // begin() sonst erst nach dem nächsten Neustart macht.
-                    // Bis dahin liefen loadActive() und der Scheduler ins Leere.
-                    if (wasActive) {
-                        _index.activeId = _index.maps.empty() ? "" : _index.maps.front().id;
-                    }
-                    if (!saveIndex()) {
-                        _index = indexBackup;
-                        return false;
-                    }
-                    if (SPIFFS.exists(file)) SPIFFS.remove(file);
-                    const String tmp = ArduMower::Util::atomicTmpPath(file);
-                    if (SPIFFS.exists(tmp)) SPIFFS.remove(tmp);
-                    return true;
+                    break;
                 }
             }
-            return false;
+            // Beim Löschen der Default-Karte sofort auf die erste
+            // verbleibende Karte umschalten – dieselbe Reparatur, die
+            // begin() sonst erst nach dem nächsten Neustart macht.
+            // Bis dahin liefen loadActive() und der Scheduler ins Leere.
+            if (activeRemoved) {
+                _index.activeId = _index.maps.empty() ? "" : _index.maps.front().id;
+            }
+            if (!saveIndex()) {
+                _index = indexBackup;
+                return false;
+            }
+            for (const auto &file : files) {
+                if (SPIFFS.exists(file)) SPIFFS.remove(file);
+                const String tmp = ArduMower::Util::atomicTmpPath(file);
+                if (SPIFFS.exists(tmp)) SPIFFS.remove(tmp);
+            }
+            return true;
         }
 
         String MapManager::findByHash(const String &hash) const {

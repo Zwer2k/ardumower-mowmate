@@ -991,6 +991,20 @@ LapRings computeLapRings(const Polygon &perimeter, const std::vector<Polygon> &e
     return result;
 }
 
+// Geschlossener Ring (Anfang = Ende) oder offenes Stück einer auf die
+// Auswahl gekürzten Runde?
+static bool isClosedPath(const Polygon &p) {
+    return p.size() >= 3 && distance(p.front(), p.back()) < 0.01;
+}
+
+// Offenes Stück, so gedreht, dass es am Ende nächst near beginnt.
+static Polygon orderedPiece(const Polygon &piece, const Point &near) {
+    Polygon out = piece;
+    if (!out.empty() && distance(near, out.back()) < distance(near, out.front()))
+        std::reverse(out.begin(), out.end());
+    return out;
+}
+
 // Ring in Laufrichtung, geschlossen, beginnend am Punkt nächst near.
 static Polygon orderedRing(const Polygon &input, bool ccw, const Point &near) {
     Polygon ring = input;
@@ -1012,7 +1026,7 @@ static Polygon orderedRing(const Polygon &input, bool ccw, const Point &near) {
 // Ring und Punkt beginnend. Übergänge laufen über den Router.
 static void appendLapRings(Polygon &route, Point &near,
     const std::vector<std::vector<Polygon>> &laps, uint8_t tag, bool ccw,
-    const FreeSpaceRouter *router)
+    const FreeSpaceRouter *router, bool pieces = false)
 {
     for (const auto &lapRings : laps) {
         std::vector<Polygon> boundaries = lapRings;
@@ -1020,7 +1034,10 @@ static void appendLapRings(Polygon &route, Point &near,
         sortSolutionPolygonsByDistance(boundaries, near);
 
         for (size_t b = 0; b < boundaries.size(); b++) {
-            Polygon ordered = orderedRing(boundaries[b], ccw, near);
+            // Auf die Auswahl gekürzte Runden sind offene Stücke; ganz in der
+            // Auswahl liegende Runden bleiben geschlossen (Anfang = Ende).
+            Polygon ordered = !pieces || isClosedPath(boundaries[b])
+                ? orderedRing(boundaries[b], ccw, near) : orderedPiece(boundaries[b], near);
 
             // Übergang von der vorherigen Runde: direkt nur, wenn die Linie im
             // freien Raum bleibt, sonst um Exclusions und Buchten herum.
@@ -1056,10 +1073,10 @@ static void appendLapRings(Polygon &route, Point &near,
 // "Mow Border".
 static void appendPerimeterLaps(Polygon &route, Point &near, const LapRings &rings,
     const std::vector<Polygon> &exclusions, int exclusionLaps, bool ccw,
-    const FreeSpaceRouter *router)
+    const FreeSpaceRouter *router, bool pieces = false)
 {
     const size_t first = route.size();
-    appendLapRings(route, near, rings.perimeterLaps, RouteTagBorder, ccw, router);
+    appendLapRings(route, near, rings.perimeterLaps, RouteTagBorder, ccw, router, pieces);
     if (exclusionLaps <= 0) return;
     const double onEdge = 0.005;
     for (size_t i = first; i < route.size(); i++) {
@@ -1109,7 +1126,8 @@ static void appendConnector(Polygon &route, const Point &to, const FreeSpaceRout
 // Punkt (z. B. mehrere Runden um eine Exclusion), folgen sie direkt
 // aufeinander.
 static Polygon insertExclusionLaps(const Polygon &pattern,
-    const std::vector<std::vector<Polygon>> &laps, bool ccw, const FreeSpaceRouter &router)
+    const std::vector<std::vector<Polygon>> &laps, bool ccw, const FreeSpaceRouter &router,
+    bool pieces = false)
 {
     struct Visit { size_t at; size_t order; Polygon ring; };
     std::vector<Visit> visits;
@@ -1148,7 +1166,9 @@ static Polygon insertExclusionLaps(const Polygon &pattern,
         if (v >= visits.size() || visits[v].at != i) continue;
         const Point home = pattern[i];
         while (v < visits.size() && visits[v].at == i) {
-            Polygon ring = orderedRing(visits[v].ring, ccw, out.back());
+            // Auf die Auswahl gekürzte Runde: offenes Stück, vom näheren Ende
+            Polygon ring = !pieces || isClosedPath(visits[v].ring)
+                ? orderedRing(visits[v].ring, ccw, out.back()) : orderedPiece(visits[v].ring, out.back());
             appendConnector(out, ring[0], router);
             for (const auto &p : ring) {
                 if (distance(out.back(), p) <= 0.01 && out.back().tag == RouteTagExclusionBorder) continue;
@@ -1546,7 +1566,8 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
         settings.distanceToBorder, settings.borderLaps,
         settings.distanceToExclusions, settings.exclusionLaps);
 
-    Polygon perimeter = map.perimeter;
+    // Im Uhrzeigersinn gezeichnete Perimeter ergaben früher keine Route.
+    Polygon perimeter = map.perimeter.size() >= 3 ? positivelyOriented(map.perimeter) : map.perimeter;
     if (perimeter.size() < 3) {
         PP_LOG(0, "%sPerimeter too small", _LOG_);
         return {};
@@ -1568,8 +1589,52 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
         }
     }
 
-    MowableAreas mow = computeMowableAreas(perimeter, map.exclusions, settings);
-    if (mow.mowableRegion.empty()) {
+    // Subkarte (Bereich): Schnitt aller Auswahlflächen mit dem Perimeter. Ohne
+    // selectionEdgeLaps bleiben Randabstand und Randrunden an der echten
+    // Außengrenze, die Fläche und die Runden werden nur auf die Auswahl
+    // gekürzt; mit selectionEdgeLaps gilt der Schnitt als Perimeter.
+    Polygon selectionRegion;
+    if (!map.selections.empty()) {
+        std::vector<Polygon> region{positivelyOriented(perimeter)};
+        for (const auto &sel : map.selections) {
+            if (sel.size() < 3) continue;
+            region = clipIntersect(region, positivelyOriented(sel));
+            if (region.empty()) break;
+        }
+        double best = 0.0;
+        for (const auto &r : region) {
+            const double a = polygonArea(r);
+            if (a > best) { best = a; selectionRegion = r; }
+        }
+        if (selectionRegion.empty()) {
+            PP_LOG(0, "%sselection does not overlap the perimeter, nothing to mow", _LOG_);
+            return {};
+        }
+        if (region.size() > 1)
+            PP_LOG(0, "%sselection splits into %d parts, mowing the largest", _LOG_, (int)region.size());
+    }
+    const bool hasSelection = !selectionRegion.empty();
+    const bool selectionAsBorder = hasSelection && settings.selectionEdgeLaps;
+    const bool lapPieces = hasSelection && !selectionAsBorder;
+    const Polygon planPerimeter = selectionAsBorder ? selectionRegion : perimeter;
+    // Alle Fahrten eines Bereichs bleiben in seiner Auswahl: Der Wegfinder des
+    // Perimeters nahm sonst Umwege außerhalb der Auswahl (mit laufendem Messer).
+    const Polygon &container = hasSelection ? selectionRegion : perimeter;
+
+    MowableAreas mow = computeMowableAreas(planPerimeter, map.exclusions, settings);
+    if (lapPieces) {
+        auto clipToSelection = [&](std::vector<Polygon> &polys) {
+            std::vector<Polygon> clipped;
+            for (auto &p : clipIntersect(polys, selectionRegion))
+                if (p.size() >= 3) clipped.push_back(p);
+            polys = std::move(clipped);
+        };
+        clipToSelection(mow.areasToMow);
+        for (auto it = mow.areasToMow.begin(); it != mow.areasToMow.end(); )
+            if (polygonArea(*it) <= 0.0) it = mow.areasToMow.erase(it); else ++it;
+        clipToSelection(mow.mowableRegion);
+    }
+    if (mow.mowableRegion.empty() || (hasSelection && mow.areasToMow.empty())) {
         return {};
     }
     std::vector<Polygon> &areasToMow = mow.areasToMow;
@@ -1584,13 +1649,13 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
     std::vector<Polygon> exclusionObstacles;
     for (const auto &ex : map.exclusions)
         if (ex.size() >= 3) exclusionObstacles.push_back(ex);
-    const FreeSpaceRouter router(perimeter, exclusionObstacles, preferredRoutes);
+    const FreeSpaceRouter router(container, exclusionObstacles, preferredRoutes);
     // Verbindungen innerhalb des Mähmusters bleiben bevorzugt in der Mähfläche
     // (Randabstand) und außerhalb der aufgeweiteten Exclusion-Löcher.
     std::vector<FreeSpaceRouter> areaRouters;
     areaRouters.reserve(areasToMow.size());
     for (const auto &area : areasToMow) areaRouters.emplace_back(area, holes, preferredRoutes);
-    const FreeSpaceRouter spacedRouter(perimeter, holes, preferredRoutes);
+    const FreeSpaceRouter spacedRouter(container, holes, preferredRoutes);
     ConnectorRouting routing;
     routing.perimeter = &router;
     if (!holes.empty()) routing.spaced = &spacedRouter;
@@ -1604,7 +1669,58 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
         : (settings.exclusionLaps < 0 ? borderLaps : settings.exclusionLaps);
     const bool hasLaps = borderLaps > 0 || (exclusionLaps > 0 && !lapExclusions.empty());
     LapRings lapRings;
-    if (hasLaps) lapRings = computeLapRings(perimeter, lapExclusions, borderLaps, exclusionLaps, settings.width);
+    if (hasLaps) lapRings = computeLapRings(planPerimeter, lapExclusions, borderLaps, exclusionLaps, settings.width);
+    if (hasLaps && lapPieces) {
+        // Runden auf die Auswahl kürzen: offene Stücke; ganz in der Auswahl
+        // liegende Runden bleiben geschlossen. Geschnitten wird mit der
+        // Auswahl allein, nicht mit ihrem Schnitt mit dem Perimeter: Die erste
+        // Runde liegt auf dem Perimeter, also genau auf dessen Kante, und
+        // Clipper verwarf solche Stücke teilweise (eine ganze Seite fehlte).
+        // Im Perimeter liegen die Runden ohnehin.
+        std::vector<Polygon> selectionClip;
+        for (const auto &sel : map.selections) {
+            if (sel.size() < 3) continue;
+            selectionClip = selectionClip.empty()
+                ? std::vector<Polygon>{positivelyOriented(sel)}
+                : clipIntersect(selectionClip, positivelyOriented(sel));
+        }
+        auto inSelection = [&](const Point &p) {
+            for (const auto &poly : selectionClip) if (pointInPolygon(p, poly)) return true;
+            return false;
+        };
+        auto clipLaps = [&](std::vector<std::vector<Polygon>> &laps) {
+            std::vector<std::vector<Polygon>> out;
+            for (const auto &lap : laps) {
+                std::vector<Polygon> pieces;
+                for (const auto &ring : lap) {
+                    if (ring.size() < 3) continue;
+                    // Die Runde als offenen Pfad schneiden, der an einem Punkt
+                    // außerhalb der Auswahl beginnt und endet: Lag der Anfang
+                    // in der Auswahl, verlor Clipper eines der Stücke (z. B.
+                    // die ganze rechte Seite der ersten Runde).
+                    size_t start = ring.size();
+                    for (size_t k = 0; k < ring.size(); k++)
+                        if (!inSelection(ring[k])) { start = k; break; }
+                    if (start == ring.size()) {
+                        // ganz in der Auswahl: bleibt eine geschlossene Runde
+                        Polygon closed = ring;
+                        closed.push_back(ring.front());
+                        pieces.push_back(std::move(closed));
+                        continue;
+                    }
+                    Polygon path;
+                    path.reserve(ring.size() + 1);
+                    for (size_t k = 0; k <= ring.size(); k++) path.push_back(ring[(start + k) % ring.size()]);
+                    for (const auto &p : clipIntersectOpen({path}, selectionClip))
+                        if (p.size() >= 2) pieces.push_back(p);
+                }
+                if (!pieces.empty()) out.push_back(std::move(pieces));
+            }
+            laps = std::move(out);
+        };
+        clipLaps(lapRings.perimeterLaps);
+        clipLaps(lapRings.exclusionLaps);
+    }
 
     // Flächenmuster ab startNear (unverändert gegenüber früher)
     auto computeAreaPattern = [&](const Point &startNear) -> Polygon {
@@ -1618,7 +1734,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
                 const double share = totalArea > 0 ? std::abs(polygonArea(area)) / totalArea : 1.0;
                 const Progress areaProgress = patternProgress.sub(doneArea, doneArea + share);
                 doneArea += share;
-                Polygon ar = calculateRingsPattern(perimeter, area, holes, settings.width, startNear, &routing,
+                Polygon ar = calculateRingsPattern(container, area, holes, settings.width, startNear, &routing,
                     &areaProgress);
                 for (auto &point : ar) point.tag = RouteTagArea;
                 if (!ar.empty()) allSegments.push_back(ar);
@@ -1689,7 +1805,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
                     sortSolutionPolygonsByDistance(passSegments, startNear);
                     Polygon passRoute;
                     passProgress.report(0.1);
-                    connectPolysUsingPathFinding(passRoute, passSegments, perimeter, areasToMow, holes, false,
+                    connectPolysUsingPathFinding(passRoute, passSegments, container, areasToMow, holes, false,
                         preferredRoutes, &routing, &passConnect);
                     passRoute = pruneOutside(passRoute, areasToMow);
                     if (!passRoute.empty()) allSegments.push_back(passRoute);
@@ -1700,7 +1816,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
         Polygon pattern;
         if (!allSegments.empty()) {
             sortSolutionPolygonsByDistance(allSegments, startNear);
-            connectPolysUsingPathFinding(pattern, allSegments, perimeter, areasToMow, holes, false,
+            connectPolysUsingPathFinding(pattern, allSegments, container, areasToMow, holes, false,
                 preferredRoutes, &routing);
             pattern = pruneOutside(pattern, areasToMow);
         }
@@ -1747,7 +1863,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
             if (!settings.mowArea) break;
             Polygon pattern = computeAreaPattern(startNear);
             if (lapsWithArea && !pattern.empty())
-                pattern = insertExclusionLaps(pattern, lapRings.exclusionLaps, settings.mowBorderCcw, router);
+                pattern = insertExclusionLaps(pattern, lapRings.exclusionLaps, settings.mowBorderCcw, router, lapPieces);
             appendPart(pattern);
             break;
         }
@@ -1755,11 +1871,11 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
             if (borderLaps <= 0) break;
             Polygon laps;
             Point near = startNear;
-            appendPerimeterLaps(laps, near, lapRings, lapExclusions, exclusionLaps, settings.mowBorderCcw, &router);
+            appendPerimeterLaps(laps, near, lapRings, lapExclusions, exclusionLaps, settings.mowBorderCcw, &router, lapPieces);
             // Folgen die Exclusion-Runden direkt, entstehen sie in einem Zug
             // (wie früher addBorderLaps): die Überfahrt gehört zum Exclusion-Rand.
             if (i + 1 < 3 && order[i + 1] == RouteBlockExclusionBorder && exclusionLaps > 0 && !lapsWithArea) {
-                appendLapRings(laps, near, lapRings.exclusionLaps, RouteTagExclusionBorder, settings.mowBorderCcw, &router);
+                appendLapRings(laps, near, lapRings.exclusionLaps, RouteTagExclusionBorder, settings.mowBorderCcw, &router, lapPieces);
                 exclusionLapsDone = true;
             }
             appendPart(laps);
@@ -1769,7 +1885,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
             if (exclusionLaps <= 0 || lapsWithArea || exclusionLapsDone) break;
             Polygon laps;
             Point near = startNear;
-            appendLapRings(laps, near, lapRings.exclusionLaps, RouteTagExclusionBorder, settings.mowBorderCcw, &router);
+            appendLapRings(laps, near, lapRings.exclusionLaps, RouteTagExclusionBorder, settings.mowBorderCcw, &router, lapPieces);
             appendPart(laps);
             break;
         }
@@ -1779,7 +1895,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
     patternProgress.report(1.0);
 
     borderProgress.report(1.0);
-    route = pruneOutside(route, perimeter);
+    route = pruneOutside(route, container);
 
     // Final safety pass: ensure no route segment leaves the perimeter or runs
     // through an exclusion. This can happen for connector segments produced by

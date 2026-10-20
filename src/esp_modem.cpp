@@ -110,7 +110,22 @@ Prometheus::LooptimeMonitor looptime;
 PS4controller::Adapter ps4ControllerAdapter(settings, mowerAdapter, mowerAdapter); 
 #endif
 
+// Startdauer je Schritt (ms), steht in jeder Heartbeat-Zeile: Die Startzeilen
+// selbst sind im Log-Ringpuffer bald überschrieben.
+static char bootTimes[160] = "";
+static uint32_t bootFirstWifiMs = 0;
+static uint32_t bootFirstClientMs = 0;
+
 void setup() {
+  uint32_t stepStart = millis();
+  size_t bootLen = 0;
+  auto step = [&](const char *name) {
+    const uint32_t now = millis();
+    if (bootLen < sizeof(bootTimes))
+      bootLen += snprintf(bootTimes + bootLen, sizeof(bootTimes) - bootLen, "%s%s=%lu",
+                          bootLen ? " " : "", name, (unsigned long)(now - stepStart));
+    stepStart = now;
+  };
   Serial.begin(115200, SERIAL_8N1);
 
   Serial2.setRxBufferSize(4096); // must be called before begin(), default 256 overflows with UBX responses
@@ -128,12 +143,14 @@ void setup() {
   api.begin(&bleAdapter);
   settings.begin();
   scheduleManager.begin();
+  step("settings");
 #ifdef ESP_MODEM_SIM
   con.begin();
 #elif MOWER_TERMINAL
   terminal.begin();
 #endif
   wifiAdapter.begin();
+  step("wifi");
   router.begin();
   modemCli.begin();
 #ifdef ENABLE_ARDUINO_OTA
@@ -145,14 +162,21 @@ void setup() {
     socketHandler.broadcastFirmwareStatus(status);
   };
   socketHandler.onFirmwareStatusRequest = [&](bool force){ otaHttpServer.requestFirmwareStatus(force); };
+  step("ota");
   bleAdapter.begin();
+  step("ble");
   httpAdapter.begin();
   mowerAdapter.begin();
+  step("mower");
   mqttAdapter.begin();
   prometheusAdapter.begin();
   ui.begin();
   socketHandler.begin();
   webServer.begin();
+  step("web");
+  if (bootLen < sizeof(bootTimes))
+    snprintf(bootTimes + bootLen, sizeof(bootTimes) - bootLen, " setup=%lu", (unsigned long)millis());
+  Log(INFO, "boot: %s", bootTimes);
 #ifdef ENABLE_PS4_CONTROLLER
   ps4ControllerAdapter.begin();
 #endif
@@ -192,6 +216,12 @@ void setup() {
   looptime.add("ps4_controller", [&](){ if (!Ota::MowerUpdater::isFlashing()) ps4ControllerAdapter.loop(); });
 #endif
   
+  // Wann WLAN und der erste Browser zum ersten Mal da waren (ms seit Start)
+  looptime.add("boot_times", [&]() {
+    if (bootFirstWifiMs == 0 && WiFi.status() == WL_CONNECTED) bootFirstWifiMs = millis();
+    if (bootFirstClientMs == 0 && socketHandler.clientCount() > 0) bootFirstClientMs = millis();
+  });
+
   looptime.add("heartbeat", [&]() {
     static uint32_t last = 0;
     uint32_t now = millis();
@@ -204,6 +234,9 @@ void setup() {
         (int)ws, rssi, socketHandler.clientCount(),
         httpAdapter.queueSize(), httpAdapter.requestCount(),
         ArduMower::Modem::BootDiag::lastResetReason());
+    // Eigene Zeile: Log-Einträge sind auf 128 Zeichen begrenzt
+    Log(INFO, "boot ms: %s wifiUp=%lu client=%lu", bootTimes,
+        (unsigned long)bootFirstWifiMs, (unsigned long)bootFirstClientMs);
   });
 
   looptime.add("wifi_health", [&]() {

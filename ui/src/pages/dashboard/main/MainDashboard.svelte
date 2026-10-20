@@ -5,6 +5,8 @@
     import Home from "carbon-icons-svelte/lib/Home.svelte";
     import SkipForwardFilled from "carbon-icons-svelte/lib/SkipForwardFilled.svelte";
     import Upload from "carbon-icons-svelte/lib/Upload.svelte";
+    import ListChecked from "carbon-icons-svelte/lib/ListChecked.svelte";
+    import MowNowDialog from './MowNowDialog.svelte';
     import { socketStore, socketService } from '../../../stores/socket';
     import { scheduleStore, scheduleNextRunDisplay } from '../../../stores/schedule';
     import { page } from '$app/stores';
@@ -19,6 +21,20 @@
     import { confirmUploadCapacity } from '../../../map/services/mower-capacity';
     import { sensorFallbackStore, sonarRecentlyTriggered } from '../../../stores/sensor-fallback';
     import SensorReasonTag from '../../../widget/SensorReasonTag.svelte';
+    import { mowJobStore, isJobOnMower, isJobPreview, jobRouteIndex } from '../../../stores/mow-job';
+
+    let mowNowOpen = $state(false);
+
+    // Vorschau eines Auftrags: Upload schickt ihn, Start startet ihn (mit Serie)
+    function uploadJobOrMap(preview: boolean) {
+        if (preview) socketService.sendUploadJob();
+        else void uploadMap();
+    }
+
+    function startMowing(jobOnMower: boolean) {
+        if (jobOnMower) socketService.sendRunJob();
+        else sendCmd('start');
+    }
 
     async function uploadMap() {
         if (await confirmUploadCapacity()) socketService.sendUploadMap();
@@ -142,11 +158,14 @@
         {@const sensor = $socketStore.sensorSummary}
         {@const desc = $socketStore.valueDescriptions}
         {@const pos = state?.position}
-        {@const totalPoints = ($MapStore?.map?.waypoints?.points?.length ?? 0)}
-        {@const currentPoint = (pos?.mow_point_index ?? -1) >= 0 ? (pos?.mow_point_index ?? -1) + 1 : 0}
+        {@const totalPoints = isJobOnMower($mowJobStore, $socketStore.state) ? ($mowJobStore?.total ?? 0) : ($MapStore?.map?.waypoints?.points?.length ?? 0)}
+        {@const routeIndex = isJobOnMower($mowJobStore, $socketStore.state) ? jobRouteIndex($mowJobStore, pos?.mow_point_index ?? -1) : (pos?.mow_point_index ?? -1)}
+        {@const currentPoint = routeIndex >= 0 ? routeIndex + 1 : 0}
         {@const storedCrc = $socketStore?.currentMapMeta?.crc ?? 0}
         {@const hasMapData = ($MapStore?.map?.perimeter?.points?.length ?? 0) > 0}
-        {@const isMapSynced = isMowerMapSynced(state, $socketStore.currentMapId, storedCrc)}
+        {@const jobOnMower = isJobOnMower($mowJobStore, state)}
+        {@const jobPreview = isJobPreview($mowJobStore, state)}
+        {@const isMapSynced = jobOnMower || isMowerMapSynced(state, $socketStore.currentMapId, storedCrc)}
 
         <Row narrow class="metrics-row">
             <Column sm={4} md={8} lg={5} class="metrics-col">
@@ -180,7 +199,7 @@
                         {/if}
                     </Tile>
                     <Tile class="mow-areas-tile compact">
-                        <MowAreaToggles horizontal={true} showTitle={false} labelPrefix="Mow " />
+                        <MowAreaToggles horizontal={true} showTitle={false} labelPrefix="Mow " jobMode={jobOnMower || jobPreview} />
                     </Tile>
                     <style>
                         :global(.mow-areas-tile) {
@@ -352,15 +371,20 @@
 
         <!-- Schnellaktionen -->
         <div class="quick-actions">
-            {#if hasMapData && !isMapSynced}
-                <Button kind="primary" icon={Upload} size="small" class="action-upload" on:click={uploadMap} />
+            {#if jobPreview || (hasMapData && !isMapSynced)}
+                <Button kind="primary" icon={Upload} size="small" class="action-upload"
+                    iconDescription={jobPreview ? "Upload the job" : "Upload the map"} tooltipPosition="top"
+                    on:click={() => uploadJobOrMap(jobPreview)} />
             {/if}
-            <Button kind="primary" icon={PlayFilledAlt} size="small" class="action-start" disabled={hasMapData && !isMapSynced} on:click={() => sendCmd('start')} />
+            <Button kind="primary" icon={ListChecked} size="small" class="action-mow-now" iconDescription="Choose areas"
+                tooltipPosition="top" on:click={() => (mowNowOpen = true)} />
+            <Button kind="primary" icon={PlayFilledAlt} size="small" class="action-start" disabled={jobPreview || (hasMapData && !isMapSynced)} on:click={() => startMowing(jobOnMower)} />
             <Button kind="danger" icon={StopFilledAlt} size="small" class="action-stop" disabled={hasMapData && !isMapSynced} on:click={() => sendCmd('stop')} />
             <Button kind="secondary" icon={Home} size="small" class="action-dock" disabled={hasMapData && !isMapSynced} on:click={() => sendCmd('dock')} />
             <Button kind="tertiary" icon={SkipForwardFilled} size="small" class="action-skip" disabled={hasMapData && !isMapSynced} on:click={() => sendCmd('skipWaypoint')} />
         </div>
     {/if}
+    <MowNowDialog bind:open={mowNowOpen} />
 </div>
 
 <style lang="scss">
@@ -905,6 +929,13 @@
             width: auto;
             padding: 0 12px;
             gap: 8px;
+        }
+
+        :global(.action-mow-now .bx--btn__icon)::after {
+            content: 'Areas';
+            margin-left: 8px;
+            font-size: 0.875rem;
+            white-space: nowrap;
         }
 
         :global(.action-start .bx--btn__icon)::after {

@@ -15,6 +15,24 @@ export const defaultScheduleState: ScheduleState = {
   dirty: false,
 };
 
+/** Bereiche eines Eintrags; ältere Einträge kennen nur mapId */
+export function entryAreaIds(e: ScheduleEntry): string[] {
+  if (e.areaIds && e.areaIds.length > 0) return e.areaIds;
+  return e.mapId ? [e.mapId] : [];
+}
+
+// Feste Feldreihenfolge und Vorgaben, damit das Echo des Backends (das alte
+// Einträge um areaIds ergänzt) als solches erkannt wird.
+export function canonicalScheduleJson(data: Pick<ScheduleData, "enabled" | "entries">): string {
+  return JSON.stringify({
+    enabled: data.enabled ?? false,
+    entries: (data.entries ?? []).map((e) => [
+      e.id, e.enabled, e.name, entryAreaIds(e), e.mapName, e.overlapOnce ?? false,
+      e.mode, e.hour, e.minute, e.daysOfWeek, e.daysOfMonth,
+    ]),
+  });
+}
+
 function createScheduleStore() {
   const { subscribe, set, update } = writable<ScheduleState>(defaultScheduleState);
 
@@ -44,7 +62,7 @@ function createScheduleStore() {
         enabled: data.enabled ?? false,
         entries: data.entries ? [...data.entries] : [],
       };
-      const incomingJson = JSON.stringify(incoming);
+      const incomingJson = canonicalScheduleJson(incoming);
       const isEcho = incomingJson === lastSentScheduleJson;
       if (isEcho) {
         console.log("[schedule] resetFromBackend ignored echo");
@@ -68,7 +86,7 @@ function createScheduleStore() {
           enabled: s.enabled,
           entries: s.entries.map((e) => ({ ...e })),
         };
-        lastSentScheduleJson = JSON.stringify(draft);
+        lastSentScheduleJson = canonicalScheduleJson(draft);
         socketService.sendSetSchedule(draft);
         return { ...s, dirty: true };
       });
@@ -99,6 +117,7 @@ export function newScheduleEntry(currentMapId: string, currentMapName: string): 
     name: "Mow",
     mapId: currentMapId,
     mapName: currentMapName,
+    areaIds: currentMapId ? [currentMapId] : [],
     mode: 0,
     hour: 8,
     minute: 0,
@@ -178,3 +197,14 @@ export function useCurrentMap(maps: MapMeta[], currentMapId: string): { id: stri
   if (!map) return null;
   return { id: map.id, name: map.name };
 }
+
+/**
+ * Vorschau des im Zeitplaner gewählten Eintrags auf der Karte: die Flächen
+ * seiner Bereiche (nummeriert) oder die vom Modem zusammengesetzte Route.
+ */
+export interface SchedulePreview {
+  areaIds: string[];
+  overlapOnce: boolean;
+  mode: "areas" | "route";
+}
+export const schedulePreviewStore = writable<SchedulePreview | null>(null);

@@ -11,11 +11,16 @@
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
     import { splitRouteProgress, routeTransits, mergeTransits } from '../../../map/core/route-progress';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
+    import { mowJobStore, isJobOnMower, isJobPreview, jobPartProgress, jobRouteIndex, outlineAsMap } from '../../../stores/mow-job';
     import { relativeToAbsolute, type GeoJsonReference } from '../../../map/core/map-formats';
     import { BackendSettings } from '../../../stores/backend';
 
     let settingsPos = $derived($BackendSettings?.position);
-    let mowerMap = $derived($MapStore?.map);
+    // Bei einem Auftrag (Vorschau oder auf dem Mäher) dessen Karte zeichnen: Er
+    // gehört nicht zwingend zur geladenen Karte
+    let jobOutline = $derived($mowJobStore && (isJobOnMower($mowJobStore, $socketStore.state) ||
+        isJobPreview($mowJobStore, $socketStore.state)) ? $mowJobStore.geometry : undefined);
+    let mowerMap = $derived(jobOutline ? (outlineAsMap(jobOutline) as unknown as import('../../../map/model').Map) : $MapStore?.map);
 
     // Bezugspunkt der Kartenkoordinaten (Meter) auf der Erde:
     // - Position mode "Absolute": die eingestellte Referenz, wie beim
@@ -207,10 +212,31 @@
         const synced = isMowerMapSynced(state, $socketStore.currentMapId, $socketStore.currentMapMeta?.crc ?? 0);
         const mpi = state?.position?.mow_point_index ?? -1;
         const transitCount = $socketStore.currentMapTransits?.length ?? -1;
-        const key = !mapLayer || !showRoute || !ref || !m ? '' : JSON.stringify([mapLayerKey, synced, mpi, transitCount]);
+        // Ein Mähauftrag aus mehreren Bereichen ersetzt die Route der geladenen Karte
+        // Auch die Vorschau eines Auftrags (noch nicht hochgeladen), ohne Fortschritt
+        const jobOnMower = isJobOnMower($mowJobStore, state);
+        const job = jobOnMower || isJobPreview($mowJobStore, state) ? $mowJobStore : null;
+        const key = !mapLayer || !showRoute || !ref || !m ? '' : JSON.stringify([mapLayerKey, synced, mpi, transitCount, job?.timestamp ?? 0, jobOnMower]);
         if (key === routeLayerKey && (key === '' || routeLayer)) return;
         routeLayerKey = key;
         if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+        if (key && job) {
+            const toLL = (p: { x: number; y: number }) => mapToLatLng(p, ref!);
+            routeLayer = L.layerGroup();
+            for (const part of jobPartProgress(job.points, job.parts, jobRouteIndex(job, mpi), jobOnMower)) {
+                for (const seg of part.done) {
+                    L.polyline(seg.map(toLL), { color: '#7f7f7f', weight: 2, opacity: 0.125 }).addTo(routeLayer);
+                }
+                for (const seg of part.todo) {
+                    L.polyline(seg.map(toLL), { color: part.color, weight: 2, opacity: 0.7 }).addTo(routeLayer);
+                }
+                if (part.current) {
+                    L.polyline(part.current.map(toLL), { color: 'black', weight: 2, opacity: 0.8, dashArray: '4,3' }).addTo(routeLayer);
+                }
+            }
+            routeLayer.addTo(map);
+            return;
+        }
         if (!key || !m || m.waypoints.points.length < 2) return;
 
         const toLL = (p: { x: number; y: number }) => mapToLatLng(p, ref!);
@@ -348,7 +374,7 @@
 
     // Karte, Bezugspunkt oder Mäh-Einstellungen geändert
     $effect(() => {
-        const deps = [mowerMap, reference, $mowSettingsStore];
+        const deps = [mowerMap, reference, $mowSettingsStore, $mowJobStore];
         if (deps && map && L) updateLayers();
     });
 

@@ -10,7 +10,6 @@
         StructuredListRow,
         TextInput,
         TimePicker,
-        Dropdown,
         Checkbox,
         Toggle,
         FormGroup,
@@ -28,8 +27,14 @@
         toggleWeekDay,
         hasMonthDay,
         toggleMonthDay,
-        useCurrentMap,
+        entryAreaIds,
     } from "../../stores/schedule";
+    import AreaJobPicker from "../AreaJobPicker.svelte";
+    import PortalDropdown from "../../widget/PortalDropdown.svelte";
+    import { onDestroy } from "svelte";
+    import { schedulePreviewStore } from "../../stores/schedule";
+    import { get } from "svelte/store";
+    import { jobName } from "../area-job";
     import { socketStore } from "../../stores/socket";
 
     const weekDays = [
@@ -51,24 +56,30 @@
     ];
 
     let selectedEntryId: number | null = null;
+    // Vorschau des gewählten Eintrags auf der Karte. Umgeschaltet wird oben
+    // links auf der Karte (SchedulePreviewToggle); ein anderer Eintrag beginnt
+    // wieder mit den nummerierten Flächen.
+    let lastPreviewEntryId: number | null = null;
+    $: previewIds = selectedEntry ? entryAreaIds(selectedEntry) : [];
+    $: previewOverlap = selectedEntry?.overlapOnce ?? false;
+    $: updatePreview(selectedEntry?.id ?? null, previewIds, previewOverlap);
+    function updatePreview(id: number | null, ids: string[], overlap: boolean) {
+        const current = get(schedulePreviewStore);
+        const mode = id === lastPreviewEntryId && current ? current.mode : "areas";
+        lastPreviewEntryId = id;
+        schedulePreviewStore.set(ids.length > 0 ? { areaIds: ids, overlapOnce: overlap, mode } : null);
+    }
+    onDestroy(() => schedulePreviewStore.set(null));
+
     $: entries = $scheduleStore.entries;
     $: selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? null;
-    $: currentMap = useCurrentMap($socketStore.maps, $socketStore.currentMapId);
-    // Der Scheduler lädt die gespeicherte Version der Karte hoch; eine
-    // transiente (nie gespeicherte) Karte kann er nicht ausführen.
-    $: currentMapIsTransient = !!currentMap && currentMap.id.startsWith("__t_");
-    $: canAdd = currentMap != null && !currentMapIsTransient;
+    // Ein neuer Eintrag beginnt ohne Karte; sie wird im Editor gewählt
+    $: canAdd = true;
     $: hasScheduleDirty = $scheduleStore.dirty;
 
-    let currentMapId: string | null = null;
-    $: if ($socketStore.currentMapId !== currentMapId) {
-        currentMapId = $socketStore.currentMapId;
-        selectedEntryId = null;
-    }
 
     function addEntry() {
-        if (!currentMap) return;
-        const entry = newScheduleEntry(currentMap.id, currentMap.name);
+        const entry = newScheduleEntry("", "");
         entry.id = nextEntryId(entries);
         scheduleStore.update((s) => {
             const next = { ...s, entries: [...s.entries, entry] };
@@ -95,6 +106,17 @@
             ),
         }));
         scheduleStore.commitDraft();
+    }
+
+    function onAreasChange(entry: typeof selectedEntry, detail: { selected: string[]; overlapOnce: boolean }) {
+        if (!entry) return;
+        const ids = detail.selected;
+        updateEntry(entry.id, {
+            areaIds: ids,
+            mapId: ids[0] ?? "",
+            mapName: jobName(ids, $socketStore.maps),
+            overlapOnce: detail.overlapOnce,
+        });
     }
 
     function onSelectMode(
@@ -153,23 +175,15 @@
             >
                 <span class="btn-label">Add</span>
             </Button>
-            {#if currentMap}
-                <span class="map-hint"
-                    >Map: <strong>{currentMap.name}</strong></span
-                >
-                {#if currentMapIsTransient}
-                    <span class="map-hint warn">Save the map first</span>
-                {/if}
-            {:else}
-                <span class="map-hint warn">No map loaded</span>
-            {/if}
             <div
                 class="schedule-toggle"
                 title="Enable/disable the scheduler"
             >
                 <Toggle
                     hideLabel
-                    labelText=""
+                    labelText="Scheduler"
+                    labelA=""
+                    labelB=""
                     toggled={$scheduleStore.enabled}
                     on:toggle={(e) => {
                         if (e.detail.toggled === $scheduleStore.enabled) return;
@@ -261,8 +275,8 @@
                         {:else}
                             <StructuredListRow>
                                 <StructuredListCell style="grid-column: span 5"
-                                    >No entries yet. Add one for the current
-                                    map.</StructuredListCell
+                                    >No entries yet. Add one and choose its
+                                    map and areas.</StructuredListCell
                                 >
                             </StructuredListRow>
                         {/each}
@@ -284,7 +298,7 @@
                         value={formatTime(entry.hour, entry.minute)}
                         on:change={(e) => onTimeChange(entry, e)}
                     />
-                    <Dropdown
+                    <PortalDropdown
                         titleText="Repeat"
                         items={modeItems}
                         selectedId={String(entry.mode)}
@@ -346,9 +360,19 @@
                     {/if}
                     <div class="map-readonly">
                         <IconCalendar size={16} />
-                        Map for this entry:
-                        <strong>{entry.mapName}</strong>
+                        Mowed in this entry:
+                        <strong>{entry.mapName || "nothing selected"}</strong>
                     </div>
+                    {#key entry.id}
+                        <AreaJobPicker
+                            maps={$socketStore.maps}
+                            mapId={entryAreaIds(entry).find((id) => $socketStore.maps.some((m) => m.id === id)) ?? ""}
+                            preselectMap={false}
+                            selected={entryAreaIds(entry)}
+                            overlapOnce={entry.overlapOnce ?? false}
+                            on:change={(e) => onAreasChange(entry, e.detail)}
+                        />
+                    {/key}
                 </div>
             {/if}
         </div>
@@ -376,17 +400,11 @@
         margin-left: 0.5rem;
         margin-right: 0.25rem;
     }
-    .map-hint {
-        font-size: 0.875rem;
-        color: #525252;
-    }
-    .map-hint.warn {
-        color: #da1e28;
-    }
     .schedule-toggle {
         display: inline-flex;
         align-items: center;
         margin-left: auto;
+        margin-right: 0.5rem;
     }
     .schedule-toggle :global(.bx--toggle) {
         min-width: 0;
@@ -397,7 +415,11 @@
     .schedule-toggle :global(.bx--toggle__label-text) {
         display: none;
     }
-    .schedule-toggle :global(.bx--toggle__text) {
+    /* Carbon schreibt "On"/"Off" neben den Schalter; das verbreiterte die
+       Zeile über die Seitenleiste hinaus (horizontaler Scrollbalken) */
+    .schedule-toggle :global(.bx--toggle__text),
+    .schedule-toggle :global(.bx--toggle__text--off),
+    .schedule-toggle :global(.bx--toggle__text--on) {
         display: none;
     }
     .schedule-form {
@@ -406,11 +428,9 @@
         min-height: 0;
         overflow: visible;
     }
+    /* Kein eigener Scroller: Die ganze Seitenleiste scrollt (Map.svelte) */
     .schedule-list-wrapper {
-        flex: 1 1 auto;
-        min-height: 8rem;
-        max-height: 35vh;
-        overflow-y: auto;
+        flex: 0 0 auto;
         margin-bottom: 0.25rem;
     }
     .schedule-form :global(.bx--form-item) {
@@ -463,16 +483,13 @@
         padding: 0.5rem;
         background: #f4f4f4;
         border-radius: 4px;
-        max-height: 45vh;
         overflow: visible;
         display: flex;
         flex-direction: column;
         min-height: 0;
     }
     .entry-edit-scroll {
-        flex: 0 1 auto;
-        min-height: 0;
-        overflow-y: auto;
+        flex: 0 0 auto;
         margin-bottom: 0.5rem;
     }
     .entry-edit-scroll :global(.bx--form-item) {

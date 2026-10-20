@@ -19,6 +19,7 @@ export function cloneMap(map: Map): Map {
     dockpoints: { points: map.dockpoints.points.map((p) => ({ ...p })) },
     searchWire: { points: map.searchWire.points.map((p) => ({ ...p })) },
     waypoints: { points: map.waypoints.points.map((p) => ({ ...p })) },
+    ...(map.selection ? { selection: { points: map.selection.points.map((p) => ({ ...p })) } } : {}),
   };
 }
 
@@ -51,6 +52,7 @@ export function emptyMap(): Map {
     dockpoints: { points: [] } as Dockpoints,
     searchWire: { points: [] } as SearchWire,
     waypoints: { points: [] } as Waypoints,
+    selection: { points: [] },
   };
 }
 

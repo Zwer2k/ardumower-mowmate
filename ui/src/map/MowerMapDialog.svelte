@@ -12,7 +12,14 @@
     exportMowerMap,
     importMowerMap,
     isValidMowerMap,
+    areasFromModem,
+    selectAreas,
+    toggleArea,
+    areaDepth,
+    type ExportedArea,
   } from "./core/mower-map";
+  import { Checkbox } from "carbon-components-svelte";
+  import { socketStore, socketService, areaExportStore } from "../stores/socket";
   import {
     exportGeoJson,
     importGeoJson,
@@ -34,6 +41,7 @@
     dateTime?: string,
     source?: string,
     settings?: Partial<MowSettingsData>,
+    areas?: ExportedArea[],
   ) => void;
 
   let mode: "export" | "import" = "export";
@@ -44,13 +52,53 @@
   let fileInput: HTMLInputElement;
   let fileName = "";
 
-  $: if (open) {
+  // Bereiche: beim Export die der geladenen Hauptkarte (vom Modem), beim
+  // Import die der Datei; jeweils wählbar
+  let areaList: ExportedArea[] = [];
+  let areaKeep: boolean[] = [];
+  $: currentMapId = $socketStore.currentMapId || "";
+  $: currentIsMain = !($socketStore.maps.find((m) => m.id === currentMapId)?.parentId);
+  $: hasAreas = currentIsMain && $socketStore.maps.some((m) => m.parentId === currentMapId);
+
+  let wasOpen = false;
+  $: if (open && !wasOpen) {
+    wasOpen = true;
     mode = "export";
     format = "mower";
+    areaList = [];
+    areaKeep = [];
+    if (hasAreas) socketService.requestAreas(currentMapId);
     jsonText = exportMowerMap(map, { rotation });
     importError = "";
     exportError = "";
     fileName = "";
+  }
+  $: if (!open) wasOpen = false;
+
+  // Antwort des Modems: alle Bereiche vorauswählen
+  $: if (open && mode === "export" && $areaExportStore && $areaExportStore.mapId === currentMapId) {
+    const list = areasFromModem($areaExportStore.areas, currentMapId);
+    if (list.length !== areaList.length) {
+      areaList = list;
+      areaKeep = list.map(() => true);
+      jsonText = doExport();
+    }
+  }
+
+  function onToggleArea(i: number, on: boolean) {
+    if (areaKeep[i] === on) return; // Carbon meldet "check" auch beim Rendern
+    areaKeep = toggleArea(areaList, areaKeep, i, on);
+    if (mode === "export") jsonText = doExport();
+  }
+
+  // Import: Bereiche der eingefügten bzw. gewählten Datei
+  $: if (mode === "import") {
+    const parsed = format === "mower" && jsonText.trim() ? importMowerMap(jsonText.trim()) : null;
+    const list = parsed?.areas ?? [];
+    if (JSON.stringify(list.map((a) => [a.name, a.parent])) !== JSON.stringify(areaList.map((a) => [a.name, a.parent]))) {
+      areaList = list;
+      areaKeep = list.map(() => true);
+    }
   }
 
   /**
@@ -78,13 +126,19 @@
       return exportGeoJson(map, reference);
     }
     exportError = "";
-    return exportMowerMap(map, { rotation });
+    return exportMowerMap(map, { rotation, areas: selectAreas(areaList, areaKeep) });
   }
 
   function switchMode(newMode: "export" | "import") {
     mode = newMode;
     importError = "";
     exportError = "";
+    areaList = [];
+    areaKeep = [];
+    if (newMode === "export" && hasAreas) {
+      areaExportStore.set(null);
+      socketService.requestAreas(currentMapId);
+    }
     if (mode === "export") {
       jsonText = doExport();
     } else {
@@ -194,7 +248,8 @@
       importError = "Failed to import map.";
       return;
     }
-    onImport(result.map, result.rotation, result.dateTime, result.source, result.settings);
+    onImport(result.map, result.rotation, result.dateTime, result.source, result.settings,
+      selectAreas(result.areas, result.areas.map((_, i) => areaKeep[i] ?? true)));
     open = false;
   }
 
@@ -275,6 +330,22 @@
     </div>
   {/if}
 
+  {#if format === "mower" && areaList.length > 0}
+    <fieldset class="area-select">
+      <legend>{mode === "export" ? "Include areas" : "Import areas"}</legend>
+      {#each areaList as a, i}
+        <div style:padding-left={`${areaDepth(areaList, i) * 1.25}rem`}>
+          <Checkbox labelText={a.name} checked={areaKeep[i]} on:check={(e) => onToggleArea(i, e.detail)} />
+        </div>
+      {/each}
+      <p class="area-hint">
+        Areas keep their selection and mow settings. Their routes are not included: calculate them again after the import.
+      </p>
+    </fieldset>
+  {:else if mode === "export" && format === "mower" && hasAreas}
+    <p class="area-hint">Loading the areas of this map…</p>
+  {/if}
+
   {#if exportError}
     <InlineNotification
       kind="error"
@@ -318,6 +389,18 @@
     align-items: center;
     gap: 0.5rem;
     margin-bottom: 1rem;
+  }
+  .area-select {
+    margin-bottom: 1rem;
+  }
+  .area-select legend {
+    font-size: 0.75rem;
+    margin-bottom: 0.25rem;
+  }
+  .area-hint {
+    font-size: 0.75rem;
+    color: var(--cds-text-02, #525252);
+    margin: 0.25rem 0 1rem;
   }
   .file-name {
     font-size: 0.875rem;

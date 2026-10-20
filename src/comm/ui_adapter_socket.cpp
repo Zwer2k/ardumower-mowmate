@@ -333,6 +333,10 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       for (JsonObject p : dockpoints) {
         map.dockpoints.push_back(readPoint(p));
       }
+      JsonArray selection = jsonData["selection"];
+      for (JsonObject p : selection) {
+        map.selection.push_back(readPoint(p));
+      }
       JsonArray searchWire = jsonData["searchWire"];
       for (JsonObject p : searchWire) {
         map.searchWire.push_back(readPoint(p));
@@ -374,6 +378,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       map.mowBorderCcw = settings.mowBorderCcw;
       map.routeOrder = settings.routeOrder;
       map.exclusionLapsWithArea = settings.exclusionLapsWithArea;
+      map.selectionEdgeLaps = settings.selectionEdgeLaps;
       map.doMowArea = settings.doMowArea;
       map.doMowPerimeter = settings.doMowPerimeter;
       map.doMowBorder = settings.doMowBorder;
@@ -415,6 +420,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       if (!jsonData["mowBorderCcw"].isNull()) s.mowBorderCcw = jsonData["mowBorderCcw"];
       if (jsonData["routeOrder"].is<const char *>()) s.routeOrder = jsonData["routeOrder"].as<String>();
       if (!jsonData["exclusionLapsWithArea"].isNull()) s.exclusionLapsWithArea = jsonData["exclusionLapsWithArea"];
+      if (!jsonData["selectionEdgeLaps"].isNull()) s.selectionEdgeLaps = jsonData["selectionEdgeLaps"];
       if (!jsonData["doMowArea"].isNull()) s.doMowArea = jsonData["doMowArea"];
       if (!jsonData["doMowPerimeter"].isNull()) s.doMowPerimeter = jsonData["doMowPerimeter"];
       if (!jsonData["doMowBorder"].isNull()) s.doMowBorder = jsonData["doMowBorder"];
@@ -467,6 +473,90 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       _socketHandler->sendMapOpResult(this, "create", false, "The map could not be created. The name may already be in use.");
       _socketHandler->sendMapList(NULL);
     }
+    break;
+  }
+
+   case RequestDataType::createArea: {
+    String parentId = jsonData["parentId"] | "";
+    String name = jsonData["name"] | "";
+    _socketHandler->abortMapChunkSendForMapChange();
+    yield();
+    // Laden der Elternkarte und Schreiben dauern Sekunden: Fortschritt zeigen
+    _socketHandler->sendProgress("createArea", 0, "Creating area...");
+    _socketHandler->sendData(ResponseDataType::mowerState, NULL, true);
+    const bool created = _source.createArea(parentId, name,
+        _socketHandler->progressReporter("createArea", "Creating area...", 95));
+    _socketHandler->sendProgress("createArea", 100, created ? "Area created" : "Creating the area failed");
+    _socketHandler->sendData(ResponseDataType::mowerState, NULL, true);
+    if (created) {
+      _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
+      _socketHandler->sendData(ResponseDataType::map, NULL, true);
+      _socketHandler->sendMapList(NULL);
+      _socketHandler->sendMapOpResult(this, "createArea", true);
+    } else {
+      _socketHandler->sendMapOpResult(this, "createArea", false, "The area could not be created. Save the map first.");
+      _socketHandler->sendMapList(NULL);
+    }
+    break;
+  }
+
+   case RequestDataType::startJob: {
+    std::vector<String> ids;
+    for (JsonVariant v : jsonData["areaIds"].as<JsonArray>()) {
+      String id = v | "";
+      if (id.length() > 0) ids.push_back(id);
+    }
+    const bool overlapOnce = jsonData["overlapOnce"] | false;
+    const bool start = jsonData["start"] | true;
+    // Ohne Bereiche: den Auftrag der Vorschau hochladen
+    const bool recompose = !ids.empty();
+    if (!recompose && _source.mowJob() == nullptr) {
+      _socketHandler->sendMapOpResult(this, "startJob", false, "There is no job to upload.");
+      break;
+    }
+    const uint8_t toggles = jsonData["toggles"] | 7;
+    if (!_socketHandler->queueJob(ids, overlapOnce, start, _clientId, recompose, toggles)) {
+      _socketHandler->sendMapOpResult(this, "startJob", false, "A job is already being uploaded.");
+    }
+    break;
+  }
+
+   case RequestDataType::previewJob: {
+    std::vector<String> ids;
+    for (JsonVariant v : jsonData["areaIds"].as<JsonArray>()) {
+      String id = v | "";
+      if (id.length() > 0) ids.push_back(id);
+    }
+    const bool overlapOnce = jsonData["overlapOnce"] | false;
+    if (_socketHandler->jobBusy()) {
+      _socketHandler->sendMapOpResult(this, "previewJob", false,
+          "A job is being uploaded or running in parts. Stop it before choosing other areas.");
+      break;
+    }
+    const uint8_t toggles = jsonData["toggles"] | 7;
+    if (!_socketHandler->_cmd.composeJob(ids, overlapOnce, toggles)) {
+      const String reason = _socketHandler->_cmd.uploadMapToMowerError();
+      _socketHandler->sendMapOpResult(this, "previewJob", false,
+          reason.length() > 0 ? reason.c_str() : "The job could not be put together.");
+      break;
+    }
+    _socketHandler->sendMapOpResult(this, "previewJob", true);
+    break;
+  }
+
+   case RequestDataType::clearJob: {
+    if (_socketHandler->jobBusy()) {
+      _socketHandler->sendMapOpResult(this, "clearJob", false, "A job is being uploaded or running in parts.");
+      break;
+    }
+    _socketHandler->_cmd.clearJob();
+    _socketHandler->sendMapOpResult(this, "clearJob", true);
+    break;
+  }
+
+   case RequestDataType::runJob: {
+    const String error = _socketHandler->runJob();
+    _socketHandler->sendMapOpResult(this, "runJob", error.length() == 0, error.c_str());
     break;
   }
 
@@ -624,10 +714,49 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       break;
     }
     _socketHandler->setMap(imported);
+    // Bereiche brauchen eine gespeicherte Hauptkarte: dann gleich speichern
+    // und die Bereiche (Eltern vor Kindern, parent = Index, -1 = Hauptkarte)
+    // anlegen. Ihre Routen werden danach neu berechnet.
+    JsonArray areas = jsonData["areas"].as<JsonArray>();
+    String importError;
+    if (areas && areas.size() > 0) {
+      const String rootId = _source.saveMap(name, rotation);
+      if (rootId.length() == 0) {
+        importError = "The map was imported, but could not be saved, so its areas were left out.";
+      } else {
+        std::vector<String> ids;
+        size_t failed = 0;
+        for (JsonObject a : areas) {
+          const int parent = a["parent"] | -1;
+          String parentId = parent < 0 ? rootId : (parent < (int)ids.size() ? ids[parent] : String(""));
+          String id = parentId.length() > 0
+              ? _source.importArea(parentId, a["name"] | "", a["map"].as<JsonObject>()) : String("");
+          if (id.length() == 0) failed++;
+          ids.push_back(id);
+          yield();
+        }
+        if (failed > 0) importError = String(failed) + " of " + String(ids.size()) + " areas could not be imported.";
+      }
+    }
     _socketHandler->sendData(ResponseDataType::mowSettings, NULL, true);
     _socketHandler->sendData(ResponseDataType::map, NULL, true);
     _socketHandler->sendMapList(NULL);
-    _socketHandler->sendMapOpResult(this, "import", true);
+    _socketHandler->sendMapOpResult(this, "import", importError.length() == 0, importError.c_str());
+    break;
+  }
+
+   case RequestDataType::requestAreas: {
+    const String rootId = jsonData["mapId"] | "";
+    JsonDocument resp;
+    resp["type"] = ResponseDataType::areaExport;
+    resp["data"]["mapId"] = rootId;
+    _source.exportAreas(rootId, resp["data"]["areas"].to<JsonArray>());
+    // Für die Vorschau im Zeitplaner, auch wenn die Karte nicht geladen ist
+    _source.mapGeometry(rootId, resp["data"]["geometry"].to<JsonObject>());
+    String out;
+    serializeJson(resp, out);
+    sanitizeUtf8InPlace(out);
+    this->sendText(out);
     break;
   }
 
@@ -1125,6 +1254,7 @@ void UiSocketHandler::loop()
   _ws->cleanupClients();
 
   pumpMapChunkSend();
+  sendMowJobChunks();
 
   // Kartenliste bei Änderungen broadcasten, sobald mindestens ein Client verbunden ist
   if (_source.mapListDirty() && countConnectedClients() > 0) {
@@ -1231,7 +1361,7 @@ void UiSocketHandler::loop()
       break;
     case 15:
       processScheduleTrigger();
-      processScheduleTriggerStateMachine();
+      processJobStart();
       break;
 
     case 16: {
@@ -1737,6 +1867,10 @@ void UiSocketHandler::finishMapChunkSend() {
     serializeJson(doc, json);
     sendTextAllWithRetry(json);
   }
+  // Fortschritt, der während der Übertragung verworfen wurde (z. B. "fertig"
+  // nach Berechnen oder Clear): sonst gab erst die nächste reguläre
+  // Statusmeldung die Knöpfe nach Sekunden wieder frei.
+  if (!_progressOp.isEmpty()) sendData(ResponseDataType::mowerState, NULL, true);
 }
 
 // Hilfsfunktion: Sende einen Chunk eines MapPoint-Vektors
@@ -1776,6 +1910,17 @@ bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<Ard
       metaObj["crc"] = mapChunkSendState.metaCrc;
       metaObj["area"] = mapChunkSendState.metaArea;
       metaObj["rotation"] = mapChunkSendState.metaRotation;
+      // Auswahlfläche einer Subkarte (klein, daher im Abschlussblock statt als
+      // eigene Punktart); fehlt sie, hat die Karte keine.
+      const auto &selection = mapChunkSendState.snapshot.selection;
+      if (selection.size() > 0) {
+        JsonArray sel = metaObj["selection"].to<JsonArray>();
+        for (const auto &p : selection) {
+          JsonArray xy = sel.add<JsonArray>();
+          xy.add(p.X);
+          xy.add(p.Y);
+        }
+      }
     }
     auto arr = dataObj["points"].to<JsonArray>();
     size_t measured = measureJson(doc);
@@ -2046,6 +2191,10 @@ void UiSocketHandler::clearWaypoints() {
   uint32_t ts = millis();
   map.waypoints.clear();
   _source.setMap(map);
+#ifdef ENABLE_MAP
+  // Der Bericht gehört zur gelöschten Route; neue Clients sollen ihn nicht bekommen
+  _routeReport = ArduMower::Modem::PathPlanner::RouteReport();
+#endif
   abortMapChunkSend();
   yield();
   sendWaypointsDirect(map.waypoints, ts);
@@ -2150,6 +2299,7 @@ void UiSocketHandler::processCalculateWaypoints() {
   sendData(ResponseDataType::mowerState, NULL, true);
   for (const auto &wp : waypoints)
     map.waypoints.push_back(wp);
+  map.routeKey = map.planKey();
 #endif
   _source.setMap(map);
   abortMapChunkSend();
@@ -2305,7 +2455,8 @@ bool UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
     _j["mapId"] = _source.currentMapId();
     // hängen von den "Mow areas"-Schaltern ab
     _j["mapCrc"] = _source.currentMapCrc();
-    _j["uploadPoints"] = _source.currentMapUploadPoints();
+    // < 0: noch nicht berechnet (kurz nach dem Start); der Browser zählt selbst
+    if (_source.currentMapUploadPoints() >= 0) _j["uploadPoints"] = _source.currentMapUploadPoints();
     addMapTransits(_j, _source.currentMapTransits());
   }
 
@@ -2369,6 +2520,8 @@ void UiSocketHandler::sendMapList(UiSocketItem *sendTo)
     obj["timestamp"] = m.timestamp;
     obj["unsaved"] = m.unsaved;
     obj["requiresRename"] = m.requiresRename;
+    if (m.parentId.length() > 0) obj["parentId"] = m.parentId;
+    if (m.outdated) obj["outdated"] = true;
   }
 
   String json;
@@ -2422,7 +2575,7 @@ void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool acc
   auto data = doc["data"].to<JsonObject>();
   data["hash"] = "";
   data["crc"] = _source.currentMapCrc();
-  data["uploadPoints"] = _source.currentMapUploadPoints();
+  if (_source.currentMapUploadPoints() >= 0) data["uploadPoints"] = _source.currentMapUploadPoints();
   addMapTransits(data, _source.currentMapTransits());
   data["area"] = _source.currentMapArea();
   data["rotation"] = _source.currentMapRotation();
@@ -2454,8 +2607,20 @@ void UiSocketHandler::onMapRenamed(const String &id, const String &name)
 {
   auto entries = _scheduleManager.entries();
   bool changed = false;
+  const auto maps = _source.mapList();
   for (auto &e : entries) {
-    if (e.mapId == id && e.mapName != name) { e.mapName = name; changed = true; }
+    bool uses = false;
+    for (const auto &a : e.areaIds) uses = uses || a == id;
+    if (!uses) continue;
+    // Anzeigename: alle Bereiche in Auftragsreihenfolge
+    String joined;
+    for (const auto &a : e.areaIds) {
+      String n = a == id ? name : a;
+      for (const auto &m : maps) if (m.id == a && a != id) n = m.name;
+      if (joined.length() > 0) joined += ", ";
+      joined += n;
+    }
+    if (e.mapName != joined) { e.mapName = joined; changed = true; }
   }
   if (!changed) return;
   _scheduleManager.setConfig(_scheduleManager.enabled(), entries);
@@ -2467,8 +2632,20 @@ void UiSocketHandler::onMapDeleted(const String &id)
 {
   auto entries = _scheduleManager.entries();
   bool changed = false;
+  // Mit einer Karte verschwinden auch ihre Bereiche: jeden Eintrag prüfen,
+  // ob alle seine Bereiche noch existieren.
+  const auto maps = _source.mapList();
   for (auto &e : entries) {
-    if (e.mapId == id && e.enabled) {
+    bool missing = false;
+    for (const auto &a : e.areaIds) {
+      bool found = a != id;
+      if (found) {
+        found = false;
+        for (const auto &m : maps) found = found || m.id == a;
+      }
+      missing = missing || !found;
+    }
+    if (missing && e.enabled) {
       e.enabled = false;
       changed = true;
       Log(WARN, "%s schedule entry %s disabled: its map was deleted", _LOG_, e.name.c_str());
@@ -2653,95 +2830,299 @@ void UiSocketHandler::processScheduleTrigger()
   if (nr == 0 || now < (time_t)nr) return;
 
   int entryId = _scheduleManager.nextRunEntryId();
-  String mapId;
-  String mapName;
+  const ArduMower::Modem::Schedule::Entry *entry = nullptr;
   for (const auto &e : _scheduleManager.entries()) {
-    if (e.id == entryId) {
-      mapId = e.mapId;
-      mapName = e.mapName;
-      break;
-    }
+    if (e.id == entryId) { entry = &e; break; }
   }
 
-  if (mapId.length() == 0) {
+  if (entry == nullptr || entry->areaIds.empty()) {
     Log(WARN, "%s processScheduleTrigger: entry %d has no map", _LOG_, entryId);
     _scheduleManager.computeNextRun();
     _scheduleDirty = true;
     return;
   }
 
-  // If already mowing, skip this run and compute the next one.
+  // If already mowing, or a job is still running as a series of parts
+  // (the mower charges between them), skip this run.
   auto state = _source.state();
-  if (state.job == 1) { // MOW
+  if (state.job == 1 || (_jobStartPending && _jobStartPhase >= 2)) { // MOW
     Log(INFO, "%s processScheduleTrigger: already mowing, skipping entry %d", _LOG_, entryId);
     _scheduleManager.computeNextRun();
     _scheduleDirty = true;
     return;
   }
 
-  if (_scheduleTriggerPending) {
-    return;
-  }
+  // Ein Auftrag wird gerade hochgeladen: danach erneut versuchen
+  if (_jobStartPending) return;
 
-  Log(INFO, "%s processScheduleTrigger: entry %d map=%s", _LOG_, entryId, mapName.c_str());
-  _scheduleTriggerPending = true;
-  _scheduleTriggerPhase = 0;
-  _scheduleTriggerMapId = mapId;
+  // Wie "Mow now": die gespeicherten Versionen der Bereiche als Auftrag
+  // hochladen (bei Bedarf in Teilen) und starten. Die aktuelle Karte und
+  // ein offener Editor bleiben unberührt.
+  Log(INFO, "%s processScheduleTrigger: entry %d map=%s (%u areas)", _LOG_, entryId,
+      entry->mapName.c_str(), (unsigned)entry->areaIds.size());
+  queueJob(entry->areaIds, entry->overlapOnce, true, 0);
+  _scheduleManager.computeNextRun();
+  _scheduleDirty = true;
 }
 
-void UiSocketHandler::processScheduleTriggerStateMachine()
+bool UiSocketHandler::queueJob(const std::vector<String> &ids, bool overlapOnce, bool start, uint32_t clientId,
+                               bool recompose, uint8_t toggles)
 {
-  if (!_scheduleTriggerPending) return;
+  // Eine laufende Serie (Teil wird gemäht oder Mäher lädt) ersetzt ein neuer Auftrag
+  if (_jobStartPending && _jobStartPhase < 2) return false;
+  _jobRecompose = recompose;
+  _jobToggles = toggles;
+  _jobIds = ids;
+  _jobOverlapOnce = overlapOnce;
+  _jobThenStart = start;
+  _jobClientId = clientId;
+  _jobStartPhase = 0;
+  _jobStartPending = true;
+  Log(INFO, "%s queueJob: %u areas, overlap %s, start=%d", _LOG_, (unsigned)ids.size(),
+      overlapOnce ? "once" : "twice", start);
+  return true;
+}
 
-  switch (_scheduleTriggerPhase) {
+// Ablauf eines Mähauftrags. Passt er nicht in den Speicher des Mähers, läuft er
+// als Serie von Teilen: Teil mähen, Sunray fährt am Ende zur Station (oder
+// bleibt stehen), nach dem Laden kommt der nächste Teil.
+//   0 zusammensetzen und Teil 0 hochladen, 1 Upload abwarten und starten,
+//   2 Teil wird gemäht, 3 auf Ladeende warten, dann nächsten Teil hochladen.
+void UiSocketHandler::processJobStart()
+{
+  if (!_jobStartPending) return;
+  auto finish = [this](bool ok, const String &error) {
+    _jobStartPending = false;
+    _jobIds.clear();
+    UiSocketItem *item = findClient(_jobClientId);
+    if (item != NULL) sendMapOpResult(item, "startJob", ok, error.c_str());
+    _jobClientId = 0;
+  };
+  // Serie abbrechen, ohne dem Browser erneut zu antworten
+  auto stopSeries = [this](const char *why) {
+    Log(INFO, "%s processJobStart: job series stopped: %s", _LOG_, why);
+    _jobStartPending = false;
+    _jobIds.clear();
+  };
+  const ArduMower::Domain::Robot::MowJob *job = _source.mowJob();
+  const auto state = _source.state();
+  enum { JOB_IDLE = 0, JOB_MOW = 1, JOB_CHARGE = 2, JOB_ERROR = 3, JOB_DOCK = 4 };
+
+  switch (_jobStartPhase) {
     case 0:
-      // Upload the persisted version of the scheduled map directly.
-      // Previously the map was made current via loadMap(), which preferred
-      // the RAM draft — a schedule mowed with unsaved edits — and switched
-      // the map away under an open editor. uploadSavedMapToMower() reads the
-      // SPIFFS copy and leaves the current map alone.
-      if (!_cmd.uploadSavedMapToMower(_scheduleTriggerMapId)) {
-        Log(WARN, "%s processScheduleTriggerStateMachine: upload of saved map %s could not be started", _LOG_, _scheduleTriggerMapId.c_str());
-        _scheduleTriggerPending = false;
-        _scheduleManager.computeNextRun();
-        _scheduleDirty = true;
+      if (!(_jobRecompose ? _cmd.uploadJobToMower(_jobIds, _jobOverlapOnce, _jobToggles) : _cmd.uploadJobSegment(0))) {
+        const String reason = _cmd.uploadMapToMowerError();
+        Log(WARN, "%s processJobStart: job could not be uploaded: %s", _LOG_, reason.c_str());
+        sendProgress("upload", 100, "Upload failed");
+        finish(false, reason.length() > 0 ? reason : String("The job could not be uploaded."));
         return;
       }
-      _scheduleTriggerPhase = 3;
-      sendProgress("upload", 0, "Uploading scheduled map");
+      _jobStartPhase = 1;
+      sendProgress("upload", 0, "Uploading job");
       break;
 
-    case 3:
-      // Wait for upload completion.
+    case 1: {
       if (_cmd.uploadMapToMowerActive()) {
         auto p = _cmd.uploadProgress();
         if (p.label.length() > 0) {
           String msg = p.label;
+          if (job && job->segmentStarts.size() > 1)
+            msg = "Part " + String(job->segment + 1) + "/" + String(job->segmentStarts.size()) + ": " + msg;
           if (p.total > 0) msg += " " + String(p.done) + "/" + String(p.total);
           sendProgress("upload", p.pct, msg);
         }
         return;
       }
-      if (_cmd.uploadMapToMowerSuccess()) {
-        sendProgress("upload", 100, "Upload complete");
-        _scheduleTriggerPhase = 4;
-      } else {
+      if (!_cmd.uploadMapToMowerSuccess()) {
         sendProgress("upload", 100, "Upload failed");
-        Log(WARN, "%s processScheduleTriggerStateMachine: upload failed", _LOG_);
-        _scheduleTriggerPending = false;
-        _scheduleManager.computeNextRun();
-        _scheduleDirty = true;
+        const String reason = _cmd.uploadMapToMowerError();
+        if (_jobClientId != 0 || (job && job->segment == 0)) {
+          finish(false, reason.length() > 0 ? reason : String("The job upload failed."));
+        } else {
+          stopSeries("upload of the next part failed");
+        }
+        return;
       }
-      break;
-
-    case 4:
-      // Start mowing.
-      Log(INFO, "%s processScheduleTriggerStateMachine: starting mower", _LOG_);
+      sendProgress("upload", 100, "Upload complete");
+      if (!_jobThenStart) {
+        finish(true, "");
+        return;
+      }
+      Log(INFO, "%s processJobStart: starting mower (part %u)", _LOG_, job ? (unsigned)job->segment + 1 : 1u);
       _cmd.start();
-      _scheduleTriggerPending = false;
-      _scheduleManager.computeNextRun();
-      _scheduleDirty = true;
+      if (_jobClientId != 0) {
+        UiSocketItem *item = findClient(_jobClientId);
+        if (item != NULL) sendMapOpResult(item, "startJob", true);
+        _jobClientId = 0;
+      }
+      if (!job || job->segment + 1 >= job->segmentStarts.size()) {
+        finish(true, "");
+        return;
+      }
+      _jobSeenMowing = false;
+      _jobMaxPointIdx = -1;
+      _jobPhaseSince = millis();
+      _jobStartPhase = 2;
       break;
+    }
+
+    case 2: {
+      if (!job || state.mapCrc != job->crc) {
+        stopSeries("the mower has another map");
+        return;
+      }
+      if (state.job == JOB_MOW) {
+        _jobSeenMowing = true;
+        _jobMaxPointIdx = std::max(_jobMaxPointIdx, (int32_t)state.position.mowPointIndex);
+        return;
+      }
+      if (!_jobSeenMowing) {
+        // Start noch nicht im Status angekommen
+        if (millis() - _jobPhaseSince > 60000) stopSeries("the mower did not start");
+        return;
+      }
+      const int32_t partPoints = (int32_t)(job->segmentEnd() - job->segmentStart());
+      const bool finished = _jobMaxPointIdx >= partPoints - 2;
+      if (finished) {
+        Log(INFO, "%s processJobStart: part %u finished", _LOG_, (unsigned)job->segment + 1);
+        _jobPhaseSince = millis();
+        _jobChargedSince = 0;
+        _jobStartPhase = 3;
+        return;
+      }
+      // Mitten im Teil: Laden oder Andocken gehört zu Sunrays eigenem Ablauf,
+      // Stopp durch den Benutzer oder Fehler beenden die Serie.
+      if (state.job == JOB_IDLE || state.job == JOB_ERROR) stopSeries("mowing was stopped");
+      return;
+    }
+
+    case 3: {
+      if (!job || state.mapCrc != job->crc) { stopSeries("the mower has another map"); return; }
+      if (state.job == JOB_MOW) {
+        stopSeries("the mower started mowing by itself");
+        return;
+      }
+      bool ready = false;
+      if (state.job == JOB_IDLE) {
+        ready = true;  // ohne Station: gleich weiter
+      } else if (state.job == JOB_CHARGE) {
+        // Sunray meldet beim Laden den Ladestrom negativ; voll unter 0,2 A
+        if (fabs(state.amps) <= 0.2f) {
+          if (_jobChargedSince == 0) _jobChargedSince = millis();
+          ready = millis() - _jobChargedSince > 120000;
+        } else {
+          _jobChargedSince = 0;
+        }
+        // spätestens nach 5 Stunden; Sunray kehrt bei leerem Akku selbst zurück
+        if (millis() - _jobPhaseSince > 5UL * 3600UL * 1000UL) ready = true;
+      } else if (state.job == JOB_ERROR) {
+        stopSeries("mower error");
+        return;
+      }
+      if (!ready) return;
+      if (!_cmd.uploadJobSegment(job->segment + 1)) {
+        stopSeries("next part could not be uploaded");
+        return;
+      }
+      Log(INFO, "%s processJobStart: uploading part %u", _LOG_, (unsigned)job->segment + 2);
+      sendProgress("upload", 0, "Uploading next part");
+      _jobStartPhase = 1;
+      return;
+    }
+  }
+}
+
+String UiSocketHandler::runJob()
+{
+  const ArduMower::Domain::Robot::MowJob *job = _source.mowJob();
+  if (job == nullptr || _source.state().mapCrc != job->crc) return "The job is not on the mower. Upload it first.";
+  if (_jobStartPending && _jobStartPhase < 2) return "The job is still being uploaded.";
+  Log(INFO, "%s runJob: starting mower (part %u)", _LOG_, (unsigned)job->segment + 1);
+  _cmd.start();
+  if (job->segment + 1 < job->segmentStarts.size()) {
+    // Serie: wie nach einem Upload mit Start weiter überwachen
+    _jobIds = job->areaIds;
+    _jobOverlapOnce = job->overlapOnce;
+    _jobThenStart = true;
+    _jobClientId = 0;
+    _jobSeenMowing = false;
+    _jobMaxPointIdx = -1;
+    _jobPhaseSince = millis();
+    _jobStartPhase = 2;
+    _jobStartPending = true;
+  }
+  return "";
+}
+
+// Die Route des Auftrags in Stücken an jeden Browser, der sie noch nicht hat:
+// Die Dashboards zeigen sie statt der Route der geladenen Karte.
+void UiSocketHandler::sendMowJobChunks()
+{
+  const ArduMower::Domain::Robot::MowJob *job = _source.mowJob();
+  if (mapChunkSendState.active || countConnectedClients() == 0) return;
+  if (job == nullptr) {
+    // Auftrag verworfen (oder eine Karte hochgeladen): die Browser vergessen ihn
+    if (_jobSentTimestampAll != 0) {
+      _jobSentTimestampAll = 0;
+      sendTextAllWithRetry(String("{\"type\":") + String((int)ResponseDataType::mowJob) + ",\"data\":{\"id\":\"\"}}");
+    }
+    return;
+  }
+  _jobSentTimestampAll = job->timestamp;
+  static uint32_t lastSend = 0;
+  if (millis() - lastSend < 50) return;
+  const uint32_t total = job->xy.size() / 2;
+  const uint32_t chunk = 200;
+
+  std::vector<uint32_t> clientIds;
+  lockClients();
+  clientIds.reserve(itemMap.size());
+  for (const auto &entry : itemMap) clientIds.push_back(entry.first);
+  unlockClients();
+  for (uint32_t clientId : clientIds) {
+    UiSocketItem *item = findClient(clientId);
+    if (item == NULL) continue;
+    if (item->_jobSentTimestamp != job->timestamp) {
+      item->_jobSentTimestamp = job->timestamp;
+      item->_jobSentOffset = 0;
+    }
+    if (item->_jobSentOffset >= total || !clientCanSend(clientId)) continue;
+
+    const uint32_t offset = item->_jobSentOffset;
+    const uint32_t count = std::min(chunk, total - offset);
+    JsonDocument doc;
+    doc["type"] = ResponseDataType::mowJob;
+    JsonObject data = doc["data"].to<JsonObject>();
+    data["id"] = job->id;
+    data["crc"] = job->crc;
+    data["timestamp"] = job->timestamp;
+    data["overlapOnce"] = job->overlapOnce;
+    data["toggles"] = job->toggles;
+    data["offset"] = offset;
+    data["total"] = total;
+    data["segment"] = job->segment;
+    JsonArray segs = data["segmentStarts"].to<JsonArray>();
+    for (uint32_t s : job->segmentStarts) segs.add(s);
+    if (offset == 0) {
+      // Geometrie der Karte des Auftrags: Er gehört nicht zwingend zur geladenen Karte
+      if (const auto *geometry = _source.mowJobGeometry())
+        geometry->marshalOutline(data["geometry"].to<JsonObject>());
+      JsonArray parts = data["parts"].to<JsonArray>();
+      for (size_t i = 0; i < job->areaIds.size(); i++) {
+        JsonObject part = parts.add<JsonObject>();
+        part["id"] = job->areaIds[i];
+        part["name"] = i < job->names.size() ? job->names[i] : String("");
+        part["start"] = i < job->starts.size() ? job->starts[i] : 0;
+      }
+    }
+    JsonArray xy = data["xy"].to<JsonArray>();
+    for (uint32_t k = offset * 2; k < (offset + count) * 2; k++)
+      xy.add(roundf(job->xy[k] * 100.0f) / 100.0f);
+    if (sendJsonDoc(item, doc)) {
+      item->_jobSentOffset = offset + count;
+      lastSend = millis();
+    }
+    yield();
   }
 }
 

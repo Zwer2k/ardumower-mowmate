@@ -49,6 +49,9 @@ export const mapSnapshotStore = writable<{
   waypoints: MapPoint[];
 }>({ perimeter: [], exclusions: [], dockpoints: [], searchWire: [], waypoints: [] });
 
+// Auswahlfläche einer Subkarte; kommt im Abschlussblock (meta) der Übertragung.
+export const mapSelectionStore = writable<MapPoint[]>([]);
+
 let activeTransferId: number | null = null;
 let publishedTransferId: number | null = null;
 let receivedTypes = new Set<MapPointType>();

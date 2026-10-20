@@ -66,6 +66,12 @@ namespace ArduMower
         requestClock,
         requestPing,
         requestFirmwareStatus,
+        createArea,
+        startJob,
+        requestAreas,
+        previewJob,
+        clearJob,
+        runJob,
         requestDataTypeLength
       };
 
@@ -94,6 +100,8 @@ namespace ArduMower
         firmwareStatus,
         routeReport,
         mapOpResult,
+        mowJob,
+        areaExport,
         responseDataTypeLength
       };
 
@@ -145,6 +153,9 @@ namespace ArduMower
         UiSocketHandler *_socketHandler;
         uint32_t _clientId;
         uint32_t _drivenTrackSequence = 0;
+        // Übertragungsstand der Auftragsroute (MowJob::timestamp, gesendete Punkte)
+        uint32_t _jobSentTimestamp = 0;
+        uint32_t _jobSentOffset = 0;
         // Per-client share of the handler's polling ref counts, so that a
         // client which disconnects without sending stop* can be unsubscribed.
         uint32_t _gpsDetailsRefs = 0;
@@ -314,16 +325,36 @@ namespace ArduMower
         bool _flashProgressPending = false;
         int _flashProgressPct = 0;
         bool _scheduleDirty = true;
-        bool _scheduleTriggerPending = false;
-        uint8_t _scheduleTriggerPhase = 0;
-        String _scheduleTriggerMapId;
+        // Mähauftrag: hochladen, danach ggf. starten
+        bool _jobStartPending = false;
+        uint8_t _jobStartPhase = 0;
+        std::vector<String> _jobIds;
+        bool _jobOverlapOnce = false;
+        bool _jobThenStart = true;
+        bool _jobRecompose = true;
+        uint8_t _jobToggles = 7;     // false: den vorhandenen Auftrag (Vorschau) hochladen
+        uint32_t _jobSentTimestampAll = 0;  // zuletzt verteilter Auftrag, 0 = keiner
+        uint32_t _jobClientId = 0;
+        // Serie von Teilaufträgen: Fortschritt des laufenden Teils
+        bool _jobSeenMowing = false;
+        int32_t _jobMaxPointIdx = -1;
+        uint32_t _jobPhaseSince = 0;
+        uint32_t _jobChargedSince = 0;
+
+      public:
+        bool queueJob(const std::vector<String> &ids, bool overlapOnce, bool start, uint32_t clientId,
+                      bool recompose = true, uint8_t toggles = 7);
+        // Auftrag auf dem Mäher starten; bei Teilaufträgen läuft die Serie
+        String runJob();
+        bool jobBusy() const { return _jobStartPending; }
 
       private:
+        void processJobStart();
+        void sendMowJobChunks();
         void startMapChunkSend(UiSocketItem* sendTo, bool force);
         bool processMapChunkSend();
         void pumpMapChunkSend();
         void finishMapChunkSend();
-        void processScheduleTriggerStateMachine();
         bool sendMapChunk(MapPointType pointType, const std::vector<ArduMower::Domain::Robot::MapPoint>& points, uint32_t timestamp, uint32_t clientId, int exclusionIdx, size_t startIdx, size_t blockSize, bool reset, size_t &nextIdx);
         AsyncWebSocket *_ws;
 

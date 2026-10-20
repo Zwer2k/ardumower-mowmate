@@ -17,6 +17,7 @@
     import IconDashboard from "carbon-icons-svelte/lib/Dashboard.svelte";
     import IconMap from "carbon-icons-svelte/lib/Map.svelte";
     import IconGps from "carbon-icons-svelte/lib/Location.svelte";
+    import IconCalendar from "carbon-icons-svelte/lib/Calendar.svelte";
     import IconTest from "carbon-icons-svelte/lib/Tools.svelte";
 
     import { Busy } from "../stores/busy";
@@ -41,8 +42,14 @@
     import ProgressOverlay from "../widget/ProgressOverlay.svelte";
     import HeaderOverflowMenu from "../widget/HeaderOverflowMenu.svelte";
     import FirmwareUpdateBadge from "../widget/FirmwareUpdateBadge.svelte";
+    import { isMapDirty } from "../map/services/map-sync";
+    import { scheduleStore } from "../stores/schedule";
 
     let { children } = $props();
+    // Ungespeicherte Änderungen je Menüpunkt: Karte (Editor oder Entwurf einer
+    // Karte) und Zeitplan
+    let mapUnsaved = $derived($isMapDirty || ($socketStore.maps ?? []).some((m) => m.unsaved));
+    let scheduleUnsaved = $derived($scheduleStore.dirty);
     let helpOpen = $state(false);
 
     let opPct = $state(0);
@@ -130,8 +137,17 @@
         href="/?dashboard=map"
         kind="tertiary"
         icon={IconMap}
-        iconDescription="Map">
+        iconDescription={mapUnsaved ? "Map – unsaved changes" : "Map"}
+        class={mapUnsaved ? "nav-unsaved" : ""}>
         <span class="button-text">Map</span>
+    </Button>
+    <Button
+        href="/?dashboard=schedule"
+        kind="tertiary"
+        icon={IconCalendar}
+        iconDescription={scheduleUnsaved ? "Schedule – unsaved changes" : "Schedule"}
+        class={scheduleUnsaved ? "nav-unsaved" : ""}>
+        <span class="button-text">Schedule</span>
     </Button>
     {/if}
     {#if import.meta.env.VITE_ENABLE_LIVE_MAP === 'true'}
@@ -218,6 +234,23 @@
     }
 }
 
+/* Ungespeicherte Änderungen: Punkt oben rechts am Menüpunkt */
+:global(.bx--header .nav-unsaved) {
+    position: relative;
+}
+:global(.bx--header .nav-unsaved)::after {
+    content: "";
+    position: absolute;
+    top: 8px;
+    right: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #f1c21b;
+    box-shadow: 0 0 0 2px #161616;
+    pointer-events: none;
+}
+
 /* Icon-Größe in der Header-Navigation vergrößern */
 :global(.bx--header__action svg) {
     width: 20px !important;
@@ -230,16 +263,25 @@
         display: none;
     }
 
-    /* Navigation-Buttons genauso kompakt wie HeaderUtilities-Buttons machen */
+    /* Navigationsknöpfe teilen sich die ganze freie Breite links der
+       Symbole gleichmäßig; schmaler werden sie nur, wenn sonst nicht alles
+       in die Zeile passt. Symbol mittig. */
     :global(.bx--header .bx--btn--tertiary) {
-        min-width: 48px !important;
-        width: 48px !important;
+        flex: 1 1 0 !important;
+        min-width: 0 !important;
+        width: auto !important;
         padding: 0 !important;
         justify-content: center !important;
+    }
+    :global(.bx--header .bx--header__global) {
+        flex: 0 0 auto;
     }
 
     /* Icon-Container zentrieren */
     :global(.bx--header .bx--btn--tertiary .bx--btn__icon) {
+        /* Carbon setzt das Symbol eines Knopfs mit Text absolut an den rechten
+           Rand; ohne Text gehört es in die Mitte */
+        position: static !important;
         margin: 0 !important;
     }
 

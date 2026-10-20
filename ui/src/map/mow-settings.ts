@@ -13,6 +13,7 @@ const defaultSettings: MowSettings = {
   mowBorderCcw: false,
   routeOrder: "",
   exclusionLapsWithArea: false,
+  selectionEdgeLaps: false,
   doMowArea: true,
   doMowPerimeter: true,
   doMowBorder: false,

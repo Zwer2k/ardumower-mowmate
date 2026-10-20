@@ -52,6 +52,16 @@ static PPC::Map toPlannerMap(ArduMower::Domain::Robot::MowerMap &map) {
     pm.dockpoints.reserve(map.dockpoints.size());
     for (const auto &p : map.dockpoints) pm.dockpoints.push_back(toPlannerPoint(p));
 
+    // Teilbereich: nur die eigene Auswahl, begrenzt durch den Perimeter
+    auto addSelection = [&pm](const std::vector<ArduMower::Domain::Robot::MapPoint> &sel) {
+        if (sel.size() < 3) return;
+        std::vector<PPC::Point> poly;
+        poly.reserve(sel.size());
+        for (const auto &p : sel) poly.push_back(toPlannerPoint(p));
+        pm.selections.push_back(std::move(poly));
+    };
+    addSelection(map.selection);
+
     return pm;
 }
 
@@ -97,6 +107,7 @@ static PPC::Settings toPlannerSettings(const ArduMower::Domain::Robot::MowSettin
     ps.mowBorderCcw = settings.mowBorderCcw;
     toRouteOrder(settings.routeOrder, settings.mowBorderCcw, ps.routeOrder);
     ps.exclusionLapsWithArea = settings.exclusionLapsWithArea;
+    ps.selectionEdgeLaps = settings.selectionEdgeLaps;
     ps.distanceToBorder = settings.distanceToBorder;
     ps.borderLaps = settings.borderLaps;
     ps.distanceToExclusions = (int)lroundf(settings.distanceToExclusions);
@@ -259,6 +270,39 @@ bool prefillTransitCache(TransitCache &cache, const Polygon &route,
         }
     }
     return false;
+}
+
+void JobBuilder::add(const ArduMower::Domain::Robot::MowerMap &area,
+                     const ArduMower::Domain::Robot::MowSettings &settings) {
+    PPC::JobPart part;
+    const Polygon route = filterRouteByToggles(area.waypoints, area, settings);
+    part.route.reserve(route.size());
+    for (const auto &p : route) part.route.push_back(PPC::Point{p.X, p.Y, p.tag});
+    auto addSelection = [&part](const std::vector<ArduMower::Domain::Robot::MapPoint> &sel) {
+        if (sel.size() < 3) return;
+        PPC::Polygon poly;
+        for (const auto &p : sel) poly.push_back({p.X, p.Y});
+        part.region.push_back(std::move(poly));
+    };
+    addSelection(area.selection);
+    parts_.push_back(std::move(part));
+}
+
+Polygon JobBuilder::build(const ArduMower::Domain::Robot::MowerMap &map, bool overlapOnce,
+                          std::vector<size_t> *partStarts) {
+    PPC::FreeSpaceRouter router(plannerOuter(map), plannerHoles(map));
+    const PPC::Polygon job = PPC::composeJob(parts_, router, overlapOnce,
+        static_cast<uint8_t>(ArduMower::Domain::Robot::MapPointTag::TRANSIT), partStarts);
+    parts_.clear();
+    Polygon out;
+    out.reserve(job.size());
+    for (const auto &p : job) {
+        ArduMower::Domain::Robot::MapPoint mp{p.X, p.Y};
+        mp.tag = p.tag;
+        mp.isConnector = p.tag == static_cast<uint8_t>(ArduMower::Domain::Robot::MapPointTag::TRANSIT);
+        out.push_back(mp);
+    }
+    return out;
 }
 
 Polygon filterRouteByToggles(const Polygon &route,

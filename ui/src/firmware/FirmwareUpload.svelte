@@ -322,21 +322,23 @@
     transform: scaleX(1) !important;
   }
   
-  /* Ensure dropdown doesn't cause scrollbars */
-  :global(.bx--modal-container) {
+  /* Ensure dropdown doesn't cause scrollbars. Nur in diesem Dialog: global
+     lagen sonst alle Auswahllisten der App (z. B. im Zeitplaner) über jedem
+     Dialog, und andere Dialoge konnten nicht mehr scrollen. */
+  :global(#firmware-update-modal .bx--modal-container) {
     overflow: visible !important;
   }
-  
-  :global(.bx--modal-content) {
+
+  :global(#firmware-update-modal .bx--modal-content) {
     overflow: visible !important;
   }
-  
-  :global(.bx--dropdown__wrapper) {
+
+  :global(#firmware-update-modal .bx--dropdown__wrapper) {
     z-index: 9999;
   }
 </style>
 
-<ComposedModal on:click:button--primary={primary} bind:open on:close={close}>
+<ComposedModal id="firmware-update-modal" on:click:button--primary={primary} bind:open on:close={close}>
   <ModalHeader title="Firmware Update" />
   <ModalBody hasForm={true}>
     {#if flashInProgress}
