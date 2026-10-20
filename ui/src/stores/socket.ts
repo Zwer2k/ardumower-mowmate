@@ -1392,11 +1392,11 @@ class SocketService {
   }
 
   /** Auftrag aus diesen Bereichen nur zusammensetzen und als Vorschau anzeigen */
-  sendPreviewJob(areaIds: string[], overlapOnce: boolean) {
+  sendPreviewJob(areaIds: string[], overlapOnce: boolean, toggles: number = 7) {
     startPendingOperation("previewJob", "Putting the job together...");
     this.sendMessage({
       type: RequestDataType.previewJob,
-      data: { areaIds, overlapOnce } as unknown as RequestSocketMessage["data"],
+      data: { areaIds, overlapOnce, toggles } as unknown as RequestSocketMessage["data"],
     });
   }
 

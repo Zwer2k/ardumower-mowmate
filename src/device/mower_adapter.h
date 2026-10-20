@@ -174,9 +174,6 @@ namespace ArduMower
       // Der Geometrie-Hash (MD5 über das serialisierte JSON) wird erst bei
       // Bedarf berechnet; updateCurrentMapMeta() markiert ihn nur als veraltet.
       bool _currentMapHashDirty = false;
-      // CRC, Punktzahl und Verbindungswege der beim Start geladenen Karte:
-      // erst nach dem Start der Netzdienste berechnen (millis() ab wann, 0 = nichts offen)
-      uint32_t _bootCrcRefreshAt = 0;
       // Scheduler-Upload einer gespeicherten Karte, ohne die aktuelle Karte
       // (und einen evtl. offenen Editor) anzufassen.
       ArduMower::Domain::Robot::MowerMap _mapUploadOverride;
@@ -335,8 +332,8 @@ namespace ArduMower
       virtual bool powerOff();
       virtual bool uploadMapToMower() override;
       virtual bool uploadSavedMapToMower(const String &id) override;
-      virtual bool uploadJobToMower(const std::vector<String> &ids, bool overlapOnce) override;
-      virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce) override;
+      virtual bool uploadJobToMower(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) override;
+      virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) override;
       virtual void clearJob() override;
       virtual const ArduMower::Domain::Robot::MowJob *mowJob() override { return _job.id.length() ? &_job : nullptr; }
       virtual const ArduMower::Domain::Robot::MowerMap *mowJobGeometry() override { return _job.id.length() ? &_jobGeometry : nullptr; }

@@ -44,7 +44,8 @@
   }));
 
   // Route vom Modem, wenn sie genau zu diesem Auftrag gehört
-  $: routeMatches = !!$mowJobStore && $mowJobStore.complete && $mowJobStore.overlapOnce === overlapOnce &&
+  $: routeMatches = !!$mowJobStore && $mowJobStore.complete && $mowJobStore.toggles === 7 &&
+    $mowJobStore.overlapOnce === overlapOnce &&
     $mowJobStore.parts.length === areaIds.length && $mowJobStore.parts.every((p, i) => p.id === areaIds[i]);
   $: route = mode === "route" && routeMatches && $mowJobStore
     ? jobPartProgress($mowJobStore.points, $mowJobStore.parts, -1, false) : [];

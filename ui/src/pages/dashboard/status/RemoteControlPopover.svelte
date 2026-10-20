@@ -409,15 +409,4 @@
             width: 100%;
         }
     }
-    /* Schmale Handys: wie die Menüknöpfe in +layout.svelte */
-    @media only screen and (max-width: 500px) {
-        .rc-trigger {
-            width: 42px;
-        }
-    }
-    @media only screen and (max-width: 400px) {
-        .rc-trigger {
-            width: 38px;
-        }
-    }
 </style>

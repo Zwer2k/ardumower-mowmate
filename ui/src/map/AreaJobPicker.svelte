@@ -3,7 +3,8 @@
   // Reihenfolge der gewählten Bereiche und Überlappungs-Option. Für "Mow now"
   // und den Zeitplaner.
   import { createEventDispatcher } from "svelte";
-  import { Button, Checkbox, Dropdown, Toggle } from "carbon-components-svelte";
+  import { Button, Checkbox, Toggle } from "carbon-components-svelte";
+  import PortalDropdown from "../widget/PortalDropdown.svelte";
   import type { MapMeta } from "../model";
   import { jobTree, rootMapOf } from "./area-job";
 
@@ -69,7 +70,7 @@
 </script>
 
 {#if mainMaps.length > 1 || !rootId}
-  <Dropdown
+  <PortalDropdown
     titleText="Map"
     label="Choose a map"
     size="sm"

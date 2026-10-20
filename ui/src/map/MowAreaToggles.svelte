@@ -5,11 +5,14 @@
 <script lang="ts">
   import { Toggle } from "carbon-components-svelte";
   import { mowSettingsStore } from "./mow-settings";
-  import { socketService, mowSettingsPendingStore } from "../stores/socket";
+  import { socketService, mowSettingsPendingStore, pendingOperationStore } from "../stores/socket";
+  import { mowJobStore, JOB_TOGGLE_AREA, JOB_TOGGLE_BORDER, JOB_TOGGLE_EXCLUSION_BORDER } from "../stores/mow-job";
   import { routeStyleStore } from "./route-style";
 
   // showRouteStyle: Schalter für die Bahndarstellung (nur im Karteneditor)
-  let { horizontal = false, showTitle = true, labelPrefix = "", showRouteStyle = false } = $props();
+  // jobMode: Die Schalter gehören zum angezeigten Mähauftrag (Main-Dashboard),
+  // nicht zur geladenen Karte. Ein Umschalten setzt den Auftrag neu zusammen.
+  let { horizontal = false, showTitle = true, labelPrefix = "", showRouteStyle = false, jobMode = false } = $props();
 
   const instanceId = `mow-area-toggles-${++instanceCounter}`;
   const areaId = `${instanceId}-area`;
@@ -32,7 +35,34 @@
   let prevDoMowBorder = $mowSettingsStore.doMowBorder ?? false;
   let prevDoMowExclusionBorder = $mowSettingsStore.doMowExclusionBorder ?? false;
 
+  // Auftragsmodus: Werte aus dem Auftrag; beim Verlassen wieder die der Karte
+  let prevJobToggles = -1;
+  let wasJobMode = false;
   $effect(() => {
+    const job = $mowJobStore;
+    if (jobMode && job) {
+      if (job.toggles !== prevJobToggles || !wasJobMode) {
+        prevJobToggles = job.toggles;
+        doMowArea = (job.toggles & JOB_TOGGLE_AREA) !== 0;
+        doMowBorder = (job.toggles & JOB_TOGGLE_BORDER) !== 0;
+        doMowExclusionBorder = (job.toggles & JOB_TOGGLE_EXCLUSION_BORDER) !== 0;
+      }
+      wasJobMode = true;
+    } else if (wasJobMode) {
+      wasJobMode = false;
+      prevJobToggles = -1;
+      const s = $mowSettingsStore;
+      doMowArea = s.doMowArea ?? true;
+      doMowBorder = s.doMowBorder ?? false;
+      doMowExclusionBorder = s.doMowExclusionBorder ?? false;
+    }
+  });
+
+  let jobPending = $derived(jobMode && $pendingOperationStore?.op === "previewJob");
+  let locked = $derived(jobMode ? jobPending : $mowSettingsPendingStore);
+
+  $effect(() => {
+    if (jobMode) return;
     const s = $mowSettingsStore;
     const newArea = s.doMowArea ?? true;
     const newBorder = s.doMowBorder ?? false;
@@ -66,6 +96,16 @@
     const target = e.target as HTMLInputElement;
     if (!target || target.type !== 'checkbox') return;
     const checked = target.checked;
+    const job = $mowJobStore;
+    if (jobMode && job) {
+      const bit = target.id === areaId ? JOB_TOGGLE_AREA
+        : target.id === borderId ? JOB_TOGGLE_BORDER
+        : target.id === exclBorderId ? JOB_TOGGLE_EXCLUSION_BORDER : 0;
+      if (!bit) return;
+      const toggles = checked ? (job.toggles | bit) : (job.toggles & ~bit);
+      socketService.sendPreviewJob(job.parts.map((p) => p.id), job.overlapOnce, toggles);
+      return;
+    }
     if (target.id === areaId) {
       sendToggle({ doMowArea: checked });
     } else if (target.id === borderId) {
@@ -95,24 +135,24 @@
     id={areaId}
     labelText="{labelPrefix}Area"
     size="sm"
-    disabled={$mowSettingsPendingStore}
+    disabled={locked}
     bind:toggled={doMowArea}
   />
   <Toggle
     id={borderId}
     labelText="{labelPrefix}Border"
     size="sm"
-    disabled={$mowSettingsPendingStore}
+    disabled={locked}
     bind:toggled={doMowBorder}
   />
   <Toggle
     id={exclBorderId}
     labelText="{labelPrefix}Excl. border"
     size="sm"
-    disabled={$mowSettingsPendingStore}
+    disabled={locked}
     bind:toggled={doMowExclusionBorder}
   />
-  {#if $mowSettingsPendingStore}
+  {#if locked}
     <span class="pending-hint" aria-live="polite">Updating…</span>
   {/if}
   <!-- Bahnen zusätzlich in Schnittbreite zeichnen -->

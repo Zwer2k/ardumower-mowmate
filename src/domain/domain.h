@@ -551,6 +551,9 @@ namespace ArduMower
         String id;                     // "job:<id>,<id>"; leer = kein Auftrag
         int crc = 0;                   // Sunray-CRC der Auftragskarte
         bool overlapOnce = false;      // Überlappungen nur einmal gemäht
+        // Mow areas des Auftrags (Main-Dashboard): 1 Area, 2 Border, 4 Excl.
+        // border. Was hier aus ist, entfällt in allen Bereichen.
+        uint8_t toggles = 7;
         uint32_t timestamp = 0;        // millis() beim Zusammensetzen
         std::vector<String> areaIds;
         std::vector<String> names;
@@ -704,12 +707,14 @@ namespace ArduMower
         virtual bool uploadSavedMapToMower(const String &id) { (void)id; return false; }
         // Mähauftrag: gespeicherte Bereiche (oder ganze Karten) einer Hauptkarte
         // in dieser Reihenfolge zusammensetzen und hochladen.
-        virtual bool uploadJobToMower(const std::vector<String> &ids, bool overlapOnce) {
-          (void)ids; (void)overlapOnce; return false;
+        // toggles: Mow areas des Auftrags (MowJob::toggles), zusätzlich zu
+        // den Schaltern jedes Bereichs
+        virtual bool uploadJobToMower(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) {
+          (void)ids; (void)overlapOnce; (void)toggles; return false;
         }
         // Nur zusammensetzen (Vorschau), nicht hochladen; clearJob verwirft ihn
-        virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce) {
-          (void)ids; (void)overlapOnce; return false;
+        virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) {
+          (void)ids; (void)overlapOnce; (void)toggles; return false;
         }
         virtual void clearJob() {}
         // Teil index des zuletzt zusammengesetzten Auftrags hochladen

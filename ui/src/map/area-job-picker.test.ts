@@ -134,3 +134,43 @@ describe("SchedulePreviewToggle", () => {
     vi.useRealTimers();
   });
 });
+
+import MowAreaToggles from "./MowAreaToggles.svelte";
+import { mowJobStore } from "../stores/mow-job";
+
+describe("MowAreaToggles in job mode", () => {
+  it("recomposes the job without the switched-off part", async () => {
+    const sent = vi.spyOn(socketService, "sendPreviewJob").mockImplementation(() => {});
+    mowJobStore.set({
+      id: "job:m1,m", crc: 1, timestamp: 1, overlapOnce: true, total: 2, complete: true,
+      parts: [{ id: "m1", name: "Front", start: 0 }, { id: "m", name: "Garden", start: 1 }],
+      points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], segmentStarts: [0], segment: 0, toggles: 7,
+    });
+    const { container } = render(MowAreaToggles, { jobMode: true, labelPrefix: "Mow " });
+    await tick();
+    const inputs = [...container.querySelectorAll<HTMLInputElement>("input[type=checkbox]")];
+    expect(inputs.map((i) => i.checked)).toEqual([true, true, true]);
+    await fireEvent.click(inputs[1]);
+    await tick();
+    expect(sent).toHaveBeenLastCalledWith(["m1", "m"], true, 5);
+    sent.mockRestore();
+    mowJobStore.set(null);
+  });
+});
+
+describe("MowNowDialog with a single map", () => {
+  it("loads the map instead of putting a job together", async () => {
+    socketStore.update((s) => ({ ...s, maps, currentMapId: "m" }));
+    mowNowSelectionStore.set({ selected: ["n"], overlapOnce: false });
+    mowJobStore.set(null);
+    const load = vi.spyOn(socketService, "sendLoadMap").mockImplementation(() => {});
+    const preview = vi.spyOn(socketService, "sendPreviewJob").mockImplementation(() => {});
+    const { getByText } = render(MowNowDialog, { open: true });
+    await tick();
+    await fireEvent.click(getByText("Load map"));
+    expect(load).toHaveBeenCalledWith("n", false);
+    expect(preview).not.toHaveBeenCalled();
+    load.mockRestore();
+    preview.mockRestore();
+  });
+});

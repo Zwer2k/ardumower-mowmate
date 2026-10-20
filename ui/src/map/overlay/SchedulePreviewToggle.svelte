@@ -8,7 +8,8 @@
 
   $: preview = $schedulePreviewStore;
   // Route vorhanden, wenn der Auftrag des Modems genau zu diesem Eintrag passt
-  $: routeReady = !!preview && !!$mowJobStore && $mowJobStore.complete &&
+  // (Zeitplaner-Aufträge laufen mit allen Mow areas)
+  $: routeReady = !!preview && !!$mowJobStore && $mowJobStore.complete && $mowJobStore.toggles === 7 &&
     $mowJobStore.overlapOnce === preview.overlapOnce &&
     $mowJobStore.parts.length === preview.areaIds.length &&
     $mowJobStore.parts.every((p, i) => p.id === preview!.areaIds[i]);

@@ -7,6 +7,7 @@
   import { mowJobStore, isJobPreview, mowNowSelectionStore } from "../../../stores/mow-job";
   import AreaJobPicker from "../../../map/AreaJobPicker.svelte";
   import { portal } from "../../../widget/portal";
+  import { mapWorkflowStore } from "../../../map/map-workflow";
 
   export let open = false;
 
@@ -58,7 +59,22 @@
 
   function handleShow() {
     if (selected.length === 0) return;
-    socketService.sendPreviewJob(selected, overlapOnce);
+    if (selected.length === 1) {
+      // Nur eine Karte (oder ein Bereich): kein Auftrag, sondern die Karte
+      // ganz normal laden. Dann gelten die normalen Mow-areas-Schalter mit
+      // ihrem Zwischenspeicher, und Upload/Start laufen wie bei jeder Karte.
+      // Ungespeicherte Änderungen der bisherigen Karte behält das Modem als Entwurf.
+      const id = selected[0];
+      if ($mowJobStore) socketService.sendClearJob();
+      if (id !== currentMapId) {
+        mapWorkflowStore.startLoadMap(id);
+        socketService.sendLoadMap(id, false);
+      }
+      open = false;
+      return;
+    }
+    // Die Mow-areas-Schalter des bisherigen Auftrags bleiben
+    socketService.sendPreviewJob(selected, overlapOnce, $mowJobStore?.toggles ?? 7);
     open = false;
   }
 
@@ -75,7 +91,7 @@
   modalHeading="Choose areas"
   size="sm"
   hasScrollingContent={true}
-  primaryButtonText="Show on map"
+  primaryButtonText={selected.length === 1 ? "Load map" : "Show on map"}
   primaryButtonDisabled={selected.length === 0}
   secondaryButtonText="Cancel"
   on:click:button--primary={handleShow}
@@ -85,7 +101,9 @@
   <AreaJobPicker {maps} mapId={currentMapId} bind:selected bind:overlapOnce />
   {#if selected.length > 0}
     <p class="hint">
-      The map shows the job first, every area in its own colour. Upload sends it to the mower, Start mows it.
+      {selected.length === 1
+        ? "A single map or area is loaded as the current map; Upload and Start work as usual."
+        : "The map shows the job first, every area in its own colour. Upload sends it to the mower, Start mows it."}
       The saved versions are used{unsavedSelected ? ", unsaved changes are not included" : ""}. A job larger than
       the mower's memory is split into parts; after each part the mower charges and the next part starts.
     </p>

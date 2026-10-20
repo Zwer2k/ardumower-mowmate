@@ -745,19 +745,22 @@ void MowerAdapter::begin()
     if (_mapManager.loadActive(loaded)) {
       _currentMapId = _mapManager.activeId();
       _map = loaded;
-      // Hash, CRC mit den Verbindungswegen über ausgeschaltete "Mow areas" und
-      // die Punktzahl kosten bei großen Karten Sekunden. Sie liefen hier vor
-      // dem Start von Webserver und WebSocket, MowMate war so lange nach
-      // einem Neustart (z. B. Firmware-Update) nicht erreichbar. Jetzt gilt
-      // vorerst der gespeicherte CRC; berechnet wird kurz nach dem Start.
-      _currentMapHashDirty = true;
+      // Hash und CRC (mit den Verbindungswegen über ausgeschaltete "Mow
+      // areas") hier, vor dem Start von WLAN und Webserver: Verschoben in die
+      // Hauptschleife fehlte dafür der interne RAM, und das Modem startete
+      // immer wieder neu. Die Zeiten stehen im Log.
+      _currentMapHash = _mapManager.computeHash(_map);
+      _currentMapHashDirty = false;
       _currentMapArea = _mapManager.computeArea(_map);
-      _currentMapCrc = _mapManager.getCrc(_currentMapId);
-      _currentMapUploadPoints = -1;  // unbekannt bis zur Berechnung
-      _bootCrcRefreshAt = millis() + 3000;
+      const uint32_t loadedMs = millis() - loadStart;
+      const uint32_t crcStart = millis();
+      refreshCurrentMapCrc();
+      const uint32_t crcMs = millis() - crcStart;
+      _mapManager.updateCrc(_mapManager.activeId(), _currentMapCrc);
       syncMowSettingsFromMap();
-      Log(INFO, "%s begin: aktive Karte '%s' aus SPIFFS geladen in %lu ms, gespeicherter CRC %d (%.1f m²)",
-          _LOG_, _mapManager.activeId().c_str(), (unsigned long)(millis() - loadStart), _currentMapCrc, _currentMapArea);
+      Log(INFO, "%s begin: aktive Karte '%s' aus SPIFFS geladen in %lu ms, CRC %d in %lu ms (%.1f m²)",
+          _LOG_, _mapManager.activeId().c_str(), (unsigned long)loadedMs, _currentMapCrc,
+          (unsigned long)crcMs, _currentMapArea);
     } else if (_mapManager.activeId().length() > 0) {
       // Aktive ID verweist auf nicht mehr vorhandene Datei -> Index bereinigen
       _mapManager.setActive("");
@@ -2265,14 +2268,14 @@ static std::vector<uint32_t> splitJob(uint32_t total, const std::vector<uint32_t
   return starts;
 }
 
-bool MowerAdapter::uploadJobToMower(const std::vector<String> &ids, bool overlapOnce)
+bool MowerAdapter::uploadJobToMower(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles)
 {
   if (_mapUploadState.active || _mapUploadPending) {
     Log(WARN, "%suploadJobToMower: upload already in progress", _LOG_);
     _mapUploadError = "Another map upload is in progress.";
     return false;
   }
-  return composeJob(ids, overlapOnce) && uploadJobSegment(0);
+  return composeJob(ids, overlapOnce, toggles) && uploadJobSegment(0);
 }
 
 void MowerAdapter::clearJob()
@@ -2281,7 +2284,7 @@ void MowerAdapter::clearJob()
   _jobGeometry = ArduMower::Domain::Robot::MowerMap();
 }
 
-bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce)
+bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles)
 {
   if (ids.empty()) {
     _mapUploadError = "No area selected.";
@@ -2320,6 +2323,7 @@ bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce)
   ArduMower::Domain::Robot::MowerMap job;
   ArduMower::Domain::Robot::MowJob info;
   info.overlapOnce = overlapOnce;
+  info.toggles = toggles & 7;
   info.id = "job:";
   {
     ArduMower::Modem::MemPolicy::HeavyAllocScope heavyAlloc;
@@ -2329,7 +2333,12 @@ bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce)
         _mapUploadError = "Area " + ids[i] + " could not be loaded.";
         return false;
       }
-      builder.add(area, settingsFromMap(area));
+      // Schalter des Bereichs, eingeschränkt durch die des Auftrags
+      auto settings = settingsFromMap(area);
+      if (!(toggles & 1)) settings.doMowArea = false;
+      if (!(toggles & 2)) settings.doMowBorder = false;
+      if (!(toggles & 4)) settings.doMowExclusionBorder = false;
+      builder.add(area, settings);
       if (i == 0) {
         job.perimeter = area.perimeter;
         job.exclusions = area.exclusions;
@@ -2884,18 +2893,6 @@ void MowerAdapter::processMapUpload()
 
 void MowerAdapter::loop()
 {
-  if (_bootCrcRefreshAt != 0 && (int32_t)(millis() - _bootCrcRefreshAt) >= 0 && !_map.isReading()) {
-    // Nachgeholt aus begin(): genauer CRC, Punktzahl und Verbindungswege
-    _bootCrcRefreshAt = 0;
-    const uint32_t start = millis();
-    const int stored = _currentMapCrc;
-    refreshCurrentMapCrc();
-    _mapManager.updateCrc(_currentMapId, _currentMapCrc);
-    _mowSettings.timestamp = millis();  // Browser bekommen Punktzahl und Wege neu
-    _mapListDirty = true;
-    Log(INFO, "%sloop: CRC der Startkarte berechnet in %lu ms (%d, gespeichert %d)",
-        _LOG_, (unsigned long)(millis() - start), _currentMapCrc, stored);
-  }
   flushCommandQueue();
   startMapUploadFromLoop();
   processPendingCommand();

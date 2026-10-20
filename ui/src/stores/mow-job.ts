@@ -75,6 +75,8 @@ export interface MowJobRoute {
   segment: number;
   /** Geometrie der Karte des Auftrags; er gehört nicht zwingend zur geladenen */
   geometry?: MapOutline;
+  /** Mow areas des Auftrags: 1 Area, 2 Border, 4 Excl. border */
+  toggles: number;
 }
 
 export interface MowJobChunk {
@@ -89,6 +91,7 @@ export interface MowJobChunk {
   segment?: number;
   segmentStarts?: number[];
   geometry?: RawOutline;
+  toggles?: number;
 }
 
 export const mowJobStore = writable<MowJobRoute | null>(null);
@@ -115,6 +118,7 @@ export function mergeMowJobChunk(current: MowJobRoute | null, chunk: MowJobChunk
       segmentStarts: chunk.segmentStarts?.length ? chunk.segmentStarts : [0],
       segment: chunk.segment ?? 0,
       geometry: parseOutline(chunk.geometry),
+      toggles: chunk.toggles ?? 7,
     };
   }
   const points = job.points.slice();
@@ -154,6 +158,11 @@ export function isJobPreview(
 ): boolean {
   return !!job && job.complete && !isJobOnMower(job, state);
 }
+
+export const JOB_TOGGLE_AREA = 1;
+export const JOB_TOGGLE_BORDER = 2;
+export const JOB_TOGGLE_EXCLUSION_BORDER = 4;
+export const JOB_TOGGLES_ALL = 7;
 
 // Farben der Bereiche eines Auftrags, offene Bahnen
 export const JOB_COLORS = ["#7fb249", "#1192e8", "#fa4d56", "#a56eff", "#d2a106", "#009d9a", "#ee538b", "#8a3800"];

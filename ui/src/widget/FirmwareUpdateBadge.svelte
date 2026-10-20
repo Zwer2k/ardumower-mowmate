@@ -47,15 +47,4 @@
             fill: currentColor;
         }
     }
-    /* Schmale Handys: wie die Menüknöpfe in +layout.svelte */
-    @media only screen and (max-width: 500px) {
-        .fw-badge {
-            width: 42px;
-        }
-    }
-    @media only screen and (max-width: 400px) {
-        .fw-badge {
-            width: 38px;
-        }
-    }
 </style>

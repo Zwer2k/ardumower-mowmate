@@ -514,7 +514,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       _socketHandler->sendMapOpResult(this, "startJob", false, "There is no job to upload.");
       break;
     }
-    if (!_socketHandler->queueJob(ids, overlapOnce, start, _clientId, recompose)) {
+    const uint8_t toggles = jsonData["toggles"] | 7;
+    if (!_socketHandler->queueJob(ids, overlapOnce, start, _clientId, recompose, toggles)) {
       _socketHandler->sendMapOpResult(this, "startJob", false, "A job is already being uploaded.");
     }
     break;
@@ -532,7 +533,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
           "A job is being uploaded or running in parts. Stop it before choosing other areas.");
       break;
     }
-    if (!_socketHandler->_cmd.composeJob(ids, overlapOnce)) {
+    const uint8_t toggles = jsonData["toggles"] | 7;
+    if (!_socketHandler->_cmd.composeJob(ids, overlapOnce, toggles)) {
       const String reason = _socketHandler->_cmd.uploadMapToMowerError();
       _socketHandler->sendMapOpResult(this, "previewJob", false,
           reason.length() > 0 ? reason.c_str() : "The job could not be put together.");
@@ -2864,11 +2866,12 @@ void UiSocketHandler::processScheduleTrigger()
 }
 
 bool UiSocketHandler::queueJob(const std::vector<String> &ids, bool overlapOnce, bool start, uint32_t clientId,
-                               bool recompose)
+                               bool recompose, uint8_t toggles)
 {
   // Eine laufende Serie (Teil wird gemäht oder Mäher lädt) ersetzt ein neuer Auftrag
   if (_jobStartPending && _jobStartPhase < 2) return false;
   _jobRecompose = recompose;
+  _jobToggles = toggles;
   _jobIds = ids;
   _jobOverlapOnce = overlapOnce;
   _jobThenStart = start;
@@ -2907,7 +2910,7 @@ void UiSocketHandler::processJobStart()
 
   switch (_jobStartPhase) {
     case 0:
-      if (!(_jobRecompose ? _cmd.uploadJobToMower(_jobIds, _jobOverlapOnce) : _cmd.uploadJobSegment(0))) {
+      if (!(_jobRecompose ? _cmd.uploadJobToMower(_jobIds, _jobOverlapOnce, _jobToggles) : _cmd.uploadJobSegment(0))) {
         const String reason = _cmd.uploadMapToMowerError();
         Log(WARN, "%s processJobStart: job could not be uploaded: %s", _LOG_, reason.c_str());
         sendProgress("upload", 100, "Upload failed");
@@ -3094,6 +3097,7 @@ void UiSocketHandler::sendMowJobChunks()
     data["crc"] = job->crc;
     data["timestamp"] = job->timestamp;
     data["overlapOnce"] = job->overlapOnce;
+    data["toggles"] = job->toggles;
     data["offset"] = offset;
     data["total"] = total;
     data["segment"] = job->segment;

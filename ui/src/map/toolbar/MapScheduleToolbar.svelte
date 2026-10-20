@@ -10,7 +10,6 @@
         StructuredListRow,
         TextInput,
         TimePicker,
-        Dropdown,
         Checkbox,
         Toggle,
         FormGroup,
@@ -31,6 +30,7 @@
         entryAreaIds,
     } from "../../stores/schedule";
     import AreaJobPicker from "../AreaJobPicker.svelte";
+    import PortalDropdown from "../../widget/PortalDropdown.svelte";
     import { onDestroy } from "svelte";
     import { schedulePreviewStore } from "../../stores/schedule";
     import { get } from "svelte/store";
@@ -298,7 +298,7 @@
                         value={formatTime(entry.hour, entry.minute)}
                         on:change={(e) => onTimeChange(entry, e)}
                     />
-                    <Dropdown
+                    <PortalDropdown
                         titleText="Repeat"
                         items={modeItems}
                         selectedId={String(entry.mode)}

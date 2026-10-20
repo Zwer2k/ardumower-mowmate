@@ -331,7 +331,8 @@ namespace ArduMower
         std::vector<String> _jobIds;
         bool _jobOverlapOnce = false;
         bool _jobThenStart = true;
-        bool _jobRecompose = true;     // false: den vorhandenen Auftrag (Vorschau) hochladen
+        bool _jobRecompose = true;
+        uint8_t _jobToggles = 7;     // false: den vorhandenen Auftrag (Vorschau) hochladen
         uint32_t _jobSentTimestampAll = 0;  // zuletzt verteilter Auftrag, 0 = keiner
         uint32_t _jobClientId = 0;
         // Serie von Teilaufträgen: Fortschritt des laufenden Teils
@@ -342,7 +343,7 @@ namespace ArduMower
 
       public:
         bool queueJob(const std::vector<String> &ids, bool overlapOnce, bool start, uint32_t clientId,
-                      bool recompose = true);
+                      bool recompose = true, uint8_t toggles = 7);
         // Auftrag auf dem Mäher starten; bei Teilaufträgen läuft die Serie
         String runJob();
         bool jobBusy() const { return _jobStartPending; }
