@@ -289,6 +289,8 @@ Real-time status overview including battery, position, satellite fix, current st
 
 Visualizes the mower map with perimeter, exclusions, docking station, planned mowing points, and driven tracks. The route can be recalculated on the device and is shown with planner-generated tags (area, border, exclusion border, connector, transit). Maps can be imported and exported in ArduMower/Grauonline JSON or CaSSAndRA GeoJSON format; search-wire, exclusions, and docking points are preserved in the GeoJSON export.
 
+A map can be split into **areas** with their own selection, mow settings and route. Several areas can be combined into one mowing job from the main dashboard or the scheduler; see the [areas documentation](docs/areas.md) (German).
+
 #### GPS
 
 ![GPS](docs/screenshots/gps.png)
