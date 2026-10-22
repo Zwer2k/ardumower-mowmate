@@ -602,7 +602,9 @@ namespace ArduMower
 
         virtual ArduMower::Domain::Robot::MowerMap mowerMap() = 0;
         virtual void setMap(const ArduMower::Domain::Robot::MowerMap &map) = 0;
-        virtual void setMowSettings(const MowSettings &s) = 0;
+        // markUnsaved = false: Laufzeit-Änderung (Mow areas im Main-Dashboard),
+        // die Karte gilt danach nicht als ungespeichert
+        virtual void setMowSettings(const MowSettings &s, bool markUnsaved = true) = 0;
 
         // Read-lock the real map while a chunked transfer is in progress.
         // Default empty implementations keep subclasses without this concept working.

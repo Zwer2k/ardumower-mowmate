@@ -199,7 +199,7 @@
                         {/if}
                     </Tile>
                     <Tile class="mow-areas-tile compact">
-                        <MowAreaToggles horizontal={true} showTitle={false} labelPrefix="Mow " jobMode={jobOnMower || jobPreview} />
+                        <MowAreaToggles horizontal={true} showTitle={false} labelPrefix="Mow " jobMode={jobOnMower || jobPreview} hintOutside={true} keepSaved={true} />
                     </Tile>
                     <style>
                         :global(.mow-areas-tile) {

@@ -356,7 +356,7 @@ namespace ArduMower
       virtual void drainRx(const char* line, bool &stop) override;
       virtual void drainTx(const char* line, bool &stop) override;
       virtual void setMap(const ArduMower::Domain::Robot::MowerMap &map);
-      virtual void setMowSettings(const ArduMower::Domain::Robot::MowSettings &s);
+      virtual void setMowSettings(const ArduMower::Domain::Robot::MowSettings &s, bool markUnsaved = true);
       virtual void loop();
     };
   }

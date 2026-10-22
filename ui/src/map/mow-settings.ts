@@ -23,4 +23,8 @@ const defaultSettings: MowSettings = {
   checkTurnRadius: 0.3,
 };
 
+/** Schalter "Mow areas" im Main-Dashboard warten auf das Modem; die Mini-Karte
+ * zeigt dann "Updating…" neben dem Kompass (siehe MowAreaToggles hintOutside) */
+export const mowAreasUpdatingStore = writable(false);
+
 export const mowSettingsStore = writable<MowSettings>(defaultSettings);

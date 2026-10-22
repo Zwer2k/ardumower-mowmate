@@ -257,7 +257,7 @@ namespace ArduMower
         void cmdMowerAuto();
         void sendBufferedLogTo(UiSocketItem* item, uint16_t maxChunks = 0xFFFF);
         void setMap(const ArduMower::Domain::Robot::MowerMap &map);
-        void setMowSettings(const ArduMower::Domain::Robot::MowSettings &s);
+        void setMowSettings(const ArduMower::Domain::Robot::MowSettings &s, bool markUnsaved = true);
         void clearWaypoints();
         void calculateWaypoints();
         void processCalculateWaypoints();

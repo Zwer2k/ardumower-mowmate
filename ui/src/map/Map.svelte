@@ -308,7 +308,8 @@
     if (!edit) {
       const mapData = buildMapSetData(get(MapStore).map, compassRotation);
       lastSyncedMap = JSON.stringify(mapData);
-      socketService.sendMap(mapData);
+      // Nur die Auswahl ist neu, die Wegpunkte hat das Modem schon
+      socketService.sendMap(mapData, { keepWaypoints: true });
     }
   }
 

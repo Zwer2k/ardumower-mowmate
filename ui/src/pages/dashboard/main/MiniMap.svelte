@@ -4,7 +4,7 @@
     import { zoom, zoomIdentity, type ZoomTransform } from 'd3-zoom';
     import { MapStore, drivenTrackStore } from '../../../map/service';
     import { socketStore } from '../../../stores/socket';
-    import { mowSettingsStore } from '../../../map/mow-settings';
+    import { mowSettingsStore, mowAreasUpdatingStore } from '../../../map/mow-settings';
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
     import { splitRouteProgress, routeTransits, mergeTransits } from '../../../map/core/route-progress';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
@@ -276,6 +276,9 @@
                 </g>
             </svg>
         </button>
+        {#if $mowAreasUpdatingStore}
+            <span class="updating-hint" aria-live="polite">Updating…</span>
+        {/if}
         <button class="zoom-reset" on:click={resetZoom} title="Zoom zurücksetzen">⟲</button>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <svg bind:this={svgEl} viewBox={safeViewBox} preserveAspectRatio="xMidYMid meet"
@@ -502,6 +505,20 @@
         top: 8px;
         left: 8px;
         padding: 0;
+    }
+
+    /* Mow areas warten auf das Modem: neben dem Kompass statt in der Kachel */
+    .updating-hint {
+        position: absolute;
+        top: 12px;
+        left: 44px;
+        z-index: 2;
+        padding: 0 0.375rem;
+        font-size: 0.75rem;
+        color: #525252;
+        background: rgba(255, 255, 255, 0.85);
+        border-radius: 2px;
+        pointer-events: none;
     }
 
     svg {

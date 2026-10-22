@@ -44,7 +44,7 @@ export const areaExportStore = writable<AreaExportData | null>(null);
 import { clearWaypointsBuffer, handleMapChunk, resetMapChunkBuffer, resetMapTransferTracking, mapSelectionStore } from "../map/map-chunk-buffer";
 import { MapPointType } from "../map/map-chunk-buffer";
 import { mowSettingsStore } from "../map/mow-settings";
-import { currentMapRotationStore, updateDrivenTrack } from "../map/service";
+import { currentMapRotationStore, updateDrivenTrack, modemWaypointsJson } from "../map/service";
 import { mapWorkflowStore } from "../map/workflow/map-workflow-store";
 import { isMapDirty, setMapDirty } from "../map/services/map-sync";
 import { toastStore } from "./toast";
@@ -349,7 +349,9 @@ class SocketService {
   // streaming the map to clients (mapAck.accepted=false); without a retry the
   // edit was silently lost, because the editor only resends when the map
   // changed again.
-  private lastSetMap: { mapData: import("../model").MapSetData; syncId: number; mapId: string; attempts: number; waypointsJson?: string } | null = null;
+  private lastSetMap: { mapData: import("../model").MapSetData; syncId: number; mapId: string; attempts: number; waypointsJson?: string; keepWaypoints?: boolean } | null = null;
+  // Berechnung, die auf die Bestätigung der letzten Kartenänderung wartet
+  private calculateAfterSync: ReturnType<typeof setTimeout> | null = null;
   // Wegpunkte, die das Modem zuletzt bestätigt hat. Sind sie unverändert,
   // schickt der Editor sie nicht erneut mit (keepWaypoints).
   private ackedWaypoints: { mapId: string; json: string } | null = null;
@@ -721,6 +723,7 @@ class SocketService {
                     } else if (this.lastSetMap?.syncId === data.syncId) {
                       // Abgelehnt: beim nächsten Versuch die Wegpunkte wieder mitschicken.
                       this.ackedWaypoints = null;
+                      this.lastSetMap.keepWaypoints = false;
                       if (this.lastSetMap.mapId === data.mapId && data.mapId === newState.currentMapId) {
                         this.scheduleSetMapRetry();
                       } else {
@@ -736,6 +739,7 @@ class SocketService {
                       this.ackedWaypoints = { mapId: this.lastSetMap.mapId, json: this.lastSetMap.waypointsJson };
                     }
                     this.lastSetMap = null;
+                    this.flushCalculateAfterSync();
                   }
                   if (!this.lastSetMap && (!this.pendingUpload || this.pendingUpload.syncId === data.syncId)) {
                     this.unsyncedMapId = null;
@@ -1198,14 +1202,18 @@ class SocketService {
     return (this.editActive && this.editMapId) || get(socketStore).currentMapId;
   }
 
-  sendMap(mapData: import("../model").MapSetData) {
+  /** keepWaypoints: Die Wegpunkte sind unverändert (z. B. nur die Auswahl eines
+   *  Bereichs geändert) und gehen nicht mit. Nach einer Berechnung waren sie
+   *  sonst oft über 64 KB, das Modem verwarf die Nachricht stillschweigend und
+   *  rechnete mit der alten Auswahl. Lehnt es ab, geht beim nächsten Versuch alles. */
+  sendMap(mapData: import("../model").MapSetData, options: { keepWaypoints?: boolean } = {}) {
     // Nothing may be written while the edited map is being restored.
     if (this.editRecoveryId) return;
     const syncId = this.nextMapSyncId++;
     const mapId = this.mapWriteTargetId();
     this.clearSetMapRetry();
     this.unsyncedMapId = mapId;
-    this.lastSetMap = { mapData, syncId, mapId, attempts: 0 };
+    this.lastSetMap = { mapData, syncId, mapId, attempts: 0, keepWaypoints: options.keepWaypoints };
     this.sendLastSetMap();
   }
 
@@ -1214,7 +1222,11 @@ class SocketService {
     if (!last) return;
     last.waypointsJson ??= JSON.stringify(last.mapData.waypoints);
     const data: import("../model").MapSetData = { ...last.mapData, syncId: last.syncId, mapId: last.mapId };
-    if (this.ackedWaypoints?.mapId === last.mapId && this.ackedWaypoints.json === last.waypointsJson) {
+    if (last.keepWaypoints ||
+        (this.ackedWaypoints?.mapId === last.mapId && this.ackedWaypoints.json === last.waypointsJson) ||
+        // dieselben Wegpunkte, die das Modem zuletzt für die aktuelle Karte geschickt hat
+        (last.attempts === 0 && last.mapId === get(socketStore).currentMapId &&
+         last.mapData.waypoints.length > 0 && modemWaypointsJson() === last.waypointsJson)) {
       data.waypoints = [];
       data.keepWaypoints = true;
       data.waypointCount = last.mapData.waypoints.length;
@@ -1321,7 +1333,9 @@ class SocketService {
     this.sendMessage(req);
   }
 
-  sendMowSettings(data: Partial<MowSettingsData>) {
+  /** keepSaved: Laufzeit-Änderung (Mow areas im Main-Dashboard), die Karte
+   *  gilt danach nicht als ungespeichert */
+  sendMowSettings(data: Partial<MowSettingsData>, keepSaved = false) {
     const mapId = get(socketStore).currentMapId;
     rememberPendingMowSettings(data as Record<string, unknown>, mapId, Date.now());
     // Die exakte Punktzahl und die Verbindungswege des Modems passen nicht mehr;
@@ -1329,7 +1343,7 @@ class SocketService {
     socketStore.update((s) => ({ ...s, currentMapUploadPoints: null, currentMapTransits: null }));
     const req: RequestSocketMessage = {
       type: RequestDataType.setMowSettings,
-      data: { ...data, mapId },
+      data: (keepSaved ? { ...data, mapId, keepSaved: true } : { ...data, mapId }) as RequestSocketMessage["data"],
     };
     this.sendMessage(req);
   }
@@ -1355,6 +1369,25 @@ class SocketService {
 
   sendCalculateWaypoints() {
     startPendingOperation("calculate", "Calculating waypoints...");
+    // Erst rechnen, wenn das Modem die letzte Kartenänderung (z. B. eine neue
+    // Auswahl) bestätigt hat; sonst rechnete es mit dem alten Stand.
+    if (this.lastSetMap) {
+      if (this.calculateAfterSync) clearTimeout(this.calculateAfterSync);
+      this.calculateAfterSync = setTimeout(() => this.flushCalculateAfterSync(true), 10000);
+      return;
+    }
+    this.sendCalculateNow();
+  }
+
+  private flushCalculateAfterSync(force = false) {
+    if (!this.calculateAfterSync) return;
+    if (this.lastSetMap && !force) return;
+    clearTimeout(this.calculateAfterSync);
+    this.calculateAfterSync = null;
+    this.sendCalculateNow();
+  }
+
+  private sendCalculateNow() {
     const req: RequestSocketMessage = {
       type: RequestDataType.calculateWaypoints,
       data: {},

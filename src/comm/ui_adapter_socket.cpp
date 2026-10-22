@@ -432,7 +432,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
           _LOG_, s.pattern, s.width, s.angle, s.distanceToBorder, s.borderLaps,
           s.doMowArea, s.doMowPerimeter, s.doMowBorder, s.doMowExclusions, s.doMowExclusionBorder,
           s.simplifyEpsilon, s.checkTurnRadius);
-      _socketHandler->setMowSettings(s);
+      // keepSaved: Mow areas im Main-Dashboard, die Karte bleibt "gespeichert"
+      _socketHandler->setMowSettings(s, !(jsonData["keepSaved"] | false));
       // Erst den Status: setMowSettings() hat die Upload-Kennung zurückgesetzt,
       // ohne ihn hielt der Browser die Karte bis zum nächsten Statusupdate für
       // synchron und zeigte keinen Upload-Knopf. Dann die Einstellungen; sie
@@ -2160,8 +2161,8 @@ void UiSocketHandler::processUploadToMower() {
   _cmd.requestStatusNow(); // refresh state/crc immediately after upload
 }
 
-void UiSocketHandler::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s) {
-  _source.setMowSettings(s);
+void UiSocketHandler::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s, bool markUnsaved) {
+  _source.setMowSettings(s, markUnsaved);
 }
 
 void UiSocketHandler::sendWaypointsDirect(const std::vector<ArduMower::Domain::Robot::MapPoint> &waypoints, uint32_t timestamp) {

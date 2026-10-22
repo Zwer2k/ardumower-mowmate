@@ -191,7 +191,7 @@ void MowerAdapter::refreshCurrentMapCrc() {
 #endif
 }
 
-void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s) {
+void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s, bool markUnsaved) {
   _mowSettings = s;
   _mowSettings.timestamp = millis();
   _lastUploadedMapId = "";
@@ -222,13 +222,18 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   // den Browser, und die Geometrie hat sich nicht geändert. Jedes Umschalten
   // eines Mäh-Toggles schickte sonst die ganze Karte (tausende Wegpunkte)
   // erneut; die Einstellungen selbst gehen per mowSettings-Nachricht hinaus.
-  _currentMapUnsaved = true;
-  _mapListDirty = true;
-
-  if (_currentMapId.startsWith("__t_")) {
-    updateTransientMapMeta(_currentMapId, _map, _map.rotation);
-  } else {
-    storeCurrentMapDraft();
+  // Laufzeit-Umschalten der Mow areas (Main-Dashboard) macht eine
+  // gespeicherte Karte nicht "ungespeichert"; die Schalter gelten bis zum
+  // nächsten Laden der Karte. Hat sie schon ungespeicherte Änderungen, wandern
+  // sie wie bisher in den Entwurf.
+  if (markUnsaved || _currentMapUnsaved || _currentMapId.startsWith("__t_")) {
+    _currentMapUnsaved = true;
+    _mapListDirty = true;
+    if (_currentMapId.startsWith("__t_")) {
+      updateTransientMapMeta(_currentMapId, _map, _map.rotation);
+    } else {
+      storeCurrentMapDraft();
+    }
   }
 
   Log(INFO, "%ssetMowSettings: pattern=%d width=%.2f angle=%d distToBorder=%.0f laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusionBorder=%d",

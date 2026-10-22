@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SocketState } from "../../stores/socket";
   import MowAreaToggles from "../MowAreaToggles.svelte";
+  import { mowAreasUpdatingStore } from "../mow-settings";
   import type { MowerCapacity } from "../services/mower-capacity";
 
   export let compassRotation: number;
@@ -46,6 +47,11 @@
 </script>
 
   <div class="map-top-right" role="group" aria-label="Map overlay controls" on:wheel|stopPropagation>
+  <div class="compass-row">
+  {#if $mowAreasUpdatingStore}
+    <!-- Mow areas warten auf das Modem: hier statt in der Kachel, die sonst springt -->
+    <span class="updating-hint" aria-live="polite">Updating…</span>
+  {/if}
   <button class="compass-btn" on:pointerdown={onCompassDown} title="Rotate the map (drag for fine alignment, click for 90°)">
     <svg viewBox="-12 -12 24 24" width="28" height="28">
       <g transform="rotate({compassRotation})">
@@ -55,6 +61,7 @@
       </g>
     </svg>
   </button>
+  </div>
   {#if mouseMapPos}
     <div class="map-coords">
       {mouseMapPos.x.toFixed(2)}, {-mouseMapPos.y.toFixed(2)}
@@ -108,7 +115,7 @@
     {/if}
   </div>
   {#if showMowAreas}
-    <MowAreaToggles showRouteStyle={true} />
+    <MowAreaToggles showRouteStyle={true} hintOutside={true} />
   {/if}
 </div>
 
@@ -126,6 +133,19 @@
   }
   :global(.map-top-right > *) {
     pointer-events: auto;
+  }
+  .compass-row {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+  .updating-hint {
+    padding: 0 0.375rem;
+    font-size: 0.75rem;
+    color: #525252;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 2px;
+    pointer-events: none;
   }
   .compass-btn {
     background: none;
