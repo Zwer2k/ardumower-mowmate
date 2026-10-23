@@ -25,6 +25,8 @@ namespace ArduMower {
             if (geomKey) obj["geomKey"] = geomKey;
             if (selKey) obj["selKey"] = selKey;
             if (routeKey) obj["routeKey"] = routeKey;
+            if (angleMode) obj["angleMode"] = angleMode;
+            if (lastAngle >= 0) obj["lastAngle"] = lastAngle;
         }
 
         void MapMeta::unmarshal(JsonObject obj) {
@@ -40,6 +42,8 @@ namespace ArduMower {
             geomKey = obj["geomKey"] | 0u;
             selKey = obj["selKey"] | 0u;
             routeKey = obj["routeKey"] | 0u;
+            angleMode = obj["angleMode"] | 0;
+            lastAngle = obj["lastAngle"] | -1;
         }
 
         bool MapManager::begin() {
@@ -339,6 +343,7 @@ namespace ArduMower {
             }
 
             if (meta) {
+                meta->angleMode = (uint8_t)map.angleMode;
                 if (isAreaMap) {
                     meta->selKey = ArduMower::Domain::Robot::MowerMap::selectionKey(map.selection);
                     meta->routeKey = map.routeKey;
@@ -358,7 +363,7 @@ namespace ArduMower {
                 ArduMower::Domain::Robot::MowerMap own;
                 own.copySettingsFrom(map);
                 own.selection = map.selection;
-                own.waypoints = map.waypoints;
+                if (map.angleMode == 0) own.waypoints = map.waypoints;
                 own.routeKey = map.routeKey;
                 own.rotation = map.rotation;
                 own.timestamp = map.timestamp;
@@ -461,10 +466,13 @@ namespace ArduMower {
                 out.waypoints = own.waypoints;
                 out.routeKey = own.routeKey;
                 out.copySettingsFrom(own);
+                // Route einer dynamischen Area (z. B. aus einer älteren Datei) verwerfen
+                if (out.angleMode != 0) out.waypoints.clear();
                 out.timestamp = millis();
                 return true;
             }
             out.fromJson(doc.as<JsonObject>()["map"]);
+            if (out.angleMode != 0) out.waypoints.clear();
             // Karten von vor den Teilbereichen: Geometrie-Schlüssel nachtragen
             if (meta->geomKey == 0) {
                 MapMeta *m = findMeta(id);
@@ -496,9 +504,27 @@ namespace ArduMower {
 
         bool MapManager::isOutdated(const String &id) const {
             const MapMeta *meta = findMeta(id);
-            if (!meta || meta->parentId.length() == 0) return false;
+            if (!meta || meta->parentId.length() == 0 || meta->angleMode != 0) return false;
             const uint32_t key = planKey(id);
             return key != 0 && meta->routeKey != key;
+        }
+
+        bool MapManager::hasDynamicAngle(const String &id) const {
+            const MapMeta *meta = findMeta(id);
+            return meta && meta->angleMode != 0;
+        }
+
+        int MapManager::lastAngle(const String &id) const {
+            const MapMeta *meta = findMeta(id);
+            return meta ? meta->lastAngle : -1;
+        }
+
+        bool MapManager::setLastAngle(const String &id, int angle) {
+            MapMeta *meta = findMeta(id);
+            if (!meta) return false;
+            if (meta->lastAngle == angle) return true;
+            meta->lastAngle = (int16_t)angle;
+            return saveIndex();
         }
 
         bool MapManager::isArea(const String &id) const {

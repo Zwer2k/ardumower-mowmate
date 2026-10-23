@@ -6,6 +6,8 @@ const defaultSettings: MowSettings = {
   pattern: 0,
   width: 0.3,
   angle: 0,
+  angleMode: 0,
+  angleStep: 25,
   distanceToBorder: 0,
   borderLaps: 0,
   distanceToExclusions: 0,
@@ -22,5 +24,9 @@ const defaultSettings: MowSettings = {
   simplifyEpsilon: 0.02,
   checkTurnRadius: 0.3,
 };
+
+/** Schalter "Mow areas" im Main-Dashboard warten auf das Modem; die Mini-Karte
+ * zeigt dann "Updating…" neben dem Kompass (siehe MowAreaToggles hintOutside) */
+export const mowAreasUpdatingStore = writable(false);
 
 export const mowSettingsStore = writable<MowSettings>(defaultSettings);

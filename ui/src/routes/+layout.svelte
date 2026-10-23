@@ -32,7 +32,7 @@
     import { browser } from '$app/environment';
     import { goto } from '$app/navigation';
     import { SettingsService } from '../service';
-    import { socketStore, pendingOperationStore } from '../stores/socket';
+    import { socketStore } from '../stores/socket';
     import '../stores/gamepad-service'; // Global gamepad listener (runs even when RC dialog is closed)
 
     let toast = $state<ToastData | null>(null);
@@ -40,6 +40,7 @@
     import HelpDialog from "../widget/HelpDialog.svelte";
     import RemoteControlPopover from "../pages/dashboard/status/RemoteControlPopover.svelte";
     import ProgressOverlay from "../widget/ProgressOverlay.svelte";
+    import { operationProgress } from "../stores/progress";
     import HeaderOverflowMenu from "../widget/HeaderOverflowMenu.svelte";
     import FirmwareUpdateBadge from "../widget/FirmwareUpdateBadge.svelte";
     import { isMapDirty } from "../map/services/map-sync";
@@ -52,19 +53,8 @@
     let scheduleUnsaved = $derived($scheduleStore.dirty);
     let helpOpen = $state(false);
 
-    let opPct = $state(0);
-    let opMsg = $state('');
-    let opActive = $state(false);
     let connectionWarningReady = $state(false);
     let connectionWarningTimer: ReturnType<typeof setTimeout> | null = null;
-    let progressBusy = $derived(opActive && opPct < 100);
-
-    $effect(() => {
-        const state = $socketStore?.state;
-        opPct = state?.progressPct || 0;
-        opMsg = state?.progressMsg || '';
-        opActive = !!state?.progressOp;
-    });
 
     const help = () => (helpOpen = true);
     let url: string;
@@ -192,10 +182,8 @@
         />
     {/if}
 </Header>
-{#if progressBusy}
-    <ProgressOverlay fixed percent={opPct} label={opMsg || 'Working...'} />
-{:else if $pendingOperationStore}
-    <ProgressOverlay fixed label={$pendingOperationStore.label} />
+{#if $operationProgress}
+    <ProgressOverlay fixed percent={$operationProgress.percent} label={$operationProgress.label} />
 {/if}
 {#if connectionWarningReady && !$socketStore.connected}
     <div class="status-stack">

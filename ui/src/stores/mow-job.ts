@@ -101,6 +101,9 @@ export const mowNowSelectionStore = writable<{ selected: string[]; overlapOnce: 
 
 let building: MowJobRoute | null = null;
 
+/** Übertragung einer Auftragsroute läuft: empfangene und erwartete Punkte */
+export const mowJobTransferStore = writable<{ received: number; total: number } | null>(null);
+
 /** Fügt ein Stück an; liefert die vollständige Route, sobald alle Punkte da sind. */
 export function mergeMowJobChunk(current: MowJobRoute | null, chunk: MowJobChunk): MowJobRoute | null {
   let job = current;
@@ -130,10 +133,13 @@ export function applyMowJobChunk(chunk: MowJobChunk) {
   if (!chunk.id) {
     // Das Modem hat den Auftrag verworfen
     building = null;
+    mowJobTransferStore.set(null);
     mowJobStore.set(null);
     return;
   }
   building = mergeMowJobChunk(building, chunk);
+  mowJobTransferStore.set(building && !building.complete
+    ? { received: building.points.length, total: building.total } : null);
   if (building?.complete) mowJobStore.set(building);
 }
 

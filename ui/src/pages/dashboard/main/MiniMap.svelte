@@ -4,12 +4,13 @@
     import { zoom, zoomIdentity, type ZoomTransform } from 'd3-zoom';
     import { MapStore, drivenTrackStore } from '../../../map/service';
     import { socketStore } from '../../../stores/socket';
-    import { mowSettingsStore } from '../../../map/mow-settings';
+    import { mowSettingsStore, mowAreasUpdatingStore } from '../../../map/mow-settings';
     import { filterWaypointsByToggles } from '../../../map/core/waypoint-filter';
     import { splitRouteProgress, routeTransits, mergeTransits } from '../../../map/core/route-progress';
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import { mowJobStore, isJobOnMower, isJobPreview, jobPartProgress, jobRouteIndex, outlineAsMap } from '../../../stores/mow-job';
     import Obstacles from '../../../map/Obstacles.svelte';
+    import JobPreviewLayer from '../../../map/JobPreviewLayer.svelte';
     import MapLoadingOverlay from '../../../map/MapLoadingOverlay.svelte';
     import MapGotoOverlay from '../../../map/overlay/MapGotoOverlay.svelte';
     import GotoControls from '../../../map/overlay/GotoControls.svelte';
@@ -55,6 +56,16 @@
             ? `Auftrag: ${names} · Teil ${job.segment + 1}/${job.segmentStarts.length}`
             : `Auftrag: ${names}`;
     }
+    // Bereiche mit zufälligem/dynamischem Winkel: Ihre Route entsteht je Auftrag
+    // neu, ihre Fläche wird wie im Zeitplaner farbig hervorgehoben
+    $: shownAreaIds = (jobOnMower || jobPreview) && $mowJobStore
+        ? $mowJobStore.parts.map((p) => p.id)
+        : ($socketStore.currentMapId ? [$socketStore.currentMapId] : []);
+    // Geladene Karte: ihre Auswahl liegt schon vor (MapStore), ohne Anfrage beim Modem
+    $: knownSelections = !(jobOnMower || jobPreview) && $socketStore.currentMapId && !$socketStore.isLoadingMap
+        ? { [$socketStore.currentMapId]: $MapStore?.map?.selection?.points ?? [] }
+        : {};
+    $: dynamicAreaIds = shownAreaIds.filter((id) => ($socketStore.maps ?? []).some((m) => m.id === id && m.dynamicAngle));
     $: isMapSynced = jobOnMower || isMowerMapSynced($socketStore.state, $socketStore.currentMapId, storedCrc);
     $: uploadOp = ($socketStore?.state as any)?.progressOp;
     $: uploadMsg = $socketStore?.state?.progressMsg ?? '';
@@ -276,6 +287,9 @@
                 </g>
             </svg>
         </button>
+        {#if $mowAreasUpdatingStore}
+            <span class="updating-hint" aria-live="polite">Updating…</span>
+        {/if}
         <button class="zoom-reset" on:click={resetZoom} title="Zoom zurücksetzen">⟲</button>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <svg bind:this={svgEl} viewBox={safeViewBox} preserveAspectRatio="xMidYMid meet"
@@ -302,6 +316,10 @@
                 {/each}
 
                 <Obstacles obstacles={$socketStore.obstacles} />
+
+                {#if dynamicAreaIds.length > 0 && map.perimeter?.points?.length}
+                    <JobPreviewLayer areaIds={shownAreaIds} onlyIds={dynamicAreaIds} perimeter={map.perimeter.points} {knownSelections} />
+                {/if}
 
                 {#if map.dockpoints?.points?.length}
                     <polyline
@@ -502,6 +520,20 @@
         top: 8px;
         left: 8px;
         padding: 0;
+    }
+
+    /* Mow areas warten auf das Modem: neben dem Kompass statt in der Kachel */
+    .updating-hint {
+        position: absolute;
+        top: 12px;
+        left: 44px;
+        z-index: 2;
+        padding: 0 0.375rem;
+        font-size: 0.75rem;
+        color: #525252;
+        background: rgba(255, 255, 255, 0.85);
+        border-radius: 2px;
+        pointer-events: none;
     }
 
     svg {

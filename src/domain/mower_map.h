@@ -112,6 +112,14 @@ namespace ArduMower {
                 int pattern = 0;          // 0=Lines, 1=Squares, 2=Rings
                 float mowOfs = 0.3f;      // Spurbreite in m
                 int patternAngle = 0;     // Musterwinkel in Grad
+                // 0 fest, 1 zufällig, 2 dynamisch (siehe MowSettings::angleMode).
+                // Nicht fest: Die Wegpunkte werden nicht gespeichert, die Route
+                // entsteht für jeden Auftrag neu.
+                int angleMode = 0;
+                int angleStep = 25;
+                // Nur im RAM: Winkel, mit dem die Wegpunkte bei zufälligem/
+                // dynamischem Winkel berechnet wurden, sonst -1
+                int16_t routeAngle = -1;
                 float distanceToBorder = 0.0f;
                 int borderLaps = 0;
                 // Abstand der Mähfläche zu den Exclusions (Spurbreiten) und
@@ -159,6 +167,8 @@ namespace ArduMower {
                     pattern = o.pattern;
                     mowOfs = o.mowOfs;
                     patternAngle = o.patternAngle;
+                    angleMode = o.angleMode;
+                    angleStep = o.angleStep;
                     distanceToBorder = o.distanceToBorder;
                     borderLaps = o.borderLaps;
                     distanceToExclusions = o.distanceToExclusions;
@@ -385,8 +395,11 @@ namespace ArduMower {
                     }
                     // Mäh-Einstellungen aus Webapp-Export/Import
                     if (obj["patternAngle"].is<JsonVariant>()) patternAngle = obj["patternAngle"];
+                    angleMode = obj["angleMode"] | 0;
+                    angleStep = obj["angleStep"] | 25;
                     if (obj["mowOfs"].is<JsonVariant>()) mowOfs = obj["mowOfs"];
                     if (obj["patternRings"].is<JsonVariant>()) pattern = obj["patternRings"] ? 2 : 0;
+                    if (pattern == 2) angleMode = 0;  // Ringe haben keinen Winkel
                     // Randstreifen-Einstellungen. Sie wurden früher gar nicht
                     // serialisiert, wodurch sie bei jedem Speichern/Laden
                     // verloren gingen und der Legacy-Fallback unten sie
@@ -461,6 +474,8 @@ namespace ArduMower {
                     obj["rotation"] = rotation;
 
                     obj["patternAngle"] = patternAngle;
+                    if (angleMode != 0) obj["angleMode"] = angleMode;
+                    if (angleStep != 25) obj["angleStep"] = angleStep;
                     obj["mowOfs"] = mowOfs;
                     obj["patternRings"] = (pattern == 2);
                     obj["distanceToBorder"] = distanceToBorder;
@@ -471,7 +486,7 @@ namespace ArduMower {
                     if (routeOrder.length() > 0) obj["routeOrder"] = routeOrder;
                     if (exclusionLapsWithArea) obj["exclusionLapsWithArea"] = true;
                     if (selectionEdgeLaps) obj["selectionEdgeLaps"] = true;
-                    if (routeKey) obj["routeKey"] = routeKey;
+                    if (routeKey && angleMode == 0) obj["routeKey"] = routeKey;
                     // Runtime-Flags (können unterwegs umgeschaltet werden)
                     obj["doMowExclusions"] = doMowExclusions;
                     obj["doMowPerimeter"] = doMowPerimeter;
@@ -502,7 +517,9 @@ namespace ArduMower {
                     }
 
                     JsonArray wps = obj["wayPoints"].to<JsonArray>();
-                    writeWaypoints(wps, waypoints);
+                    // Zufälliger/dynamischer Winkel: Die Route gilt nur für
+                    // einen Auftrag und wird nicht gespeichert
+                    if (angleMode == 0) writeWaypoints(wps, waypoints);
                 }
 
     // Sunray-kompatibler CRC: px = x*100 (cm), crc = Σ(trunc16(px) + trunc16(py))

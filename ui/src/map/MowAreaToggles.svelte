@@ -4,7 +4,7 @@
 
 <script lang="ts">
   import { Toggle } from "carbon-components-svelte";
-  import { mowSettingsStore } from "./mow-settings";
+  import { mowSettingsStore, mowAreasUpdatingStore } from "./mow-settings";
   import { socketService, mowSettingsPendingStore, pendingOperationStore } from "../stores/socket";
   import { mowJobStore, JOB_TOGGLE_AREA, JOB_TOGGLE_BORDER, JOB_TOGGLE_EXCLUSION_BORDER } from "../stores/mow-job";
   import { routeStyleStore } from "./route-style";
@@ -12,7 +12,11 @@
   // showRouteStyle: Schalter für die Bahndarstellung (nur im Karteneditor)
   // jobMode: Die Schalter gehören zum angezeigten Mähauftrag (Main-Dashboard),
   // nicht zur geladenen Karte. Ein Umschalten setzt den Auftrag neu zusammen.
-  let { horizontal = false, showTitle = true, labelPrefix = "", showRouteStyle = false, jobMode = false } = $props();
+  // hintOutside: "Updating…" nicht hier anzeigen (die Kachel änderte sonst ihre
+  // Höhe), sondern über mowAreasUpdatingStore an anderer Stelle
+  // keepSaved: Umschalten macht die geladene Karte nicht "ungespeichert" (Main-Dashboard)
+  let { horizontal = false, showTitle = true, labelPrefix = "", showRouteStyle = false, jobMode = false,
+        hintOutside = false, keepSaved = false } = $props();
 
   const instanceId = `mow-area-toggles-${++instanceCounter}`;
   const areaId = `${instanceId}-area`;
@@ -60,6 +64,11 @@
 
   let jobPending = $derived(jobMode && $pendingOperationStore?.op === "previewJob");
   let locked = $derived(jobMode ? jobPending : $mowSettingsPendingStore);
+  $effect(() => {
+    if (!hintOutside) return;
+    mowAreasUpdatingStore.set(locked);
+    return () => mowAreasUpdatingStore.set(false);
+  });
 
   $effect(() => {
     if (jobMode) return;
@@ -89,7 +98,7 @@
     doMowExclusionBorder: boolean;
   }>) {
     mowSettingsStore.update((settings) => ({ ...settings, ...updates }));
-    socketService.sendMowSettings(updates);
+    socketService.sendMowSettings(updates, keepSaved);
   }
 
   function onChange(e: Event) {
@@ -152,7 +161,7 @@
     disabled={locked}
     bind:toggled={doMowExclusionBorder}
   />
-  {#if locked}
+  {#if locked && !hintOutside}
     <span class="pending-hint" aria-live="polite">Updating…</span>
   {/if}
   <!-- Bahnen zusätzlich in Schnittbreite zeichnen -->

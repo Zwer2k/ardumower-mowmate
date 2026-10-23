@@ -389,6 +389,8 @@ void MowSettings::marshal(JsonObject o) const
   o["pattern"] = pattern;
   o["width"] = width;
   o["angle"] = angle;
+  o["angleMode"] = angleMode;
+  o["angleStep"] = angleStep;
   o["distanceToBorder"] = distanceToBorder;
   o["borderLaps"] = borderLaps;
   o["distanceToExclusions"] = distanceToExclusions;

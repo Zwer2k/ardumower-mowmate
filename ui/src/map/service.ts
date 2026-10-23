@@ -141,6 +141,19 @@ export function buildMapSetData(map: Map, rotation: number = 0): MapSetData {
   };
 }
 
+// Wegpunkte, wie das Modem sie zuletzt geschickt hat (im Format von
+// buildMapSetData, als JSON erst bei Bedarf). Stimmen die Wegpunkte einer
+// Kartenänderung damit überein, schickt der Editor sie nicht mit: Nach einer
+// Berechnung waren sie oft über 64 KB, und das Modem verwarf die Nachricht.
+let modemWaypointPoints: Map["waypoints"]["points"] | null = null;
+let modemWaypointJson: string | null = null;
+export function modemWaypointsJson(): string | null {
+  if (modemWaypointJson === null && modemWaypointPoints) {
+    modemWaypointJson = JSON.stringify(buildMapSetData({ ...emptyMap(), waypoints: { points: modemWaypointPoints } }).waypoints);
+  }
+  return modemWaypointJson;
+}
+
 // Map aus Chunks zusammensetzen (alle Typen)
 function updateMapStore() {
   let map: Map = emptyMap();
@@ -185,6 +198,8 @@ function updateMapStore() {
         tag,
       })),
     };
+    modemWaypointPoints = map.waypoints.points;
+    modemWaypointJson = null;
     if (editLocked) return;
     setMap();
   });

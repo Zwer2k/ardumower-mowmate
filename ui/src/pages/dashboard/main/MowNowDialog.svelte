@@ -56,6 +56,7 @@
   }
 
   $: unsavedSelected = selected.some((id) => maps.find((m) => m.id === id)?.unsaved);
+  $: dynamicSelected = selected.some((id) => maps.find((m) => m.id === id)?.dynamicAngle);
 
   function handleShow() {
     if (selected.length === 0) return;
@@ -68,7 +69,10 @@
       if ($mowJobStore) socketService.sendClearJob();
       if (id !== currentMapId) {
         mapWorkflowStore.startLoadMap(id);
-        socketService.sendLoadMap(id, false);
+        socketService.sendLoadMap(id, false, true);
+      } else if (maps.find((m) => m.id === id)?.dynamicAngle) {
+        // Schon geladen: Route mit neuem Winkel
+        socketService.sendCalculateWaypoints();
       }
       open = false;
       return;
@@ -106,6 +110,10 @@
         : "The map shows the job first, every area in its own colour. Upload sends it to the mower, Start mows it."}
       The saved versions are used{unsavedSelected ? ", unsaved changes are not included" : ""}. A job larger than
       the mower's memory is split into parts; after each part the mower charges and the next part starts.
+      {#if dynamicSelected}
+        Areas with a random or dynamic angle have no saved route: it is calculated now with a new angle,
+        Recalculate gives another one, and Upload sends the route shown.
+      {/if}
     </p>
   {/if}
   {#if previewActive}

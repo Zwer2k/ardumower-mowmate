@@ -47,7 +47,7 @@
   }
 
   $: waiting = preview?.mode === "route" && !routeReady &&
-    (key !== requestedKey || now - requestedAt < 30000);
+    (key !== requestedKey || now - requestedAt < 90000);
   $: failed = preview?.mode === "route" && !routeReady && !waiting;
 
   function toggle() {

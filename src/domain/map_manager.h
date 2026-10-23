@@ -30,6 +30,11 @@ namespace ArduMower {
             uint32_t geomKey = 0;
             uint32_t selKey = 0;
             uint32_t routeKey = 0;
+            // Winkel zufällig/dynamisch (MowerMap::angleMode != 0): keine
+            // gespeicherte Route, sie entsteht je Auftrag. lastAngle ist der
+            // zuletzt zum Mäher geschickte Winkel, -1 = noch keiner.
+            uint8_t angleMode = 0;
+            int16_t lastAngle = -1;
 
             void marshal(JsonObject obj) const;
             void unmarshal(JsonObject obj);
@@ -65,6 +70,11 @@ namespace ArduMower {
             uint32_t planKey(const String &id) const;
             // Subkarte, deren Route nicht zur aktuellen Geometrie/Auswahl passt
             bool isOutdated(const String &id) const;
+            // Route je Auftrag neu (zufälliger/dynamischer Winkel)
+            bool hasDynamicAngle(const String &id) const;
+            // Zuletzt zum Mäher geschickter Winkel, -1 = keiner
+            int lastAngle(const String &id) const;
+            bool setLastAngle(const String &id, int angle);
             String parentOf(const String &id) const;
             // Alle Unterbereiche (auch Sub-Sub-Karten) von id
             std::vector<String> descendants(const String &id) const;

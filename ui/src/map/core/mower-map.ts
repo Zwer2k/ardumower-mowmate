@@ -47,6 +47,8 @@ export interface WebappMapJson {
   waypoints?: Array<{ X: number; Y: number; delta?: number; timestamp?: string; sol?: number; tag?: number }>;
   // Mäh-Einstellungen, die der Webapp-Export/Import mit sich führt
   patternAngle?: number;
+  angleMode?: number;
+  angleStep?: number;
   mowOfs?: number;
   patternRings?: boolean;
   distanceToBorder?: number;
@@ -252,6 +254,8 @@ export function importMowerMap(
       pattern: parsed.patternRings ? 2 : 0,
       width: parsed.mowOfs ?? 0.3,
       angle: parsed.patternAngle ?? 0,
+      angleMode: parsed.angleMode ?? 0,
+      angleStep: parsed.angleStep ?? 25,
       distanceToBorder: needsBorderDefaults ? 1 : (parsed.distanceToBorder ?? 0),
       borderLaps: needsBorderDefaults ? 1 : (parsed.borderLaps ?? 0),
       distanceToExclusions: parsed.distanceToExclusions ?? 0,
@@ -286,7 +290,8 @@ export function exportMowerMap(
     // rings. Closing them would create a false segment from the final point
     // (often a Border lap) back to the first Area point.
     dockpoints: map.dockpoints.points.map(unflip),
-    waypoints: map.waypoints.points.map(unflip),
+    // Zufälliger/dynamischer Winkel: Die Route gilt nur für einen Auftrag
+    waypoints: s.angleMode ? [] : map.waypoints.points.map(unflip),
     ...(options.areas && options.areas.length > 0 ? { areas: options.areas } : {}),
   };
   return JSON.stringify(payload, null, 2);
@@ -296,6 +301,7 @@ export function exportMowerMap(
 export function settingsFields(s: Partial<MowSettings>): Partial<WebappMapJson> {
   return {
     patternAngle: s.angle,
+    ...(s.angleMode ? { angleMode: s.angleMode, angleStep: s.angleStep ?? 25 } : {}),
     mowOfs: s.width,
     patternRings: s.pattern === 2,
     distanceToBorder: s.distanceToBorder,
