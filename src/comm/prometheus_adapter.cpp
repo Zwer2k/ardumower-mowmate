@@ -1,3 +1,5 @@
+// Prometheus-Endpunkt nur mit ENABLE_PROMETHEUS; auf dem ESP32 ohne S3 fehlt der Platz.
+#ifdef ENABLE_PROMETHEUS
 #include "prometheus_adapter.h"
 #include "prometheus.h"
 #include "log.h"
@@ -76,3 +78,5 @@ void Adapter::metrics(AsyncWebServerRequest *request)
 
   send(stats, status, !statsFresh);
 }
+
+#endif // ENABLE_PROMETHEUS

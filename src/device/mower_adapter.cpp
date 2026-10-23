@@ -16,6 +16,7 @@
 using namespace ArduMower::Modem;
 
 ArduMower::Domain::Robot::UploadProgress MowerAdapter::uploadProgress() {
+#ifdef ENABLE_MAP
   ArduMower::Domain::Robot::UploadProgress p;
   if (!_mapUploadState.active) return p;
 
@@ -88,6 +89,9 @@ ArduMower::Domain::Robot::UploadProgress MowerAdapter::uploadProgress() {
     p.pct = 0;
   }
   return p;
+#else
+  return ArduMower::Domain::Robot::UploadProgress();
+#endif
 }
 
 void processCSVResponse(const char* res, std::function<void(int, const char*, size_t)> fn);
@@ -97,6 +101,7 @@ MowerAdapter::MowerAdapter(Settings::Settings &_settings, Router &_router)
     : settings(_settings), router(_router), sendIsInitialized(false) {}
 
 void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map, bool markUnsaved) {
+#ifdef ENABLE_MAP
   // Warte kurz, bis kein Lesevorgang auf _map läuft (max 100ms)
   int waitCount = 0;
   while (_map.isReading() && waitCount < 10) {
@@ -138,9 +143,11 @@ void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map, bool ma
   Log(INFO, "%ssetMap: perimeter=%d exclusions=%d dockpoints=%d waypoints=%d crc=%d area=%.1f",
       _LOG_, _map.perimeter.size(), _map.exclusions.size(), _map.dockpoints.size(), _map.waypoints.size(),
       _currentMapCrc, _currentMapArea);
+#endif
 }
 
 void MowerAdapter::updateCurrentMapMeta() {
+#ifdef ENABLE_MAP
   // CRC und Fläche sind billig. Der MD5-Hash über das serialisierte
   // Geometrie-JSON (JsonDocument + String der ganzen Karte) ist es nicht und
   // wurde bei jedem setMap() – also mehrmals pro Sekunde beim Editieren –
@@ -152,6 +159,7 @@ void MowerAdapter::updateCurrentMapMeta() {
   Log(DBG, "%s CRC %d aus Geometrie (pts=%d/%d/%d/%d)",
       _LOG_, _currentMapCrc,
       _map.perimeter.size(), _map.exclusions.size(), _map.dockpoints.size(), _map.waypoints.size());
+#endif
 }
 
 #ifdef ENABLE_MAP
@@ -194,7 +202,8 @@ void MowerAdapter::refreshCurrentMapCrc() {
   }
   _currentMapCrc = _mapManager.computeCrc(_map, &_currentMapUploadPoints, &_currentMapTransits, &_transitCache);
 #else
-  _currentMapCrc = _mapManager.computeCrc(_map, &_currentMapUploadPoints, &_currentMapTransits);
+  // Ohne Kartenfunktionen gibt es keine Karte im Modem
+  _currentMapCrc = 0;
 #endif
 }
 
@@ -203,7 +212,9 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   // eingestellten Winkel, nicht beim zuletzt verwendeten
   if (s.angleMode != 0 && (s.angle != _map.patternAngle || s.angleMode != _map.angleMode)) {
     _map.routeAngle = -1;
+#ifdef ENABLE_MAP
     if (_currentMapId.length() > 0 && !_currentMapId.startsWith("__t_")) _mapManager.setLastAngle(_currentMapId, -1);
+#endif
   }
   _mowSettings = s;
   _mowSettings.timestamp = millis();
@@ -284,6 +295,7 @@ void MowerAdapter::syncMowSettingsFromMap() {
 }
 
 std::vector<ArduMower::Domain::Robot::MapInfo> MowerAdapter::mapList() {
+#ifdef ENABLE_MAP
   std::vector<ArduMower::Domain::Robot::MapInfo> result;
   if (!_mapManager.begin()) return result;
   for (const auto &m : _mapManager.list()) {
@@ -331,6 +343,9 @@ std::vector<ArduMower::Domain::Robot::MapInfo> MowerAdapter::mapList() {
     result.push_back(info);
   }
   return result;
+#else
+  return {};
+#endif
 }
 
 bool MowerAdapter::mapListDirty() {
@@ -342,6 +357,7 @@ void MowerAdapter::clearMapListDirty() {
 }
 
 bool MowerAdapter::createMap(const String &name) {
+#ifdef ENABLE_MAP
   if (_map.isReading()) {
     Log(WARN, "%screateMap: Map-Lesevorgang läuft, anlegen abgelehnt", _LOG_);
     return false;
@@ -376,9 +392,13 @@ bool MowerAdapter::createMap(const String &name) {
   _mapListDirty = true;
   Log(INFO, "%screateMap: transiente Karte %s als '%s' angelegt", _LOG_, _currentMapId.c_str(), mapName.c_str());
   return true;
+#else
+  return false;
+#endif
 }
 
 bool MowerAdapter::copyMap(const String &name) {
+#ifdef ENABLE_MAP
   if (_map.isReading() || _map.perimeter.size() < 3) return false;
 
   String baseName = name.length() > 0 ? name : "Map";
@@ -408,10 +428,14 @@ bool MowerAdapter::copyMap(const String &name) {
   _mapListDirty = true;
   Log(INFO, "%scopyMap: transiente Kopie %s als '%s' angelegt", _LOG_, _currentMapId.c_str(), mapName.c_str());
   return true;
+#else
+  return false;
+#endif
 }
 
 bool MowerAdapter::createArea(const String &parentId, const String &name,
                               const std::function<void(int percent)> &progress) {
+#ifdef ENABLE_MAP
   if (_map.isReading()) {
     Log(WARN, "%screateArea: Map-Lesevorgang läuft, anlegen abgelehnt", _LOG_);
     return false;
@@ -439,9 +463,13 @@ bool MowerAdapter::createArea(const String &parentId, const String &name,
   Log(INFO, "%screateArea: Bereich '%s' (%s) unter %s angelegt", _LOG_, areaName.c_str(), id.c_str(), parentId.c_str());
   _mapListDirty = true;
   return loadMap(id);
+#else
+  return false;
+#endif
 }
 
 bool MowerAdapter::exportAreas(const String &rootId, JsonArray out) {
+#ifdef ENABLE_MAP
   if (!_mapManager.begin()) return false;
   const std::vector<String> ids = _mapManager.descendants(rootId);
   for (const auto &id : ids) {
@@ -458,16 +486,24 @@ bool MowerAdapter::exportAreas(const String &rootId, JsonArray out) {
     yield();
   }
   return true;
+#else
+  return false;
+#endif
 }
 
 bool MowerAdapter::mapGeometry(const String &id, JsonObject out) {
+#ifdef ENABLE_MAP
   ArduMower::Domain::Robot::MowerMap map;
   if (id.startsWith("__t_") || !_mapManager.load(id, map)) return false;
   map.marshalOutline(out);
   return true;
+#else
+  return false;
+#endif
 }
 
 String MowerAdapter::importArea(const String &parentId, const String &name, JsonObject own) {
+#ifdef ENABLE_MAP
   if (_map.isReading()) return "";
   ArduMower::Domain::Robot::MowerMap parent;
   if (parentId.startsWith("__t_") || !_mapManager.load(parentId, parent)) {
@@ -489,10 +525,14 @@ String MowerAdapter::importArea(const String &parentId, const String &name, Json
     Log(INFO, "%simportArea: '%s' (%s) under %s", _LOG_, areaName.c_str(), id.c_str(), parentId.c_str());
   }
   return id;
+#else
+  return String();
+#endif
 }
 
 String MowerAdapter::saveMap(const String &name, double rotation,
                              const std::function<void(int percent)> &progress) {
+#ifdef ENABLE_MAP
   if (_map.isReading()) {
     Log(WARN, "%ssaveMap: Map-Lesevorgang läuft, speichern abgelehnt", _LOG_);
     return "";
@@ -526,9 +566,13 @@ String MowerAdapter::saveMap(const String &name, double rotation,
     Log(INFO, "%ssaveMap: Karte gespeichert als %s", _LOG_, id.c_str());
   }
   return id;
+#else
+  return String();
+#endif
 }
 
 bool MowerAdapter::loadMap(const String &id) {
+#ifdef ENABLE_MAP
   // Warte kurz, bis kein Lesevorgang auf _map läuft (max 100ms)
   int waitCount = 0;
   while (_map.isReading() && waitCount < 10) {
@@ -588,9 +632,13 @@ bool MowerAdapter::loadMap(const String &id) {
   Log(INFO, "%sloadMap: Karte %s geladen, CRC %d", _LOG_, id.c_str(), _currentMapCrc);
   _mapListDirty = true;
   return true;
+#else
+  return false;
+#endif
 }
 
 bool MowerAdapter::renameMap(const String &id, const String &name) {
+#ifdef ENABLE_MAP
   if (id != _currentMapId) return false;
   String newName = name;
   if (newName.length() == 0) newName = _mapManager.generateDefaultName();
@@ -616,9 +664,13 @@ bool MowerAdapter::renameMap(const String &id, const String &name) {
   _mapListDirty = true;
   Log(INFO, "%srenameMap: Karte %s in '%s' umbenannt", _LOG_, id.c_str(), newName.c_str());
   return true;
+#else
+  return false;
+#endif
 }
 
 bool MowerAdapter::deleteMap(const String &id) {
+#ifdef ENABLE_MAP
   const bool wasCurrent = (_currentMapId == id);
   bool wasCurrentTree = false;   // aktuelle Karte ist ein gelöschter Unterbereich
   if (id.startsWith("__t_")) {
@@ -641,6 +693,9 @@ bool MowerAdapter::deleteMap(const String &id) {
   _mapListDirty = true;
   Log(INFO, "%sdeleteMap: Karte %s gelöscht", _LOG_, id.c_str());
   return true;
+#else
+  return false;
+#endif
 }
 
 // Nach dem Löschen der aktuellen Karte: wie beim Start die Standardkarte laden,
@@ -649,6 +704,7 @@ bool MowerAdapter::deleteMap(const String &id) {
 // nahm der Transient-Zweig die erste Karte statt der Standardkarte, und der
 // andere Zweig ignorierte Entwürfe und überschrieb die gespeicherte CRC.
 void MowerAdapter::loadReplacementMap() {
+#ifdef ENABLE_MAP
   _currentMapId = "";
   _currentMapUnsaved = false;
   _pendingRenameId = "";
@@ -659,9 +715,11 @@ void MowerAdapter::loadReplacementMap() {
   _map = ArduMower::Domain::Robot::MowerMap();
   _map.timestamp = millis();
   updateCurrentMapMeta();
+#endif
 }
 
 bool MowerAdapter::discardMap() {
+#ifdef ENABLE_MAP
   if (_map.isReading()) {
     Log(WARN, "%sdiscardMap: Map-Lesevorgang läuft, verwerfen abgelehnt", _LOG_);
     return false;
@@ -687,21 +745,32 @@ bool MowerAdapter::discardMap() {
   _mapListDirty = true;
   Log(INFO, "%sdiscardMap: aktuelle Karte verworfen, neue leere Karte im RAM", _LOG_);
   return true;
+#else
+  return false;
+#endif
 }
 
 bool MowerAdapter::setActiveMap(const String &id) {
+#ifdef ENABLE_MAP
   if (!_mapManager.setActive(id)) return false;
   _mapListDirty = true;
   Log(INFO, "%ssetActiveMap: Karte %s als aktiv gesetzt", _LOG_, id.c_str());
   return true;
+#else
+  return false;
+#endif
 }
 
 String MowerAdapter::currentMapHash() {
+#ifdef ENABLE_MAP
   if (_currentMapHashDirty) {
     _currentMapHash = _mapManager.computeHash(_map);
     _currentMapHashDirty = false;
   }
   return _currentMapHash;
+#else
+  return String();
+#endif
 }
 
 int MowerAdapter::currentMapCrc() {
@@ -713,6 +782,7 @@ double MowerAdapter::currentMapArea() {
 }
 
 bool MowerAdapter::importMowerMap(const String &json, ArduMower::Domain::Robot::MowerMap &outMap) {
+#ifdef ENABLE_MAP
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, json);
   if (err) {
@@ -727,15 +797,22 @@ bool MowerAdapter::importMowerMap(const String &json, ArduMower::Domain::Robot::
   // überträgt der Browser nach erfolgreichem Import für die neue Karte.
   // Früher landeten sie in der Karte, die zum Zeitpunkt des Imports aktuell war.
   return true;
+#else
+  return false;
+#endif
 }
 
 String MowerAdapter::exportMowerMap(const ArduMower::Domain::Robot::MowerMap &map) {
+#ifdef ENABLE_MAP
   JsonDocument doc;
   JsonObject obj = doc.to<JsonObject>();
   map.toJson(obj);
   String out;
   serializeJsonPretty(doc, out);
   return out;
+#else
+  return String();
+#endif
 }
 
 // ===== SPIFFS-Persistenz (vorbereitet, aber noch nicht aktiv) =====
@@ -761,6 +838,7 @@ void MowerAdapter::begin()
   // Position settings werden erst nach dem ersten erfolgreichen Versions-Austausch
   // (parseVersionResponse) an den Mower gesendet. Hier wäre die Verbindung noch nicht bereit.
 
+#ifdef ENABLE_MAP
   // Persistierte Kartenverwaltung initialisieren und aktive Karte laden
   if (_mapManager.begin()) {
     const uint32_t loadStart = millis();
@@ -790,6 +868,7 @@ void MowerAdapter::begin()
     }
     _mapListDirty = true;
   }
+#endif
 }
 
 void MowerAdapter::drainRx(const char* line, bool &stop)
@@ -902,6 +981,7 @@ void MowerAdapter::parseArduMowerCommand(const char* line)
 // AT-N Kommando: AT-N,#perimeter,#exclusionPoints,#dockpoints,#waypoints,#free
 // Die Exclusion-Polygone werden über anschließende AT+X-Befehle mitgeteilt.
 void MowerAdapter::parseATNCommand(const char* line) {
+#ifdef ENABLE_MAP
   Log(DBG, "%sparseATNCommand (map counts)", _LOG_);
   if (ownMapUploadRunning()) return;
   int waitCount = 0;
@@ -935,10 +1015,12 @@ void MowerAdapter::parseATNCommand(const char* line) {
   if (tempNExclusions == 0) {
     finalizeInterceptedMap();
   }
+#endif
 }
 
 // AT+X Kommando: AT+X,<startIdx>,<len1>,<len2>,...
 void MowerAdapter::parseATXCommand(const char* line) {
+#ifdef ENABLE_MAP
   Log(DBG, "%sparseATXCommand (exclusion sizes)", _LOG_);
   if (ownMapUploadRunning()) return;
   int waitCount = 0;
@@ -974,9 +1056,11 @@ void MowerAdapter::parseATXCommand(const char* line) {
       finalizeInterceptedMap();
     }
   }
+#endif
 }
 
 void MowerAdapter::finalizeInterceptedMap() {
+#ifdef ENABLE_MAP
   using namespace ArduMower::Domain::Robot;
   Log(DBG, "%sfinalizeInterceptedMap: perimeter=%d exclusions=%d dock=%d waypoints=%d",
       _LOG_, tempNPerimeter, tempNExclusions, tempNDockpoints, tempNWaypoints);
@@ -1085,6 +1169,7 @@ void MowerAdapter::finalizeInterceptedMap() {
   tempWaypointsBuffer.clear();
   tempExclusionSizes.clear();
   tempMapCountsReceived = false;
+#endif
 }
 
 // start mowing
@@ -2017,6 +2102,7 @@ void MowerAdapter::parseStateResponse(const char* line)
 
 void MowerAdapter::parseATWCommand(const char* line)
 {
+#ifdef ENABLE_MAP
   Log(DBG, "%sparseATWCommand (waypoint-list)", _LOG_);
   if (ownMapUploadRunning()) return;
   if (_map.isReading()) {
@@ -2079,6 +2165,7 @@ void MowerAdapter::parseATWCommand(const char* line)
   }
   
   Log(DBG, "%sparseATWCommand done widx=%d, waypoints.size()=%d", _LOG_, widx, tempWaypointsBuffer.size());
+#endif
 }
 
 void MowerAdapter::parseATCCommand(const char* line)
@@ -2226,6 +2313,7 @@ String MowerAdapter::bytesToHexString(const String& byteString) {
 
 bool MowerAdapter::uploadSavedMapToMower(const String &id)
 {
+#ifdef ENABLE_MAP
   if (_mapUploadState.active || _mapUploadPending) {
     Log(WARN, "%suploadSavedMapToMower: upload already in progress", _LOG_);
     return false;
@@ -2254,6 +2342,9 @@ bool MowerAdapter::uploadSavedMapToMower(const String &id)
   _mapUploadPending = true;
   Log(INFO, "%suploadSavedMapToMower: queued saved map %s", _LOG_, id.c_str());
   return true;
+#else
+  return false;
+#endif
 }
 
 // Wie mower-capacity.ts in der UI: Sunray sammelt die Punkte beim Upload in
@@ -2262,6 +2353,7 @@ bool MowerAdapter::uploadSavedMapToMower(const String &id)
 // vorher frei. 10 % Reserve, weil free_memory nur eine Momentaufnahme ist.
 uint32_t MowerAdapter::jobWaypointLimit(size_t fixedPoints)
 {
+#ifdef ENABLE_MAP
   const uint32_t freeMemory = _stats.freeMemory;
   if (freeMemory == 0 || freeMemory >= 1024u * 1024u) return 0;
   const uint32_t loaded = (_state.mapCrc != 0 && _state.mapCrc == _lastUploadedMapCrc) ? _lastUploadedPoints : 0;
@@ -2269,6 +2361,9 @@ uint32_t MowerAdapter::jobWaypointLimit(size_t fixedPoints)
   const int64_t maxPoints = available / 8 * 9 / 10;
   const int64_t limit = maxPoints - (int64_t)fixedPoints;
   return limit < 1 ? 1 : (uint32_t)limit;
+#else
+  return 0;
+#endif
 }
 
 // Schnittstellen der Teilaufträge: höchstens limit Wegpunkte je Teil, wenn es
@@ -2293,12 +2388,16 @@ static std::vector<uint32_t> splitJob(uint32_t total, const std::vector<uint32_t
 
 bool MowerAdapter::uploadJobToMower(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles)
 {
+#ifdef ENABLE_MAP
   if (_mapUploadState.active || _mapUploadPending) {
     Log(WARN, "%suploadJobToMower: upload already in progress", _LOG_);
     _mapUploadError = "Another map upload is in progress.";
     return false;
   }
   return composeJob(ids, overlapOnce, toggles) && uploadJobSegment(0);
+#else
+  return false;
+#endif
 }
 
 void MowerAdapter::clearJob()
@@ -2309,6 +2408,7 @@ void MowerAdapter::clearJob()
 
 bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles)
 {
+#ifdef ENABLE_MAP
   if (ids.empty()) {
     _mapUploadError = "No area selected.";
     return false;
@@ -2441,10 +2541,14 @@ bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, 
   _mapUploadError = "Jobs need the map feature.";
   return false;
 #endif
+#else
+  return false;
+#endif
 }
 
 bool MowerAdapter::uploadJobSegment(uint32_t index)
 {
+#ifdef ENABLE_MAP
   if (_job.id.length() == 0 || index >= _job.segmentStarts.size()) {
     _mapUploadError = "No job part to upload.";
     return false;
@@ -2481,10 +2585,14 @@ bool MowerAdapter::uploadJobSegment(uint32_t index)
   _mapUploadState.phase = MapUploadState::idle;
   _mapUploadPending = true;
   return true;
+#else
+  return false;
+#endif
 }
 
 int MowerAdapter::nextPatternAngle(const ArduMower::Domain::Robot::MowerMap &map, int last)
 {
+#ifdef ENABLE_MAP
   const int base = last >= 0 ? last : map.patternAngle;
   if (map.angleMode == 2) {
     // Dynamisch: beim ersten Mal der eingestellte Winkel, danach je Auftrag weiter
@@ -2498,10 +2606,14 @@ int MowerAdapter::nextPatternAngle(const ArduMower::Domain::Robot::MowerMap &map
   const int period = map.pattern == 1 ? 90 : 180;
   const int offset = minChange + (int)(esp_random() % (uint32_t)(period - 2 * minChange + 1));
   return ((base % period) + period + offset) % period;
+#else
+  return -1;
+#endif
 }
 
 int MowerAdapter::nextRouteAngle()
 {
+#ifdef ENABLE_MAP
   if (_map.angleMode == 0) return -1;
   // Vom Winkel der angezeigten Route aus weiter, sonst vom zuletzt
   // hochgeladenen: Sim calculate und Recalculate drehen so bei jedem Klick
@@ -2509,6 +2621,9 @@ int MowerAdapter::nextRouteAngle()
   int last = _map.routeAngle;
   if (last < 0 && !_currentMapId.startsWith("__t_")) last = _mapManager.lastAngle(_currentMapId);
   return nextPatternAngle(_map, last);
+#else
+  return -1;
+#endif
 }
 
 ArduMower::Domain::Robot::MowSettings MowerAdapter::settingsFromMap(const ArduMower::Domain::Robot::MowerMap &map)
@@ -2540,6 +2655,7 @@ ArduMower::Domain::Robot::MowSettings MowerAdapter::settingsFromMap(const ArduMo
 
 bool MowerAdapter::uploadMapToMower()
 {
+#ifdef ENABLE_MAP
   if (_mapUploadState.active || _mapUploadPending) {
     Log(WARN, "%suploadMapToMower: upload already in progress", _LOG_);
     return false;
@@ -2553,10 +2669,14 @@ bool MowerAdapter::uploadMapToMower()
   _mapUploadPending = true;
   Log(INFO, "%suploadMapToMower: queued", _LOG_);
   return true;
+#else
+  return false;
+#endif
 }
 
 void MowerAdapter::startMapUploadFromLoop()
 {
+#ifdef ENABLE_MAP
   if (!_mapUploadPending) return;
   _mapUploadPending = false;
 
@@ -2635,10 +2755,12 @@ void MowerAdapter::startMapUploadFromLoop()
         _LOG_, snap.perimeter.front().X, snap.perimeter.front().Y,
         snap.perimeter.back().X, snap.perimeter.back().Y);
   }
+#endif
 }
 
 bool MowerAdapter::sendMapChunkAsync(const std::vector<ArduMower::Domain::Robot::MapPoint> &pts, int baseIdx)
 {
+#ifdef ENABLE_MAP
   if (_mapUploadState.pointIdx >= pts.size())
     return false;
 
@@ -2681,6 +2803,9 @@ bool MowerAdapter::sendMapChunkAsync(const std::vector<ArduMower::Domain::Robot:
   _mapUploadState.lastCommandQueued = true;
   _mapUploadState.waitingForResponse = true;
   return true;
+#else
+  return false;
+#endif
 }
 
 static bool responseOkForPhase(int phase, const char* response)
@@ -2738,6 +2863,7 @@ static int parseResponseIndex(int phase, const char* response)
 
 void MowerAdapter::processMapUpload()
 {
+#ifdef ENABLE_MAP
   if (!_mapUploadState.active)
     return;
 
@@ -2974,6 +3100,7 @@ void MowerAdapter::processMapUpload()
       _mapUploadState.active = false;
       break;
   }
+#endif
 }
 
 void MowerAdapter::loop()
@@ -3206,6 +3333,7 @@ const MowerAdapter::TransientMap* MowerAdapter::findTransientMap(const String &i
 }
 
 String MowerAdapter::findOrCreateTransientMap(const ArduMower::Domain::Robot::MowerMap &map, const String &name, double rotation) {
+#ifdef ENABLE_MAP
   String hash = _mapManager.computeHash(map);
   for (const auto &t : _transientMaps) {
     if (t.hash == hash) return t.id;
@@ -3221,9 +3349,13 @@ String MowerAdapter::findOrCreateTransientMap(const ArduMower::Domain::Robot::Mo
   t.map = map;
   _transientMaps.push_back(t);
   return t.id;
+#else
+  return String();
+#endif
 }
 
 bool MowerAdapter::removeTransientMap(const String &id) {
+#ifdef ENABLE_MAP
   for (auto it = _transientMaps.begin(); it != _transientMaps.end(); ++it) {
     if (it->id == id) {
       _transientMaps.erase(it);
@@ -3231,9 +3363,13 @@ bool MowerAdapter::removeTransientMap(const String &id) {
     }
   }
   return false;
+#else
+  return false;
+#endif
 }
 
 void MowerAdapter::updateTransientMapMeta(const String &id, const ArduMower::Domain::Robot::MowerMap &map, double rotation) {
+#ifdef ENABLE_MAP
   for (auto &t : _transientMaps) {
     if (t.id == id) {
       t.area = _mapManager.computeArea(map);
@@ -3248,6 +3384,7 @@ void MowerAdapter::updateTransientMapMeta(const String &id, const ArduMower::Dom
       break;
     }
   }
+#endif
 }
 
 const MowerAdapter::MapDraft* MowerAdapter::findMapDraft(const String &id) const {
@@ -3258,6 +3395,7 @@ const MowerAdapter::MapDraft* MowerAdapter::findMapDraft(const String &id) const
 }
 
 void MowerAdapter::storeCurrentMapDraft() {
+#ifdef ENABLE_MAP
   if (_currentMapId.length() == 0 || _currentMapId.startsWith("__t_")) return;
   MapDraft *target = nullptr;
   for (auto &draft : _mapDrafts) {
@@ -3281,15 +3419,18 @@ void MowerAdapter::storeCurrentMapDraft() {
   } else {
     target->map = _map;
   }
+#endif
 }
 
 void MowerAdapter::removeMapDraft(const String &id) {
+#ifdef ENABLE_MAP
   for (auto it = _mapDrafts.begin(); it != _mapDrafts.end(); ++it) {
     if (it->id == id) {
       _mapDrafts.erase(it);
       return;
     }
   }
+#endif
 }
 
 bool MowerAdapter::isNameUsed(const String &name, const String &excludeId) const {

@@ -40,11 +40,15 @@
       bind:settings={$settings.time}
       bind:original={$original.time}
     />
+    <!-- Funktionen, die die Firmware nicht enthält (*_supported: false), ausblenden;
+         ältere Firmware meldet sie nicht und hat alle -->
+    {#if $info?.ble_supported !== false}
     <BluetoothSettings
       bind:settings={$settings.bluetooth}
       bind:original={$original.bluetooth}
       bind:ps4ControllerSettings={$settings.ps4controller}
     />
+    {/if}
     {#if !$settings.bluetooth.enabled && $settings.ps4controller && $original.ps4controller}
       <PS4ControllerSettings
         bind:settings={$settings.ps4controller}
@@ -53,15 +57,19 @@
         bind:info={$info}
       />
     {/if}
+    {#if $info?.mqtt_supported !== false}
     <MqttSettings
       bind:settings={$settings.mqtt}
       bind:original={$original.mqtt}
       bind:allSettings={$settings}
     />
+    {/if}
+    {#if $info?.prometheus_supported !== false}
     <PrometheusSettings
       bind:settings={$settings.prometheus}
       bind:original={$original.prometheus}
     />
+    {/if}
     <PositionSettings
       bind:settings={$settings.position}
       bind:original={$original.position}

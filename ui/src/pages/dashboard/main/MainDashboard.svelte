@@ -25,6 +25,8 @@
     import { mowJobStore, isJobOnMower, isJobPreview, jobRouteIndex } from '../../../stores/mow-job';
 
     let mowNowOpen = $state(false);
+    // Karten, Areas und Aufträge gibt es nur in Builds mit Karte (ESP32-S3)
+    const mapEnabled = import.meta.env.VITE_ENABLE_MAP === 'true';
 
     // Vorschau eines Auftrags: Upload schickt ihn, Start startet ihn (mit Serie)
     function uploadJobOrMap(preview: boolean) {
@@ -213,9 +215,11 @@
                             <div class="clock-warn">NTP nicht synchron</div>
                         {/if}
                     </Tile>
+                    {#if mapEnabled}
                     <Tile class="mow-areas-tile compact">
                         <MowAreaToggles horizontal={true} showTitle={false} labelPrefix="Mow " jobMode={jobOnMower || jobPreview} hintOutside={true} keepSaved={true} />
                     </Tile>
+                    {/if}
                     <style>
                         :global(.mow-areas-tile) {
                             z-index: 10;
@@ -317,12 +321,12 @@
                         <MotorRpmChart samples={$MotorRpmStore.samples} intervalS={$MotorRpmStore.intervalS} />
                     </Tile>
                 {/if}
-            </Column><!--
+            </Column>{#if mapEnabled}<!--
             --><Column sm={4} md={8} lg={6} class="map-col">
                 <Tile class="map-tile">
                     <MiniMap mowPointIndex={pos?.mow_point_index ?? -1} />
                 </Tile>
-            </Column>
+            </Column>{/if}
         </Row>
 
         <!-- Sensor-Strip -->
@@ -386,26 +390,30 @@
 
         <!-- Schnellaktionen -->
         <div class="quick-actions">
-            {#if jobPreview || (hasMapData && !isMapSynced)}
+            {#if mapEnabled && (jobPreview || (hasMapData && !isMapSynced))}
                 <Button kind="primary" icon={Upload} size="small" class="action-upload"
                     iconDescription={jobPreview ? "Upload the job" : "Upload the map"} tooltipPosition="top"
                     on:click={() => uploadJobOrMap(jobPreview)} />
             {/if}
-            {#if canRecalculate}
+            {#if mapEnabled && canRecalculate}
                 <Button kind="secondary" icon={Renew} size="small" class="action-recalculate"
                     iconDescription="Calculate the route again with new angles" tooltipPosition="top"
                     disabled={state?.job === 1 || !!$pendingOperationStore}
                     on:click={recalculate} />
             {/if}
+            {#if mapEnabled}
             <Button kind="primary" icon={ListChecked} size="small" class="action-mow-now" iconDescription="Choose areas"
                 tooltipPosition="top" on:click={() => (mowNowOpen = true)} />
+            {/if}
             <Button kind="primary" icon={PlayFilledAlt} size="small" class="action-start" disabled={jobPreview || (hasMapData && !isMapSynced)} on:click={() => startMowing(jobOnMower)} />
             <Button kind="danger" icon={StopFilledAlt} size="small" class="action-stop" disabled={hasMapData && !isMapSynced} on:click={() => sendCmd('stop')} />
             <Button kind="secondary" icon={Home} size="small" class="action-dock" disabled={hasMapData && !isMapSynced} on:click={() => sendCmd('dock')} />
             <Button kind="tertiary" icon={SkipForwardFilled} size="small" class="action-skip" disabled={hasMapData && !isMapSynced} on:click={() => sendCmd('skipWaypoint')} />
         </div>
     {/if}
+    {#if mapEnabled}
     <MowNowDialog bind:open={mowNowOpen} />
+    {/if}
 </div>
 
 <style lang="scss">

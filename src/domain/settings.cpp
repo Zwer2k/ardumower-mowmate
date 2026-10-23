@@ -964,6 +964,27 @@ void PropertiesClass::marshal(JsonObject o) const
   o["terminal_supported"] = false;
   o[_t_terminal_available] = false;
 #endif
+  // Funktionen, die dieser Build enthält (die Einstellungen blenden den Rest aus)
+#ifdef ENABLE_BLE
+  o["ble_supported"] = true;
+#else
+  o["ble_supported"] = false;
+#endif
+#ifdef ENABLE_MQTT
+  o["mqtt_supported"] = true;
+#else
+  o["mqtt_supported"] = false;
+#endif
+#ifdef ENABLE_PROMETHEUS
+  o["prometheus_supported"] = true;
+#else
+  o["prometheus_supported"] = false;
+#endif
+#ifdef ENABLE_MAP
+  o["map_supported"] = true;
+#else
+  o["map_supported"] = false;
+#endif
 #ifdef CONFIG_IDF_TARGET_ESP32S3
   o["firmware_target"] = "esp32-s3";
 #else

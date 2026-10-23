@@ -116,6 +116,11 @@ export interface Info {
   memory?: MemoryInfo;
   /** Firmware has a terminal port */
   terminal_supported?: boolean;
+  /** Features built into the firmware (missing in older firmware: all present) */
+  ble_supported?: boolean;
+  mqtt_supported?: boolean;
+  prometheus_supported?: boolean;
+  map_supported?: boolean;
   /** Terminal port supported and switched on in the mower capabilities */
   terminal_available?: boolean;
   /** Baud rate the terminal port currently uses */
