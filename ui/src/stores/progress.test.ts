@@ -66,4 +66,18 @@ describe("operationProgress", () => {
     expect(get(operationProgress)).toBeNull();
     unsubscribe();
   });
+
+  it("does not wait for a transfer that ended before Complete arrived", () => {
+    const unsubscribe = operationProgress.subscribe(() => {});
+    setOp("calculate", 40, "Calculating waypoints...");
+    setOp("calculate", 96, "Sending route...");
+    mapChunkProgress.set({ received: 100, total: 200, label: "Loading waypoints" });
+    expect(get(operationProgress)).toMatchObject({ percent: 90, includesTransfer: true });
+    // Übertragung fertig, das Modem schickt "Complete" erst danach
+    mapChunkProgress.set(null);
+    expect(get(operationProgress)).toMatchObject({ percent: 100, includesTransfer: true });
+    setOp("calculate", 100, "Complete");
+    expect(get(operationProgress)).toBeNull();
+    unsubscribe();
+  });
 });

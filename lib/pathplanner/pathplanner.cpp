@@ -388,7 +388,17 @@ bool FreeSpaceRouter::crossesProperly(const Point &a, const Point &b, const Poly
         const double o1 = crossProduct(a, b, c), o2 = crossProduct(a, b, d);
         if (!((o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps))) continue;
         const double o3 = crossProduct(c, d, a), o4 = crossProduct(c, d, b);
-        if ((o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps)) return true;
+        if (!((o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps))) continue;
+        // Liegt ein Endpunkt innerhalb der Randtoleranz auf dieser Kante, ist
+        // die "Kreuzung" ein Rundungsrest: Die Exclusion-Runden kommen aus
+        // Clipper (1 mm Raster) und liegen bis zu 1 mm neben der Kante, ihre
+        // Kanten liefen sonst zwischen zwei solchen Ecken "durch" die
+        // Exclusion und wurden umgeleitet. Ob die Strecke dazwischen wirklich
+        // im Hindernis liegt, prüfen die Mittelpunkte in segmentFree().
+        const double edgeLen = distance(c, d);
+        if (edgeLen > 1e-9 &&
+            (std::abs(o3) / edgeLen < BOUNDARY_TOL || std::abs(o4) / edgeLen < BOUNDARY_TOL)) continue;
+        return true;
     }
     return false;
 }

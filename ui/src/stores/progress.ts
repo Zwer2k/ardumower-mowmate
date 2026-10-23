@@ -28,6 +28,10 @@ export interface ProgressView {
 let linkedTransfer = false;
 // Operation mit Übertragung lief beim letzten Stand noch
 let wasBusyWithTransfer = false;
+// Die Übertragung zu dieser Operation ist schon fertig. Das Modem hält während
+// einer Kartenübertragung andere Nachrichten zurück, "Complete" kommt daher
+// meist erst danach; dann nicht mehr auf eine Übertragung warten.
+let transferDone = false;
 // Ende dieser Operation; bis TRANSFER_WAIT_MS danach gehört eine beginnende
 // Übertragung noch dazu ("Complete" kann vor dem ersten Kartenstück ankommen)
 let finishedAt = 0;
@@ -45,8 +49,10 @@ export const operationProgress = derived(
     const withTransfer = OPS_WITH_TRANSFER.has(op);
     const now = Date.now();
 
+    // Neue Operation: ihre Übertragung steht noch aus
+    if (busy && withTransfer && !wasBusyWithTransfer) transferDone = false;
     // Fehlgeschlagen: Es kommt keine Karte
-    if (wasBusyWithTransfer && !busy && state?.progressMsg !== "Failed") {
+    if (wasBusyWithTransfer && !busy && !transferDone && state?.progressMsg !== "Failed") {
       finishedAt = now;
       if (waitTimer) clearTimeout(waitTimer);
       waitTimer = setTimeout(() => {
@@ -57,8 +63,12 @@ export const operationProgress = derived(
     wasBusyWithTransfer = busy && withTransfer;
     const waiting = !busy && finishedAt > 0 && now - finishedAt < TRANSFER_WAIT_MS;
 
-    if (!$chunk) linkedTransfer = false;
-    else if ((busy && withTransfer) || waiting) linkedTransfer = true;
+    if (!$chunk) {
+      if (linkedTransfer) transferDone = true;
+      linkedTransfer = false;
+    } else if ((busy && withTransfer) || waiting) {
+      linkedTransfer = true;
+    }
 
     if (linkedTransfer && $chunk) {
       finishedAt = 0;
@@ -68,6 +78,10 @@ export const operationProgress = derived(
         label: $chunk.label || "Loading map",
         includesTransfer: true,
       };
+    }
+    // Karte schon da, "Complete" steht noch aus: nicht auf den Rechenstand zurückfallen
+    if (busy && withTransfer && transferDone) {
+      return { percent: 100, label: "Loading map", includesTransfer: true };
     }
     if (busy) {
       return {
