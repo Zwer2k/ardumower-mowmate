@@ -371,6 +371,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       map.pattern = settings.pattern;
       map.mowOfs = settings.width;
       map.patternAngle = settings.angle;
+      map.angleMode = settings.angleMode;
+      map.angleStep = settings.angleStep;
       map.distanceToBorder = settings.distanceToBorder;
       map.borderLaps = settings.borderLaps;
       map.distanceToExclusions = settings.distanceToExclusions;
@@ -413,6 +415,10 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       if (!jsonData["pattern"].isNull()) s.pattern = jsonData["pattern"];
       if (!jsonData["width"].isNull()) s.width = jsonData["width"];
       if (!jsonData["angle"].isNull()) s.angle = jsonData["angle"];
+      if (!jsonData["angleMode"].isNull()) s.angleMode = constrain(jsonData["angleMode"].as<int>(), 0, 2);
+      if (!jsonData["angleStep"].isNull()) s.angleStep = constrain(jsonData["angleStep"].as<int>(), 1, 359);
+      // Ringe haben keinen Winkel: Zufall/Dynamik ergäbe nur dieselbe Route
+      if (s.pattern == 2) s.angleMode = 0;
       if (!jsonData["distanceToBorder"].isNull()) s.distanceToBorder = jsonData["distanceToBorder"];
       if (!jsonData["borderLaps"].isNull()) s.borderLaps = jsonData["borderLaps"];
       if (!jsonData["distanceToExclusions"].isNull()) s.distanceToExclusions = jsonData["distanceToExclusions"];
@@ -592,6 +598,11 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       _socketHandler->sendData(ResponseDataType::map, NULL, true);
       _socketHandler->sendMapList(NULL);
       _socketHandler->sendMapOpResult(this, "load", true);
+      // Zufälliger/dynamischer Winkel: Die Route ist nicht gespeichert. Nur auf
+      // Wunsch (Choose areas im Main-Dashboard) gleich eine mit dem nächsten
+      // Winkel berechnen; im Editor bleibt die Karte ohne Route.
+      if ((jsonData["calculateRoute"] | false) && _source.mowSettings().angleMode != 0)
+        _socketHandler->calculateWaypoints();
     } else {
       // Die aktuelle Karte bei einem Ladefehler behalten. Die Map-Liste
       // liefert dem Frontend wieder die weiterhin autoritative currentId.
@@ -2242,6 +2253,10 @@ void UiSocketHandler::processCalculateWaypoints() {
   map.waypoints.clear();
 #ifdef ENABLE_MAP
   auto settings = _calculateWaypointsSettings;
+  // Zufälliger/dynamischer Winkel: Beispielroute mit dem nächsten Winkel; sie
+  // wird nicht gespeichert, kann aber so hochgeladen werden
+  const int routeAngle = settings.angleMode != 0 ? _cmd.nextRouteAngle() : -1;
+  if (routeAngle >= 0) settings.angle = routeAngle;
   Log(INFO, "%s processCalculateWaypoints: settings pattern=%d width=%.2f angle=%d distToBorder=%.0f laps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
       _LOG_, settings.pattern, settings.width, settings.angle, settings.distanceToBorder, settings.borderLaps,
       settings.doMowArea, settings.doMowBorder, settings.doMowExclusionBorder);
@@ -2301,8 +2316,11 @@ void UiSocketHandler::processCalculateWaypoints() {
   for (const auto &wp : waypoints)
     map.waypoints.push_back(wp);
   map.routeKey = map.planKey();
-#endif
+  map.routeAngle = (int16_t)routeAngle;
+  _source.setMap(map, routeAngle < 0);
+#else
   _source.setMap(map);
+#endif
   abortMapChunkSend();
   yield();
   sendData(ResponseDataType::map, NULL, true);
@@ -2523,6 +2541,7 @@ void UiSocketHandler::sendMapList(UiSocketItem *sendTo)
     obj["requiresRename"] = m.requiresRename;
     if (m.parentId.length() > 0) obj["parentId"] = m.parentId;
     if (m.outdated) obj["outdated"] = true;
+    if (m.dynamicAngle) obj["dynamicAngle"] = true;
   }
 
   String json;

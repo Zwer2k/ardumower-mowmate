@@ -31,7 +31,7 @@ import {
   type RouteReportData,
 } from "../model";
 import { routeReportStore, clearRouteReport } from "../map/route-report";
-import { applyMowJobChunk, type MowJobChunk } from "./mow-job";
+import { applyMowJobChunk, mowJobStore, type MowJobChunk } from "./mow-job";
 
 /** Antwort auf requestAreas: Bereiche einer Hauptkarte für den Export */
 export interface AreaExportData {
@@ -141,7 +141,7 @@ export const socketStore = writable<SocketState>(initialState);
 export const pendingOperationStore = writable<{ op: string; label: string } | null>(null);
 let pendingOperationTimer: ReturnType<typeof setTimeout> | null = null;
 
-function startPendingOperation(op: string, label: string) {
+function startPendingOperation(op: string, label: string, timeoutMs = 30000) {
   if (pendingOperationTimer) clearTimeout(pendingOperationTimer);
   pendingOperationStore.set({ op, label });
   // Sicherheitsnetz, falls das Modem die Anfrage nie beantwortet (z. B. weil
@@ -151,7 +151,7 @@ function startPendingOperation(op: string, label: string) {
     if (get(pendingOperationStore)?.op !== op) return;
     pendingOperationStore.set(null);
     toastStore.set({ msg: `The modem did not respond: "${label.replace(/\.+$/, "")}" did not start. Try again.`, type: "error" });
-  }, 30000);
+  }, timeoutMs);
 }
 
 function clearPendingOperation(op?: string) {
@@ -971,6 +971,7 @@ class SocketService {
                   break;
                 case ResponseDataType.mowJob:
                   applyMowJobChunk(jsonData.data as MowJobChunk);
+                  this.finishPreviewJobIfArrived();
                   break;
                 case ResponseDataType.areaExport:
                   areaExportStore.set(jsonData.data as AreaExportData);
@@ -1426,7 +1427,8 @@ class SocketService {
 
   /** Auftrag aus diesen Bereichen nur zusammensetzen und als Vorschau anzeigen */
   sendPreviewJob(areaIds: string[], overlapOnce: boolean, toggles: number = 7) {
-    startPendingOperation("previewJob", "Putting the job together...");
+    // Bereiche mit zufälligem/dynamischem Winkel rechnet das Modem dabei neu
+    startPendingOperation("previewJob", "Putting the job together...", 120000);
     this.sendMessage({
       type: RequestDataType.previewJob,
       data: { areaIds, overlapOnce, toggles } as unknown as RequestSocketMessage["data"],
@@ -1469,7 +1471,21 @@ class SocketService {
     this.sendMessage(req);
   }
 
-  sendLoadMap(id: string, discardCurrent = false) {
+  /** calculateRoute: Karte mit zufälligem/dynamischem Winkel gleich mit einer
+   *  neuen Route laden (Choose areas im Main-Dashboard); im Editor nicht */
+  // Zeitstempel des Auftrags vor einer Vorschau: Ein anderer, vollständiger
+  // Auftrag beendet die Anzeige "Loading route..."
+  private previewJobBefore: number | null | undefined = undefined;
+
+  private finishPreviewJobIfArrived() {
+    if (this.previewJobBefore === undefined) return;
+    const job = get(mowJobStore);
+    if (!job || !job.complete || job.timestamp === this.previewJobBefore) return;
+    this.previewJobBefore = undefined;
+    clearPendingOperation("previewJob");
+  }
+
+  sendLoadMap(id: string, discardCurrent = false, calculateRoute = false) {
     this.ackedWaypoints = null;
     this.pendingUpload = null;
     if (this.pendingUploadRetry) {
@@ -1490,7 +1506,7 @@ class SocketService {
     clearRouteReport();
     const req: RequestSocketMessage = {
       type: RequestDataType.loadMap,
-      data: { id, discardCurrent },
+      data: calculateRoute ? { id, discardCurrent, calculateRoute: true } : { id, discardCurrent },
     };
     this.sendMessage(req);
   }
@@ -1553,7 +1569,17 @@ class SocketService {
   /** Ergebnis einer Kartenoperation vom Modem (create, copy, load, save, rename, delete, discard, setActive, import). */
   private handleMapOpResult(result: { op: string; ok: boolean; error?: string; mapId?: string }) {
     // Antwort da: die Anzeige "läuft" endet spätestens jetzt
-    if (result.op === "createArea" || result.op === "previewJob") clearPendingOperation(result.op);
+    if (result.op === "createArea") clearPendingOperation(result.op);
+    if (result.op === "previewJob") {
+      if (result.ok) {
+        // Zusammengesetzt; die Route kommt danach in Stücken (bei schlechtem
+        // WLAN dauert das). Die Anzeige läuft weiter, bis sie da ist.
+        this.previewJobBefore = get(mowJobStore)?.timestamp ?? null;
+        startPendingOperation("previewJob", "Loading route...", 60000);
+      } else {
+        clearPendingOperation(result.op);
+      }
+    }
     if (result.op === "previewJob" || result.op === "clearJob" || result.op === "runJob") {
       if (!result.ok) toastStore.set({ msg: result.error || "The job operation failed.", type: "error" });
       return;

@@ -6,6 +6,8 @@ const defaultSettings: MowSettings = {
   pattern: 0,
   width: 0.3,
   angle: 0,
+  angleMode: 0,
+  angleStep: 30,
   distanceToBorder: 0,
   borderLaps: 0,
   distanceToExclusions: 0,

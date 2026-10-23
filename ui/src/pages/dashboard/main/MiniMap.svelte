@@ -10,6 +10,7 @@
     import { isMowerMapSynced } from '../../../map/services/map-sync';
     import { mowJobStore, isJobOnMower, isJobPreview, jobPartProgress, jobRouteIndex, outlineAsMap } from '../../../stores/mow-job';
     import Obstacles from '../../../map/Obstacles.svelte';
+    import JobPreviewLayer from '../../../map/JobPreviewLayer.svelte';
     import MapLoadingOverlay from '../../../map/MapLoadingOverlay.svelte';
     import MapGotoOverlay from '../../../map/overlay/MapGotoOverlay.svelte';
     import GotoControls from '../../../map/overlay/GotoControls.svelte';
@@ -55,6 +56,16 @@
             ? `Auftrag: ${names} · Teil ${job.segment + 1}/${job.segmentStarts.length}`
             : `Auftrag: ${names}`;
     }
+    // Bereiche mit zufälligem/dynamischem Winkel: Ihre Route entsteht je Auftrag
+    // neu, ihre Fläche wird wie im Zeitplaner farbig hervorgehoben
+    $: shownAreaIds = (jobOnMower || jobPreview) && $mowJobStore
+        ? $mowJobStore.parts.map((p) => p.id)
+        : ($socketStore.currentMapId ? [$socketStore.currentMapId] : []);
+    // Geladene Karte: ihre Auswahl liegt schon vor (MapStore), ohne Anfrage beim Modem
+    $: knownSelections = !(jobOnMower || jobPreview) && $socketStore.currentMapId && !$socketStore.isLoadingMap
+        ? { [$socketStore.currentMapId]: $MapStore?.map?.selection?.points ?? [] }
+        : {};
+    $: dynamicAreaIds = shownAreaIds.filter((id) => ($socketStore.maps ?? []).some((m) => m.id === id && m.dynamicAngle));
     $: isMapSynced = jobOnMower || isMowerMapSynced($socketStore.state, $socketStore.currentMapId, storedCrc);
     $: uploadOp = ($socketStore?.state as any)?.progressOp;
     $: uploadMsg = $socketStore?.state?.progressMsg ?? '';
@@ -305,6 +316,10 @@
                 {/each}
 
                 <Obstacles obstacles={$socketStore.obstacles} />
+
+                {#if dynamicAreaIds.length > 0 && map.perimeter?.points?.length}
+                    <JobPreviewLayer areaIds={shownAreaIds} onlyIds={dynamicAreaIds} perimeter={map.perimeter.points} {knownSelections} />
+                {/if}
 
                 {#if map.dockpoints?.points?.length}
                     <polyline

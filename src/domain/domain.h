@@ -471,6 +471,11 @@ namespace ArduMower
         int pattern;
         float width;
         int angle;
+        // Winkel je Auftrag neu: 0 fest (angle), 1 zufällig (mindestens 30°
+        // vom letzten entfernt), 2 dynamisch (je Auftrag um angleStep weiter).
+        // Die Route wird dann nicht gespeichert, sondern für jeden Auftrag berechnet.
+        int angleMode = 0;
+        int angleStep = 30;
         float distanceToBorder;
         int borderLaps;
         float distanceToExclusions;  // Spurbreiten Abstand zu den Exclusions
@@ -499,7 +504,7 @@ namespace ArduMower
         float checkTurnRadius = 0.30f;
 
         MowSettings()
-            : timestamp(0), pattern(0), width(0.3f), angle(0),
+            : timestamp(0), pattern(0), width(0.3f), angle(0), angleMode(0), angleStep(30),
               distanceToBorder(0.0f), borderLaps(0),
               distanceToExclusions(0.0f), exclusionLaps(0), mowBorderCcw(false),
               routeOrder(""), exclusionLapsWithArea(false), selectionEdgeLaps(false),
@@ -512,6 +517,8 @@ namespace ArduMower
               && pattern == other.pattern
               && width == other.width
               && angle == other.angle
+              && angleMode == other.angleMode
+              && angleStep == other.angleStep
               && distanceToBorder == other.distanceToBorder
               && borderLaps == other.borderLaps
               && distanceToExclusions == other.distanceToExclusions
@@ -544,6 +551,7 @@ namespace ArduMower
         bool requiresRename = false;
         String parentId;   // Subkarte: übergeordnete Karte, sonst leer
         bool outdated = false; // Subkarte: Route passt nicht zu Geometrie/Auswahl
+        bool dynamicAngle = false; // Winkel zufällig/dynamisch: Route je Auftrag neu
       };
 
       // Mähauftrag aus mehreren Bereichen, wie er zuletzt hochgeladen wurde
@@ -559,6 +567,9 @@ namespace ArduMower
         std::vector<String> names;
         std::vector<uint32_t> starts;  // erster Wegpunkt je Bereich
         std::vector<float> xy;         // ganze Route: x0,y0,x1,y1,...
+        // Winkel, mit dem ein Bereich eigens für diesen Auftrag berechnet
+        // wurde (zufällig/dynamisch), sonst -1; wird beim Upload gemerkt
+        std::vector<int16_t> angles;
         // Teilaufträge, wenn die Route nicht in den Speicher des Mähers passt:
         // erster Wegpunkt je Teil; Teil k reicht bis einschließlich zum ersten
         // Punkt von Teil k+1. crc gehört zum Teil segment, der auf dem Mäher ist.
@@ -601,7 +612,9 @@ namespace ArduMower
         virtual MowSettings *mowSettingsP() = 0;
 
         virtual ArduMower::Domain::Robot::MowerMap mowerMap() = 0;
-        virtual void setMap(const ArduMower::Domain::Robot::MowerMap &map) = 0;
+        // markUnsaved = false: Route einer Karte mit zufälligem/dynamischem
+        // Winkel, die nicht gespeichert wird
+        virtual void setMap(const ArduMower::Domain::Robot::MowerMap &map, bool markUnsaved = true) = 0;
         // markUnsaved = false: Laufzeit-Änderung (Mow areas im Main-Dashboard),
         // die Karte gilt danach nicht als ungespeichert
         virtual void setMowSettings(const MowSettings &s, bool markUnsaved = true) = 0;
@@ -714,6 +727,9 @@ namespace ArduMower
         virtual bool uploadJobToMower(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) {
           (void)ids; (void)overlapOnce; (void)toggles; return false;
         }
+        // Winkel für die nächste Berechnung der geladenen Karte bei
+        // zufälligem/dynamischem Winkel, -1 bei festem Winkel
+        virtual int nextRouteAngle() { return -1; }
         // Nur zusammensetzen (Vorschau), nicht hochladen; clearJob verwirft ihn
         virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) {
           (void)ids; (void)overlapOnce; (void)toggles; return false;

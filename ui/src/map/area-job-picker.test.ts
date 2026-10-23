@@ -168,9 +168,44 @@ describe("MowNowDialog with a single map", () => {
     const { getByText } = render(MowNowDialog, { open: true });
     await tick();
     await fireEvent.click(getByText("Load map"));
-    expect(load).toHaveBeenCalledWith("n", false);
+    expect(load).toHaveBeenCalledWith("n", false, true);
     expect(preview).not.toHaveBeenCalled();
     load.mockRestore();
     preview.mockRestore();
+  });
+});
+
+import JobPreviewLayer from "./JobPreviewLayer.svelte";
+
+describe("JobPreviewLayer", () => {
+  const perimeter = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: -10 }, { x: 0, y: -10 }];
+
+  it("draws nothing for an area whose selection is not known yet, and asks again", async () => {
+    vi.useFakeTimers();
+    socketStore.update((s) => ({ ...s, maps, currentMapId: "m1" }));
+    areaExportStore.set(null);
+    const asked = vi.spyOn(socketService, "requestAreas").mockImplementation(() => {});
+    const { container } = render(JobPreviewLayer, { areaIds: ["m1"], perimeter });
+    await tick();
+    // früher: die ganze Karte in Bereichsfarbe, Nummer in der Mitte
+    expect(container.querySelectorAll("polygon").length).toBe(0);
+    expect(asked).toHaveBeenCalledTimes(1);
+    // Antwort ging verloren: erneut fragen
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(asked).toHaveBeenCalledTimes(2);
+    asked.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("uses a known selection without waiting for the modem", async () => {
+    socketStore.update((s) => ({ ...s, maps, currentMapId: "m1" }));
+    areaExportStore.set(null);
+    const asked = vi.spyOn(socketService, "requestAreas").mockImplementation(() => {});
+    const sel = [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: -5 }];
+    const { container } = render(JobPreviewLayer, { areaIds: ["m1"], perimeter, knownSelections: { m1: sel } });
+    await tick();
+    expect(container.querySelector("polygon")?.getAttribute("points")).toBe("0,0 5,0 5,-5");
+    expect(asked).not.toHaveBeenCalled();
+    asked.mockRestore();
   });
 });

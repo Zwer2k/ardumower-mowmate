@@ -15,6 +15,9 @@
   export let hasRouteReport = false;
   // Bereich (Subkarte): Auswahlfläche für die Berechnung zeichnen
   export let isArea = false;
+  // Zufälliger/dynamischer Winkel: nur eine Beispielroute, die echte entsteht je Auftrag
+  export let simulate = false;
+  export let onCalculate: () => void = () => {};
   export let selectionTool: "rect" | "lasso" | null = null;
   export let onSelectionTool: (tool: "rect" | "lasso" | null) => void = () => {};
   export let onSelectionWhole: () => void = () => {};
@@ -74,10 +77,12 @@
         size="small"
         disabled={busy}
         icon={IconMagicWand}
-        iconDescription="Calculate waypoints"
-        on:click={() => socketService.sendCalculateWaypoints()}
+        iconDescription={simulate
+          ? "Calculate an example route with the next angle. It is not saved; every job calculates its own route."
+          : "Calculate waypoints"}
+        on:click={() => { onCalculate(); socketService.sendCalculateWaypoints(); }}
       >
-        <span class="btn-label">Calculate</span>
+        <span class="btn-label">{simulate ? "Sim calculate" : "Calculate"}</span>
       </Button>
       <Button
         kind="ghost"

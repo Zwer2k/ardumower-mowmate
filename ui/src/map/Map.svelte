@@ -288,7 +288,16 @@
   // Subkarte (Bereich): Geometrie gehört der Hauptkarte und ist hier gesperrt
   $: isAreaMap = !!effectiveMap?.parentId;
   $: parentMapName = isAreaMap ? ($socketStore.maps.find((m) => m.id === effectiveMap?.parentId)?.name ?? "") : "";
-  $: visibleCategoryOptions = isAreaMap ? areaCategoryOptions : categoryOptions;
+  // Zufälliger/dynamischer Winkel: Die Route entsteht je Auftrag neu und wird
+  // nicht gespeichert, Bearbeiten der Wegpunkte ergibt keinen Sinn
+  $: dynamicAngle = ($mowSettingsStore.angleMode ?? 0) !== 0;
+  $: visibleCategoryOptions = (isAreaMap ? areaCategoryOptions : categoryOptions)
+    .filter((o) => !dynamicAngle || o.id !== "waypoints");
+  // Die Route einer dynamischen Area im RAM stammt meist aus dem Dashboard
+  // (Choose areas, Recalculate). Im Editor erst nach "Sim calculate" zeigen.
+  let simRouteFor: string | null = null;
+  $: routeVisible = !dynamicAngle || simRouteFor === effectiveMapId;
+  $: if (dynamicAngle && editCategory === "waypoints") editCategory = isAreaMap ? "selection" : "perimeter";
   $: if (isAreaMap && editCategory !== "waypoints" && editCategory !== "selection") editCategory = "selection";
   $: if (!isAreaMap && editCategory === "selection") editCategory = "perimeter";
   // Zeichenwerkzeug für die Auswahl (Leiste "Calculate waypoints"); endet mit
@@ -1315,6 +1324,8 @@
           onOpenRouteReport={() => (showRouteReport = true)}
           hasRouteReport={$routeReportStore != null}
           isArea={isAreaMap}
+          simulate={dynamicAngle}
+          onCalculate={() => (simRouteFor = effectiveMapId)}
           {selectionTool}
           onSelectionTool={(tool) => (selectionTool = tool)}
           onSelectionWhole={() => { selectionTool = null; setSelection([]); }}
@@ -1332,10 +1343,10 @@
       {perimeterPoints}
       {exclusionPoints}
       {dockpointsPoints}
-      {waypointsPoints}
-      {uploadWaypointsPoints}
+      waypointsPoints={routeVisible ? waypointsPoints : 0}
+      uploadWaypointsPoints={routeVisible ? uploadWaypointsPoints : 0}
       {totalPoints}
-      {routeLengthM}
+      routeLengthM={routeVisible ? routeLengthM : 0}
       {mowSpeed}
       {mowerCapacity}
       {mowerCapacityExceeded}
@@ -1418,7 +1429,7 @@
           />
         {/if}
         <Waypoints
-          value={{ points: edit && editCategory === "waypoints" ? rawWaypoints : uploadRoute }}
+          value={{ points: !routeVisible ? [] : edit && editCategory === "waypoints" ? rawWaypoints : uploadRoute }}
           waypointsId="map-0-waypoints"
           cutWidth={$routeStyleStore === 'width' ? Math.max(0.05, $BackendSettings?.mower?.cut_width ?? 0.18) : null}
           {edit}

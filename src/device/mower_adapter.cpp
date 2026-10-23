@@ -96,7 +96,7 @@ void processCSVResponse(const String& res, std::function<void(int, const char*, 
 MowerAdapter::MowerAdapter(Settings::Settings &_settings, Router &_router)
     : settings(_settings), router(_router), sendIsInitialized(false) {}
 
-void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
+void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map, bool markUnsaved) {
   // Warte kurz, bis kein Lesevorgang auf _map läuft (max 100ms)
   int waitCount = 0;
   while (_map.isReading() && waitCount < 10) {
@@ -112,21 +112,28 @@ void MowerAdapter::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
   // Die UI kennt den Schlüssel der letzten Berechnung nicht (nur der Planer
   // setzt ihn); er bleibt erhalten.
   const uint32_t routeKey = _map.routeKey;
+  const int16_t routeAngle = _map.routeAngle;
   _map = map;
   if (_map.routeKey == 0) _map.routeKey = routeKey;
+  // Ebenso den Winkel der Route (zufällig/dynamisch), solange die Wegpunkte bleiben
+  if (_map.routeAngle < 0 && _map.angleMode != 0 && !_map.waypoints.empty()) _map.routeAngle = routeAngle;
   _map.timestamp = millis();
   _lastUploadedMapId = "";
   _lastUploadedMapCrc = 0;
-  _currentMapUnsaved = true;
   updateCurrentMapMeta();
-  // Die Kartenliste zeigt nur "ungespeichert" und die Fläche. Sie ging früher
-  // bei jeder Bearbeitung (alle 250 ms) an alle Browser.
-  if (!wasUnsaved || fabs(oldArea - _currentMapArea) >= 0.05)
-    _mapListDirty = true;
-  if (_currentMapId.startsWith("__t_")) {
-    updateTransientMapMeta(_currentMapId, _map, _map.rotation);
-  } else {
-    storeCurrentMapDraft();
+  // Neue Route einer Karte mit zufälligem/dynamischem Winkel: Sie wird nicht
+  // gespeichert, die Karte bleibt also "gespeichert" (wie in setMowSettings)
+  if (markUnsaved || wasUnsaved || _currentMapId.startsWith("__t_")) {
+    _currentMapUnsaved = true;
+    // Die Kartenliste zeigt nur "ungespeichert" und die Fläche. Sie ging früher
+    // bei jeder Bearbeitung (alle 250 ms) an alle Browser.
+    if (!wasUnsaved || fabs(oldArea - _currentMapArea) >= 0.05)
+      _mapListDirty = true;
+    if (_currentMapId.startsWith("__t_")) {
+      updateTransientMapMeta(_currentMapId, _map, _map.rotation);
+    } else {
+      storeCurrentMapDraft();
+    }
   }
   Log(INFO, "%ssetMap: perimeter=%d exclusions=%d dockpoints=%d waypoints=%d crc=%d area=%.1f",
       _LOG_, _map.perimeter.size(), _map.exclusions.size(), _map.dockpoints.size(), _map.waypoints.size(),
@@ -201,6 +208,8 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
   _map.pattern = _mowSettings.pattern;
   _map.mowOfs = _mowSettings.width;
   _map.patternAngle = _mowSettings.angle;
+  _map.angleMode = _mowSettings.angleMode;
+  _map.angleStep = _mowSettings.angleStep;
   _map.distanceToBorder = _mowSettings.distanceToBorder;
   _map.borderLaps = _mowSettings.borderLaps;
   _map.distanceToExclusions = _mowSettings.distanceToExclusions;
@@ -245,6 +254,8 @@ void MowerAdapter::syncMowSettingsFromMap() {
   _mowSettings.pattern = _map.pattern;
   _mowSettings.width = _map.mowOfs;
   _mowSettings.angle = _map.patternAngle;
+  _mowSettings.angleMode = _map.angleMode;
+  _mowSettings.angleStep = _map.angleStep;
   _mowSettings.distanceToBorder = _map.distanceToBorder;
   _mowSettings.borderLaps = _map.borderLaps;
   _mowSettings.distanceToExclusions = _map.distanceToExclusions;
@@ -279,8 +290,9 @@ std::vector<ArduMower::Domain::Robot::MapInfo> MowerAdapter::mapList() {
     info.rotation = m.rotation;
     info.timestamp = m.timestamp;
     info.parentId = m.parentId;
-    if (info.parentId.length() > 0) {
-      // Die geladene Subkarte nach ihrem Stand im RAM (z. B. Auswahl geändert)
+    // Die geladene Karte nach ihrem Stand im RAM (z. B. Auswahl geändert)
+    info.dynamicAngle = info.id == _currentMapId ? _map.angleMode != 0 : _mapManager.hasDynamicAngle(info.id);
+    if (info.parentId.length() > 0 && !info.dynamicAngle) {
       info.outdated = info.id == _currentMapId ? _map.routeKey != _map.planKey()
                                                : _mapManager.isOutdated(info.id);
     }
@@ -2340,6 +2352,24 @@ bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, 
       }
       // Schalter des Bereichs, eingeschränkt durch die des Auftrags
       auto settings = settingsFromMap(area);
+      int16_t routeAngle = -1;
+      if (area.angleMode != 0) {
+        // Zufälliger/dynamischer Winkel: keine gespeicherte Route, sie
+        // entsteht für jeden Auftrag neu
+        routeAngle = (int16_t)nextPatternAngle(area, _mapManager.lastAngle(ids[i]));
+        settings.angle = routeAngle;
+        const uint32_t calcStart = millis();
+        area.waypoints.clear();
+        try {
+          area.waypoints = ArduMower::Modem::PathPlanner::calculateWaypoints(area, settings, &_state);
+        } catch (...) {
+          _mapUploadError = "The route of " + ids[i] + " could not be calculated.";
+          return false;
+        }
+        Log(INFO, "%scomposeJob: %s calculated with angle %d: %u waypoints in %lu ms", _LOG_,
+            ids[i].c_str(), (int)routeAngle, (unsigned)area.waypoints.size(), (unsigned long)(millis() - calcStart));
+      }
+      info.angles.push_back(routeAngle);
       if (!(toggles & 1)) settings.doMowArea = false;
       if (!(toggles & 2)) settings.doMowBorder = false;
       if (!(toggles & 4)) settings.doMowExclusionBorder = false;
@@ -2412,6 +2442,12 @@ bool MowerAdapter::uploadJobSegment(uint32_t index)
     return false;
   }
   _job.segment = index;
+  // Der Auftrag geht zum Mäher: Winkel der eigens berechneten Bereiche merken,
+  // der nächste Auftrag setzt dort an
+  if (index == 0) {
+    for (size_t i = 0; i < _job.angles.size() && i < _job.areaIds.size(); i++)
+      if (_job.angles[i] >= 0) _mapManager.setLastAngle(_job.areaIds[i], _job.angles[i]);
+  }
   ArduMower::Domain::Robot::MowerMap part = _jobGeometry;
   const uint32_t from = _job.segmentStart(), to = _job.segmentEnd();
   part.waypoints.reserve(to - from);
@@ -2435,12 +2471,36 @@ bool MowerAdapter::uploadJobSegment(uint32_t index)
   return true;
 }
 
+int MowerAdapter::nextPatternAngle(const ArduMower::Domain::Robot::MowerMap &map, int last)
+{
+  const int base = last >= 0 ? last : map.patternAngle;
+  if (map.angleMode == 2) {
+    // Dynamisch: beim ersten Mal der eingestellte Winkel, danach je Auftrag weiter
+    if (last < 0) return ((map.patternAngle % 360) + 360) % 360;
+    return (((base + map.angleStep) % 360) + 360) % 360;
+  }
+  // Zufällig, mindestens 30° vom letzten entfernt. Linien wiederholen sich
+  // nach 180°, Quadrate nach 90°: darin den Abstand einhalten.
+  const int period = map.pattern == 1 ? 90 : 180;
+  const int offset = 30 + (int)(esp_random() % (uint32_t)(period - 59));
+  return ((base % period) + period + offset) % period;
+}
+
+int MowerAdapter::nextRouteAngle()
+{
+  if (_map.angleMode == 0) return -1;
+  const int last = _currentMapId.startsWith("__t_") ? -1 : _mapManager.lastAngle(_currentMapId);
+  return nextPatternAngle(_map, last);
+}
+
 ArduMower::Domain::Robot::MowSettings MowerAdapter::settingsFromMap(const ArduMower::Domain::Robot::MowerMap &map)
 {
   ArduMower::Domain::Robot::MowSettings s;
   s.pattern = map.pattern;
   s.width = map.mowOfs;
   s.angle = map.patternAngle;
+  s.angleMode = map.angleMode;
+  s.angleStep = map.angleStep;
   s.distanceToBorder = map.distanceToBorder;
   s.borderLaps = map.borderLaps;
   s.distanceToExclusions = map.distanceToExclusions;
@@ -2469,6 +2529,8 @@ bool MowerAdapter::uploadMapToMower()
 
   _job = ArduMower::Domain::Robot::MowJob();
   _jobGeometry = ArduMower::Domain::Robot::MowerMap();
+  if (_map.angleMode != 0 && _map.routeAngle >= 0 && !_currentMapId.startsWith("__t_"))
+    _mapManager.setLastAngle(_currentMapId, _map.routeAngle);
   _mapUploadState.phase = MapUploadState::idle;
   _mapUploadPending = true;
   Log(INFO, "%suploadMapToMower: queued", _LOG_);
@@ -3179,13 +3241,28 @@ const MowerAdapter::MapDraft* MowerAdapter::findMapDraft(const String &id) const
 
 void MowerAdapter::storeCurrentMapDraft() {
   if (_currentMapId.length() == 0 || _currentMapId.startsWith("__t_")) return;
+  MapDraft *target = nullptr;
   for (auto &draft : _mapDrafts) {
     if (draft.id == _currentMapId) {
-      draft.map = _map;
-      return;
+      target = &draft;
+      break;
     }
   }
-  _mapDrafts.push_back({_currentMapId, _map});
+  if (!target) {
+    _mapDrafts.push_back({_currentMapId, ArduMower::Domain::Robot::MowerMap()});
+    target = &_mapDrafts.back();
+  }
+  // Zufälliger/dynamischer Winkel: Die Route gehört nicht zur Karte, auch
+  // nicht zum Entwurf; sonst kam sie beim nächsten Laden wieder
+  if (_map.angleMode != 0) {
+    std::vector<ArduMower::Domain::Robot::MapPoint> waypoints;
+    waypoints.swap(_map.waypoints);
+    target->map = _map;
+    _map.waypoints.swap(waypoints);
+    target->map.routeAngle = -1;
+  } else {
+    target->map = _map;
+  }
 }
 
 void MowerAdapter::removeMapDraft(const String &id) {

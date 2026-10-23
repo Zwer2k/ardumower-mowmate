@@ -10,6 +10,8 @@
   let pattern: number = 0;
   let width: number = 0.3;
   let angle: number = 0;
+  let angleMode: number = 0;
+  let angleStep: number = 30;
   let distanceToBorder: number = 0;
   let borderLaps: number = 0;
   let distanceToExclusions: number = 0;
@@ -57,6 +59,14 @@
   let simplifyEpsilon: number = 0.02;
   let checkTurnRadius: number = 0.3;
 
+  // Nicht fest: Die Route wird nicht gespeichert, sondern für jeden Auftrag
+  // mit einem neuen Winkel berechnet
+  const angleModes = [
+    { id: 0, text: "Fixed" },
+    { id: 1, text: "Random (at least 30° change)" },
+    { id: 2, text: "Dynamic (turns by a step)" },
+  ];
+
   const patterns = [
     { id: 0, text: "Lines" },
     { id: 1, text: "Squares" },
@@ -82,6 +92,8 @@
     pattern = s.pattern;
     roundWidth(s.width);
     angle = s.angle;
+    angleMode = s.angleMode ?? 0;
+    angleStep = s.angleStep ?? 30;
     distanceToBorder = s.distanceToBorder;
     borderLaps = s.borderLaps;
     distanceToExclusions = s.distanceToExclusions ?? 0;
@@ -101,6 +113,9 @@
       pattern,
       width,
       angle,
+      // Ringe haben keinen Winkel
+      angleMode: pattern === 2 ? 0 : angleMode,
+      angleStep,
       distanceToBorder,
       borderLaps,
       distanceToExclusions,
@@ -154,13 +169,38 @@
       on:change={() => roundWidth(width)}
     />
 
-    <NumberInput
-      label="Angle (°)"
-      bind:value={angle}
-      min={0}
-      max={359}
-      step={1}
-    />
+    {#if pattern !== 2}
+    <Select
+      labelText="Angle mode"
+      helperText={angleMode === 0 ? "" : "The route is not saved. Every job calculates it with a new angle; Calculate only shows an example."}
+      selected={angleMode}
+      on:update={(e) => { angleMode = Number(e.detail); }}
+    >
+      {#each angleModes as m}
+        <SelectItem value={m.id} text={m.text} />
+      {/each}
+    </Select>
+
+    {#if angleMode !== 1}
+      <NumberInput
+        label={angleMode === 2 ? "Start angle (°)" : "Angle (°)"}
+        bind:value={angle}
+        min={0}
+        max={359}
+        step={1}
+      />
+    {/if}
+
+    {#if angleMode === 2}
+      <NumberInput
+        label="Angle step per job (°)"
+        bind:value={angleStep}
+        min={1}
+        max={179}
+        step={1}
+      />
+    {/if}
+    {/if}
 
     <NumberInput
       label="Distance to border"

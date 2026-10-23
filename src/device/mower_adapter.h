@@ -171,6 +171,9 @@ namespace ArduMower
       void updateCurrentMapMeta();
       void syncMowSettingsFromMap();
       static ArduMower::Domain::Robot::MowSettings settingsFromMap(const ArduMower::Domain::Robot::MowerMap &map);
+      // Nächster Winkel einer Karte mit zufälligem/dynamischem Winkel; last =
+      // zuletzt zum Mäher geschickter Winkel (-1: keiner, dann patternAngle)
+      static int nextPatternAngle(const ArduMower::Domain::Robot::MowerMap &map, int last);
       // Der Geometrie-Hash (MD5 über das serialisierte JSON) wird erst bei
       // Bedarf berechnet; updateCurrentMapMeta() markiert ihn nur als veraltet.
       bool _currentMapHashDirty = false;
@@ -334,6 +337,7 @@ namespace ArduMower
       virtual bool uploadSavedMapToMower(const String &id) override;
       virtual bool uploadJobToMower(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) override;
       virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) override;
+      virtual int nextRouteAngle() override;
       virtual void clearJob() override;
       virtual const ArduMower::Domain::Robot::MowJob *mowJob() override { return _job.id.length() ? &_job : nullptr; }
       virtual const ArduMower::Domain::Robot::MowerMap *mowJobGeometry() override { return _job.id.length() ? &_jobGeometry : nullptr; }
@@ -355,7 +359,7 @@ namespace ArduMower
       virtual bool customCmd(String cmd);
       virtual void drainRx(const char* line, bool &stop) override;
       virtual void drainTx(const char* line, bool &stop) override;
-      virtual void setMap(const ArduMower::Domain::Robot::MowerMap &map);
+      virtual void setMap(const ArduMower::Domain::Robot::MowerMap &map, bool markUnsaved = true) override;
       virtual void setMowSettings(const ArduMower::Domain::Robot::MowSettings &s, bool markUnsaved = true);
       virtual void loop();
     };

@@ -5,9 +5,10 @@
     import Home from "carbon-icons-svelte/lib/Home.svelte";
     import SkipForwardFilled from "carbon-icons-svelte/lib/SkipForwardFilled.svelte";
     import Upload from "carbon-icons-svelte/lib/Upload.svelte";
+    import Renew from "carbon-icons-svelte/lib/Renew.svelte";
     import ListChecked from "carbon-icons-svelte/lib/ListChecked.svelte";
     import MowNowDialog from './MowNowDialog.svelte';
-    import { socketStore, socketService } from '../../../stores/socket';
+    import { socketStore, socketService, pendingOperationStore } from '../../../stores/socket';
     import { scheduleStore, scheduleNextRunDisplay } from '../../../stores/schedule';
     import { page } from '$app/stores';
     import { browser } from '$app/environment';
@@ -34,6 +35,20 @@
     function startMowing(jobOnMower: boolean) {
         if (jobOnMower) socketService.sendRunJob();
         else sendCmd('start');
+    }
+
+    // Bereiche mit zufälligem/dynamischem Winkel haben keine gespeicherte Route:
+    // Der angezeigte Auftrag (oder die geladene Karte) kann mit neuen Winkeln
+    // neu berechnet werden; Upload schickt dann genau die angezeigte Route.
+    const dynamicIds = $derived(new Set(($socketStore.maps ?? []).filter((m) => m.dynamicAngle).map((m) => m.id)));
+    const shownJob = $derived(isJobPreview($mowJobStore, $socketStore.state) || isJobOnMower($mowJobStore, $socketStore.state) ? $mowJobStore : null);
+    const canRecalculate = $derived(shownJob
+        ? shownJob.parts.some((p) => dynamicIds.has(p.id))
+        : dynamicIds.has($socketStore.currentMapId ?? ""));
+
+    function recalculate() {
+        if (shownJob) socketService.sendPreviewJob(shownJob.parts.map((p) => p.id), shownJob.overlapOnce, shownJob.toggles);
+        else socketService.sendCalculateWaypoints();
     }
 
     async function uploadMap() {
@@ -375,6 +390,12 @@
                 <Button kind="primary" icon={Upload} size="small" class="action-upload"
                     iconDescription={jobPreview ? "Upload the job" : "Upload the map"} tooltipPosition="top"
                     on:click={() => uploadJobOrMap(jobPreview)} />
+            {/if}
+            {#if canRecalculate}
+                <Button kind="secondary" icon={Renew} size="small" class="action-recalculate"
+                    iconDescription="Calculate the route again with new angles" tooltipPosition="top"
+                    disabled={state?.job === 1 || !!$pendingOperationStore}
+                    on:click={recalculate} />
             {/if}
             <Button kind="primary" icon={ListChecked} size="small" class="action-mow-now" iconDescription="Choose areas"
                 tooltipPosition="top" on:click={() => (mowNowOpen = true)} />
@@ -933,6 +954,13 @@
 
         :global(.action-mow-now .bx--btn__icon)::after {
             content: 'Areas';
+            margin-left: 8px;
+            font-size: 0.875rem;
+            white-space: nowrap;
+        }
+
+        :global(.action-recalculate .bx--btn__icon)::after {
+            content: 'Recalculate';
             margin-left: 8px;
             font-size: 0.875rem;
             white-space: nowrap;
