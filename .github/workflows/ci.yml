@@ -38,39 +38,7 @@ jobs:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
 
-      - name: Build ESP32 UI
-        working-directory: ui
-        env:
-          VITE_ENABLE_MAP: 'false'
-          VITE_ENABLE_LIVE_MAP: 'false'
-          VITE_ENABLE_GPS_DASHBOARD: 'false'
-        run: npm run build
-
-      - name: Package ESP32 UI
-        working-directory: util/package_ui
-        run: go run .
-
-      - name: Build ESP32 firmware
-        run: pio run -e esp32
-
-      - name: Locate boot_app0.bin
-        id: boot_app0
-        run: |
-          path=$(find ~/.platformio/packages \
-            -path '*framework-arduinoespressif32*/tools/partitions/boot_app0.bin' \
-            | sort | head -n1)
-          test -n "$path"
-          echo "path=$path" >> "$GITHUB_OUTPUT"
-
-      - name: Collect ESP32 artifacts
-        run: |
-          mkdir -p artifacts/esp32
-          cp -v .pio/build/esp32/firmware.bin artifacts/esp32/
-          cp -v .pio/build/esp32/firmware.elf artifacts/esp32/
-          cp -v .pio/build/esp32/partitions.bin artifacts/esp32/
-          cp -v .pio/build/esp32/bootloader.bin artifacts/esp32/
-          cp -v "${{ steps.boot_app0.outputs.path }}" artifacts/esp32/
-
+      # ESP32-S3 first: it carries the full firmware and is the main target
       - name: Build ESP32-S3 UI
         working-directory: ui
         env:
@@ -86,6 +54,16 @@ jobs:
       - name: Build ESP32-S3 firmware
         run: pio run -e esp32-S3-N16-R8
 
+      # Needs the framework package, which the first build installs
+      - name: Locate boot_app0.bin
+        id: boot_app0
+        run: |
+          path=$(find ~/.platformio/packages \
+            -path '*framework-arduinoespressif32*/tools/partitions/boot_app0.bin' \
+            | sort | head -n1)
+          test -n "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
       - name: Collect ESP32-S3 artifacts
         run: |
           mkdir -p artifacts/esp32-s3
@@ -94,6 +72,44 @@ jobs:
           cp -v .pio/build/esp32-S3-N16-R8/partitions.bin artifacts/esp32-s3/
           cp -v .pio/build/esp32-S3-N16-R8/bootloader.bin artifacts/esp32-s3/
           cp -v "${{ steps.boot_app0.outputs.path }}" artifacts/esp32-s3/
+
+      - name: Build ESP32 UI
+        working-directory: ui
+        env:
+          VITE_ENABLE_MAP: 'false'
+          VITE_ENABLE_LIVE_MAP: 'false'
+          VITE_ENABLE_GPS_DASHBOARD: 'false'
+        run: npm run build
+
+      - name: Package ESP32 UI
+        working-directory: util/package_ui
+        run: go run .
+
+      - name: Build ESP32 firmware
+        run: pio run -e esp32
+
+      # Gleiche Oberfläche wie die Standard-Variante, nur Bluetooth Classic für
+      # den PS4-Controller statt BLE und huge_app.csv (kein OTA-Slot)
+      - name: Build ESP32 PS4 firmware
+        run: pio run -e esp32-ps4
+
+      - name: Collect ESP32 artifacts
+        run: |
+          mkdir -p artifacts/esp32
+          cp -v .pio/build/esp32/firmware.bin artifacts/esp32/
+          cp -v .pio/build/esp32/firmware.elf artifacts/esp32/
+          cp -v .pio/build/esp32/partitions.bin artifacts/esp32/
+          cp -v .pio/build/esp32/bootloader.bin artifacts/esp32/
+          cp -v "${{ steps.boot_app0.outputs.path }}" artifacts/esp32/
+
+      - name: Collect ESP32 PS4 artifacts
+        run: |
+          mkdir -p artifacts/esp32-ps4
+          cp -v .pio/build/esp32-ps4/firmware.bin artifacts/esp32-ps4/
+          cp -v .pio/build/esp32-ps4/firmware.elf artifacts/esp32-ps4/
+          cp -v .pio/build/esp32-ps4/partitions.bin artifacts/esp32-ps4/
+          cp -v .pio/build/esp32-ps4/bootloader.bin artifacts/esp32-ps4/
+          cp -v "${{ steps.boot_app0.outputs.path }}" artifacts/esp32-ps4/
 
       - uses: actions/upload-artifact@v7
         with:
@@ -119,7 +135,7 @@ jobs:
 
       - name: Prepare release assets
         run: |
-          for platform in esp32 esp32-s3; do
+          for platform in esp32 esp32-ps4 esp32-s3; do
             test -d "artifacts/$platform"
             for file in "artifacts/$platform"/*; do
               test -f "$file"
@@ -129,6 +145,7 @@ jobs:
           done
 
           (cd artifacts && zip -r -q esp32.zip esp32)
+          (cd artifacts && zip -r -q esp32-ps4.zip esp32-ps4)
           (cd artifacts && zip -r -q esp32-s3.zip esp32-s3)
 
       - name: Generate release notes body
@@ -152,6 +169,7 @@ jobs:
         with:
           files: |
             artifacts/esp32/*
+            artifacts/esp32-ps4/*
             artifacts/esp32-s3/*
             artifacts/*.zip
           body_path: release_body.txt
@@ -181,7 +199,7 @@ jobs:
 
       - name: Rename artifacts with platform prefix
         run: |
-          for platform in esp32 esp32-s3; do
+          for platform in esp32 esp32-ps4 esp32-s3; do
             test -d "artifacts/$platform"
             for file in "artifacts/$platform"/*; do
               test -f "$file"
@@ -199,7 +217,8 @@ jobs:
             Nightly build from ${{ steps.version.outputs.date }} (commit ${{ steps.version.outputs.short_hash }}).
 
             **Firmware files:**
-            - `esp32/esp32-firmware.bin` – for ESP32 (Wemos D1 mini)
+            - `esp32/esp32-firmware.bin` – for ESP32 (Wemos D1 mini), with BLE, MQTT and Prometheus
+            - `esp32-ps4/esp32-ps4-firmware.bin` – for ESP32 with PS4 controller instead of BLE (huge_app partitions, no online update)
             - `esp32-s3/esp32-s3-firmware.bin` – for ESP32-S3 (16MB OPI PSRAM)
 
             Diese Version wird mit jedem neuen Nightly-Build überschrieben.
@@ -209,6 +228,8 @@ jobs:
           artifacts: |
             artifacts/esp32/*.bin
             artifacts/esp32/*.elf
+            artifacts/esp32-ps4/*.bin
+            artifacts/esp32-ps4/*.elf
             artifacts/esp32-s3/*.bin
             artifacts/esp32-s3/*.elf
 
@@ -263,9 +284,11 @@ jobs:
 
           # Only the images the installer flashes; the .elf files and zips stay
           # on the release page.
+          # esp32-ps4 is optional: releases before v1.16.0 have none, the
+          # installer then offers only the standard firmware.
           download() {
             local tag="$1" dir="$2" platform part
-            for platform in esp32 esp32-s3; do
+            for platform in esp32 esp32-ps4 esp32-s3; do
               for part in bootloader partitions boot_app0 firmware; do
                 gh release download "$tag" --dir "$dir" --clobber \
                   --pattern "$platform-$part.bin" \

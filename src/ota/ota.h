@@ -9,6 +9,11 @@ namespace ArduMower
   {
     namespace Ota
     {
+      // Zweiter App-Slot für Updates vorhanden (fehlt bei huge_app.csv)
+      bool hasUpdateSlot();
+      // Asset-Präfix dieses Builds: esp32, esp32-ps4 oder esp32-s3
+      const char *firmwareVariant();
+
       // Platz für "v123.456.789" plus Terminator – Release-Tags sind kurz.
       static const size_t FIRMWARE_VERSION_LEN = 16;
       // So viele installierbare Releases merkt sich das Modem für die Auswahl.

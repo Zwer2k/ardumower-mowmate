@@ -52,6 +52,9 @@
     padding: 1.5rem;
   }
   .channels { display: flex; gap: .5rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+  .group-label { font-size: .85rem; color: var(--muted); margin: 0 0 .4rem; }
+  .variant-help { color: var(--muted); font-size: .9rem; margin: -.75rem 0 1.25rem; }
+  .notice ul { margin: .5rem 0 0; }
   .channels button {
     font: inherit;
     padding: .45rem 1rem;
@@ -117,14 +120,22 @@
     Flash the MowMate firmware onto your ArduMower modem board directly from this
     page &mdash; no PlatformIO, no esptool, no driver juggling. Your board is
     detected automatically, so the same button works for the ESP32 and the
-    ESP32-S3.
+    ESP32-S3. For an ESP32 with a PS4 controller, choose the PS4 firmware.
   </p>
 
   <div class="card">
+    <p class="group-label">Channel</p>
     <div class="channels" role="group" aria-label="Firmware channel">
       <button type="button" data-channel="stable" aria-pressed="true">Stable</button>
       <button type="button" data-channel="nightly" aria-pressed="false">Nightly</button>
     </div>
+
+    <p class="group-label">Firmware</p>
+    <div class="channels" role="group" aria-label="Firmware variant">
+      <button type="button" data-variant="standard" aria-pressed="true">Standard</button>
+      <button type="button" data-variant="ps4" aria-pressed="false">PS4 controller</button>
+    </div>
+    <p class="variant-help" id="variant-help"></p>
 
     <div class="install">
       <esp-web-install-button id="installer">
@@ -141,8 +152,26 @@
     </div>
 
     <p class="notice" id="channel-missing" hidden>
-      No firmware has been published for this channel yet.
+      No firmware has been published for this channel and variant yet.
     </p>
+
+    <div class="notice" id="ps4-notice" hidden>
+      <strong>PS4 controller firmware &mdash; ESP32 only, not for the ESP32-S3.</strong>
+      Bluetooth Classic for the controller does not fit next to a second
+      firmware slot, so this variant uses a different partition layout:
+      <ul>
+      <li>
+        <strong>No online update.</strong> The modem cannot update itself from
+        GitHub or from an uploaded file; install new versions here over USB.
+      </li>
+      <li>
+        <strong>Settings are lost once</strong> when you switch between the
+        standard and the PS4 firmware (either way), because the storage
+        partition moves. Note your WiFi and mower settings first.
+      </li>
+      <li>No Bluetooth LE connection for the app; MQTT, Home Assistant and Prometheus are included.</li>
+      </ul>
+    </div>
 
     <p class="notice">
       The installer asks whether to erase the device first. Leave the
@@ -226,14 +255,36 @@
   const installer = document.getElementById("installer");
   const versionEl = document.getElementById("version");
   const missingEl = document.getElementById("channel-missing");
-  const buttons = document.querySelectorAll(".channels button");
+  const channelButtons = document.querySelectorAll("button[data-channel]");
+  const variantButtons = document.querySelectorAll("button[data-variant]");
+  const variantHelp = document.getElementById("variant-help");
+  const ps4Notice = document.getElementById("ps4-notice");
 
-  async function selectChannel(channel) {
-    for (const button of buttons) {
+  const variants = {
+    standard: {
+      manifest: "manifest.json",
+      help: "For the ESP32 and the ESP32-S3, detected automatically. Includes Bluetooth LE for the app, MQTT with Home Assistant and Prometheus.",
+    },
+    ps4: {
+      manifest: "manifest-ps4.json",
+      help: "For the ESP32 with a PS4 controller instead of Bluetooth LE.",
+    },
+  };
+
+  let channel = "stable";
+  let variant = "standard";
+
+  async function select() {
+    for (const button of channelButtons) {
       button.setAttribute("aria-pressed", String(button.dataset.channel === channel));
     }
+    for (const button of variantButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.variant === variant));
+    }
+    variantHelp.textContent = variants[variant].help;
+    ps4Notice.hidden = variant !== "ps4";
 
-    const manifest = `${channel}/manifest.json`;
+    const manifest = `${channel}/${variants[variant].manifest}`;
     versionEl.textContent = "";
     missingEl.hidden = true;
 
@@ -257,11 +308,14 @@
     versionEl.textContent = `${info.name} ${info.version}`;
   }
 
-  for (const button of buttons) {
-    button.addEventListener("click", () => selectChannel(button.dataset.channel));
+  for (const button of channelButtons) {
+    button.addEventListener("click", () => { channel = button.dataset.channel; select(); });
+  }
+  for (const button of variantButtons) {
+    button.addEventListener("click", () => { variant = button.dataset.variant; select(); });
   }
 
-  selectChannel("stable");
+  select();
 </script>
 </body>
 </html>

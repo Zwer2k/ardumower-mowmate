@@ -4,6 +4,7 @@
 #include <AsyncJson.h>
 #include <SPIFFS.h>
 #include <esp_task_wdt.h>
+#include <esp_ota_ops.h>
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -215,13 +216,30 @@ private:
   Stream &_source;
 };
 
+// Präfix der Release-Assets dieses Builds (<target>-firmware.bin). Die
+// Varianten bekommen eigene Assets, sonst holte sich ein Board beim Update die
+// Firmware der anderen Variante.
 static const char *firmwareTarget()
 {
 #ifdef CONFIG_IDF_TARGET_ESP32S3
   return "esp32-s3";
+#elif defined(ENABLE_PS4_CONTROLLER)
+  return "esp32-ps4";
 #else
   return "esp32";
 #endif
+}
+
+// Zweiter App-Slot vorhanden? Die PS4-Variante (huge_app.csv) hat nur einen
+// und kann sich nicht selbst aktualisieren, nur über USB.
+bool ArduMower::Modem::Ota::hasUpdateSlot()
+{
+  return esp_ota_get_next_update_partition(NULL) != NULL;
+}
+
+const char *ArduMower::Modem::Ota::firmwareVariant()
+{
+  return firmwareTarget();
 }
 
 // Nur stabile Versionen der Form vX.Y.Z. Alles andere (Vorabversionen,
@@ -445,8 +463,10 @@ void HttpServer::runGithubCheck()
     (long long)time(NULL));
   Log(DBG, "Ota::HttpServer::github-check::url(%s)", GITHUB_RELEASES_URL);
 
+  if (!hasUpdateSlot()) error = "no-ota-slot";
+
   IPAddress apiIp;
-  if (WiFi.hostByName(GITHUB_API_HOST, apiIp) != 1)
+  if (!error && WiFi.hostByName(GITHUB_API_HOST, apiIp) != 1)
   {
     error = "dns-failed";
     Log(WARN, "Ota::HttpServer::github-check::dns-failed(host=%s)", GITHUB_API_HOST);

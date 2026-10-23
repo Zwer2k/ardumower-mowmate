@@ -28,10 +28,42 @@ A platform whose binaries are incomplete is omitted from the manifest; if
 neither is complete, no manifest is written and the page reports the channel as
 empty instead of failing mid-flash.
 
+## Firmware variants
+
+The page offers two variants per channel:
+
+| Variant | Manifest | Boards | Asset prefix | Partitions |
+| --- | --- | --- | --- | --- |
+| Standard | `manifest.json` | ESP32, ESP32-S3 | `esp32-`, `esp32-s3-` | `min_spiffs.csv`, `default_16MB.csv` |
+| PS4 controller | `manifest-ps4.json` | ESP32 only | `esp32-ps4-` | `huge_app.csv` |
+
+The standard ESP32 build (`pio run -e esp32`) has Bluetooth LE for the app,
+MQTT with Home Assistant and ioBroker, and Prometheus, and uses about 93 % of
+its 1.9 MB app partition. The PS4 controller needs Bluetooth Classic
+(Bluedroid), which alone takes about 730 KB, so `pio run -e esp32-ps4` swaps
+BLE for the controller and switches to `huge_app.csv`: one 3 MB app partition
+and no second slot.
+
+Consequences for the PS4 variant, also shown on the installer page:
+
+- **No online update.** The modem reports `ota_supported: false` in its info and
+  the firmware dialog points to the web installer; the GitHub check reports
+  `no-ota-slot`. Updates go over USB.
+- **Settings are lost once** when a board switches between the standard and the
+  PS4 firmware, in either direction, because the `spiffs` partition starts at a
+  different offset (`0x3D0000` vs `0x310000`).
+- Each variant looks up its own release asset for updates
+  (`<variant>-firmware.bin`), so a board never pulls the other variant.
+
+Releases before v1.16.0 have no PS4 assets; the page then reports that variant
+as missing for the stable channel.
+
 ## Flash offsets
 
 The manifest flashes four images per board. These are also the offsets to use
 with `esptool` or Espressif's Flash Download Tool.
+
+The PS4 variant (`huge_app.csv`) uses the same offsets as the ESP32.
 
 | Offset | ESP32 (4 MB, `min_spiffs.csv`) | ESP32-S3 (16 MB, `default_16MB.csv`) |
 | --- | --- | --- |
