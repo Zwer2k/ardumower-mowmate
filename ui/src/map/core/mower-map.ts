@@ -255,7 +255,7 @@ export function importMowerMap(
       width: parsed.mowOfs ?? 0.3,
       angle: parsed.patternAngle ?? 0,
       angleMode: parsed.angleMode ?? 0,
-      angleStep: parsed.angleStep ?? 30,
+      angleStep: parsed.angleStep ?? 25,
       distanceToBorder: needsBorderDefaults ? 1 : (parsed.distanceToBorder ?? 0),
       borderLaps: needsBorderDefaults ? 1 : (parsed.borderLaps ?? 0),
       distanceToExclusions: parsed.distanceToExclusions ?? 0,
@@ -301,7 +301,7 @@ export function exportMowerMap(
 export function settingsFields(s: Partial<MowSettings>): Partial<WebappMapJson> {
   return {
     patternAngle: s.angle,
-    ...(s.angleMode ? { angleMode: s.angleMode, angleStep: s.angleStep ?? 30 } : {}),
+    ...(s.angleMode ? { angleMode: s.angleMode, angleStep: s.angleStep ?? 25 } : {}),
     mowOfs: s.width,
     patternRings: s.pattern === 2,
     distanceToBorder: s.distanceToBorder,

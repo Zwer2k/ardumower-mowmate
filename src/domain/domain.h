@@ -471,11 +471,12 @@ namespace ArduMower
         int pattern;
         float width;
         int angle;
-        // Winkel je Auftrag neu: 0 fest (angle), 1 zufällig (mindestens 30°
+        // Winkel je Auftrag neu: 0 fest (angle), 1 zufällig (mindestens 25°
         // vom letzten entfernt), 2 dynamisch (je Auftrag um angleStep weiter).
         // Die Route wird dann nicht gespeichert, sondern für jeden Auftrag berechnet.
         int angleMode = 0;
-        int angleStep = 30;
+        // 25 statt 30: Mit 30 landete der Winkel alle drei Aufträge auf 90°
+        int angleStep = 25;
         float distanceToBorder;
         int borderLaps;
         float distanceToExclusions;  // Spurbreiten Abstand zu den Exclusions
@@ -504,7 +505,7 @@ namespace ArduMower
         float checkTurnRadius = 0.30f;
 
         MowSettings()
-            : timestamp(0), pattern(0), width(0.3f), angle(0), angleMode(0), angleStep(30),
+            : timestamp(0), pattern(0), width(0.3f), angle(0), angleMode(0), angleStep(25),
               distanceToBorder(0.0f), borderLaps(0),
               distanceToExclusions(0.0f), exclusionLaps(0), mowBorderCcw(false),
               routeOrder(""), exclusionLapsWithArea(false), selectionEdgeLaps(false),

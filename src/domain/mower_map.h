@@ -116,7 +116,7 @@ namespace ArduMower {
                 // Nicht fest: Die Wegpunkte werden nicht gespeichert, die Route
                 // entsteht für jeden Auftrag neu.
                 int angleMode = 0;
-                int angleStep = 30;
+                int angleStep = 25;
                 // Nur im RAM: Winkel, mit dem die Wegpunkte bei zufälligem/
                 // dynamischem Winkel berechnet wurden, sonst -1
                 int16_t routeAngle = -1;
@@ -396,7 +396,7 @@ namespace ArduMower {
                     // Mäh-Einstellungen aus Webapp-Export/Import
                     if (obj["patternAngle"].is<JsonVariant>()) patternAngle = obj["patternAngle"];
                     angleMode = obj["angleMode"] | 0;
-                    angleStep = obj["angleStep"] | 30;
+                    angleStep = obj["angleStep"] | 25;
                     if (obj["mowOfs"].is<JsonVariant>()) mowOfs = obj["mowOfs"];
                     if (obj["patternRings"].is<JsonVariant>()) pattern = obj["patternRings"] ? 2 : 0;
                     if (pattern == 2) angleMode = 0;  // Ringe haben keinen Winkel
@@ -475,7 +475,7 @@ namespace ArduMower {
 
                     obj["patternAngle"] = patternAngle;
                     if (angleMode != 0) obj["angleMode"] = angleMode;
-                    if (angleStep != 30) obj["angleStep"] = angleStep;
+                    if (angleStep != 25) obj["angleStep"] = angleStep;
                     obj["mowOfs"] = mowOfs;
                     obj["patternRings"] = (pattern == 2);
                     obj["distanceToBorder"] = distanceToBorder;

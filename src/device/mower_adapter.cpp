@@ -199,6 +199,12 @@ void MowerAdapter::refreshCurrentMapCrc() {
 }
 
 void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s, bool markUnsaved) {
+  // Neuer Startwinkel oder Modus: Die nächste Route beginnt wieder beim
+  // eingestellten Winkel, nicht beim zuletzt verwendeten
+  if (s.angleMode != 0 && (s.angle != _map.patternAngle || s.angleMode != _map.angleMode)) {
+    _map.routeAngle = -1;
+    if (_currentMapId.length() > 0 && !_currentMapId.startsWith("__t_")) _mapManager.setLastAngle(_currentMapId, -1);
+  }
   _mowSettings = s;
   _mowSettings.timestamp = millis();
   _lastUploadedMapId = "";
@@ -2356,7 +2362,13 @@ bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, 
       if (area.angleMode != 0) {
         // Zufälliger/dynamischer Winkel: keine gespeicherte Route, sie
         // entsteht für jeden Auftrag neu
-        routeAngle = (int16_t)nextPatternAngle(area, _mapManager.lastAngle(ids[i]));
+        // Vom Winkel im angezeigten Auftrag aus weiter (Recalculate), sonst vom
+        // zuletzt hochgeladenen
+        int last = -1;
+        for (size_t k = 0; k < _job.areaIds.size() && k < _job.angles.size(); k++)
+          if (_job.areaIds[k] == ids[i]) last = _job.angles[k];
+        if (last < 0) last = _mapManager.lastAngle(ids[i]);
+        routeAngle = (int16_t)nextPatternAngle(area, last);
         settings.angle = routeAngle;
         const uint32_t calcStart = millis();
         area.waypoints.clear();
@@ -2479,17 +2491,23 @@ int MowerAdapter::nextPatternAngle(const ArduMower::Domain::Robot::MowerMap &map
     if (last < 0) return ((map.patternAngle % 360) + 360) % 360;
     return (((base + map.angleStep) % 360) + 360) % 360;
   }
-  // Zufällig, mindestens 30° vom letzten entfernt. Linien wiederholen sich
-  // nach 180°, Quadrate nach 90°: darin den Abstand einhalten.
+  // Zufällig, mindestens 25° vom letzten entfernt (wie die Standard-
+  // Schrittweite). Linien wiederholen sich nach 180°, Quadrate nach 90°:
+  // darin den Abstand in beide Richtungen einhalten.
+  const int minChange = 25;
   const int period = map.pattern == 1 ? 90 : 180;
-  const int offset = 30 + (int)(esp_random() % (uint32_t)(period - 59));
+  const int offset = minChange + (int)(esp_random() % (uint32_t)(period - 2 * minChange + 1));
   return ((base % period) + period + offset) % period;
 }
 
 int MowerAdapter::nextRouteAngle()
 {
   if (_map.angleMode == 0) return -1;
-  const int last = _currentMapId.startsWith("__t_") ? -1 : _mapManager.lastAngle(_currentMapId);
+  // Vom Winkel der angezeigten Route aus weiter, sonst vom zuletzt
+  // hochgeladenen: Sim calculate und Recalculate drehen so bei jedem Klick
+  // weiter (früher blieb es bis zum Upload beim selben, anfangs 0°)
+  int last = _map.routeAngle;
+  if (last < 0 && !_currentMapId.startsWith("__t_")) last = _mapManager.lastAngle(_currentMapId);
   return nextPatternAngle(_map, last);
 }
 

@@ -366,7 +366,7 @@ export interface MowSettings {
   pattern: number;
   width: number;
   angle: number;
-  /** 0 fixed, 1 random (at least 30° from the last), 2 dynamic (angleStep further each job).
+  /** 0 fixed, 1 random (at least 25° from the last), 2 dynamic (angleStep further each job).
    *  Not fixed: the route is not saved but calculated for every job. */
   angleMode?: number;
   /** Dynamic: degrees the angle turns per job */

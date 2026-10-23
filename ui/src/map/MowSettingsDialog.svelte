@@ -11,7 +11,7 @@
   let width: number = 0.3;
   let angle: number = 0;
   let angleMode: number = 0;
-  let angleStep: number = 30;
+  let angleStep: number = 25;
   let distanceToBorder: number = 0;
   let borderLaps: number = 0;
   let distanceToExclusions: number = 0;
@@ -63,7 +63,7 @@
   // mit einem neuen Winkel berechnet
   const angleModes = [
     { id: 0, text: "Fixed" },
-    { id: 1, text: "Random (at least 30° change)" },
+    { id: 1, text: "Random (at least 25° change)" },
     { id: 2, text: "Dynamic (turns by a step)" },
   ];
 
@@ -93,7 +93,7 @@
     roundWidth(s.width);
     angle = s.angle;
     angleMode = s.angleMode ?? 0;
-    angleStep = s.angleStep ?? 30;
+    angleStep = s.angleStep ?? 25;
     distanceToBorder = s.distanceToBorder;
     borderLaps = s.borderLaps;
     distanceToExclusions = s.distanceToExclusions ?? 0;
