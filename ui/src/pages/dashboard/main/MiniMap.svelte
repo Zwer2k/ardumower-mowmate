@@ -11,6 +11,7 @@
     import { mowJobStore, isJobOnMower, isJobPreview, jobPartProgress, jobRouteIndex, outlineAsMap } from '../../../stores/mow-job';
     import Obstacles from '../../../map/Obstacles.svelte';
     import JobPreviewLayer from '../../../map/JobPreviewLayer.svelte';
+    import { areaMarksStore } from '../../../map/area-marks';
     import MapLoadingOverlay from '../../../map/MapLoadingOverlay.svelte';
     import MapGotoOverlay from '../../../map/overlay/MapGotoOverlay.svelte';
     import GotoControls from '../../../map/overlay/GotoControls.svelte';
@@ -317,7 +318,7 @@
 
                 <Obstacles obstacles={$socketStore.obstacles} />
 
-                {#if dynamicAreaIds.length > 0 && map.perimeter?.points?.length}
+                {#if $areaMarksStore && dynamicAreaIds.length > 0 && map.perimeter?.points?.length}
                     <JobPreviewLayer areaIds={shownAreaIds} onlyIds={dynamicAreaIds} perimeter={map.perimeter.points} {knownSelections} />
                 {/if}
 

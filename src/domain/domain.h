@@ -731,9 +731,12 @@ namespace ArduMower
         // Winkel für die nächste Berechnung der geladenen Karte bei
         // zufälligem/dynamischem Winkel, -1 bei festem Winkel
         virtual int nextRouteAngle() { return -1; }
-        // Nur zusammensetzen (Vorschau), nicht hochladen; clearJob verwirft ihn
-        virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) {
-          (void)ids; (void)overlapOnce; (void)toggles; return false;
+        // Nur zusammensetzen (Vorschau), nicht hochladen; clearJob verwirft ihn.
+        // keepRoutes: Areas mit zufälligem/dynamischem Winkel behalten ihre Route
+        // aus dem letzten Zusammensetzen (nur die Mow areas haben sich geändert)
+        virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7,
+                                bool keepRoutes = false) {
+          (void)ids; (void)overlapOnce; (void)toggles; (void)keepRoutes; return false;
         }
         virtual void clearJob() {}
         // Teil index des zuletzt zusammengesetzten Auftrags hochladen

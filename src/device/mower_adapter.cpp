@@ -2406,9 +2406,10 @@ void MowerAdapter::clearJob()
 {
   _job = ArduMower::Domain::Robot::MowJob();
   _jobGeometry = ArduMower::Domain::Robot::MowerMap();
+  _jobAreaRoutes.clear();
 }
 
-bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles)
+bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles, bool keepRoutes)
 {
 #ifdef ENABLE_MAP
   if (ids.empty()) {
@@ -2446,6 +2447,7 @@ bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, 
 
   ArduMower::Modem::PathPlanner::JobBuilder builder;
   ArduMower::Domain::Robot::MowerMap job;
+  std::vector<JobAreaRoute> areaRoutes;
   ArduMower::Domain::Robot::MowJob info;
   info.overlapOnce = overlapOnce;
   info.toggles = toggles & 7;
@@ -2461,7 +2463,18 @@ bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, 
       // Schalter des Bereichs, eingeschränkt durch die des Auftrags
       auto settings = settingsFromMap(area);
       int16_t routeAngle = -1;
-      if (area.angleMode != 0) {
+      const JobAreaRoute *kept = nullptr;
+      if (area.angleMode != 0 && keepRoutes) {
+        const uint32_t key = area.planKey();
+        for (const auto &r : _jobAreaRoutes)
+          if (r.id == ids[i] && r.planKey == key) kept = &r;
+      }
+      if (kept != nullptr) {
+        // Nur die Mow areas wurden umgeschaltet: dieselbe Route weiter filtern
+        area.waypoints = kept->waypoints;
+        routeAngle = kept->angle;
+        Log(INFO, "%scomposeJob: %s keeps its route with angle %d", _LOG_, ids[i].c_str(), (int)routeAngle);
+      } else if (area.angleMode != 0) {
         // Zufälliger/dynamischer Winkel: keine gespeicherte Route, sie
         // entsteht für jeden Auftrag neu
         // Vom Winkel im angezeigten Auftrag aus weiter (Recalculate), sonst vom
@@ -2484,6 +2497,7 @@ bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, 
             ids[i].c_str(), (int)routeAngle, (unsigned)area.waypoints.size(), (unsigned long)(millis() - calcStart));
       }
       info.angles.push_back(routeAngle);
+      if (area.angleMode != 0) areaRoutes.push_back({ids[i], area.planKey(), routeAngle, area.waypoints});
       if (!(toggles & 1)) settings.doMowArea = false;
       if (!(toggles & 2)) settings.doMowBorder = false;
       if (!(toggles & 4)) settings.doMowExclusionBorder = false;
@@ -2537,6 +2551,7 @@ bool MowerAdapter::composeJob(const std::vector<String> &ids, bool overlapOnce, 
   if (info.timestamp == 0 || info.timestamp == _job.timestamp) info.timestamp = _job.timestamp + 1;
   _jobGeometry = std::move(job);
   _job = std::move(info);
+  _jobAreaRoutes = std::move(areaRoutes);
   return true;
 #else
   (void)overlapOnce;

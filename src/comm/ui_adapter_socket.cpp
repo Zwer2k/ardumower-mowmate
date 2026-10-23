@@ -549,7 +549,9 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       break;
     }
     const uint8_t toggles = jsonData["toggles"] | 7;
-    if (!_socketHandler->_cmd.composeJob(ids, overlapOnce, toggles)) {
+    // Nur die Mow areas umgeschaltet: Routen dynamischer Areas behalten
+    const bool keepRoutes = jsonData["keepRoutes"] | false;
+    if (!_socketHandler->_cmd.composeJob(ids, overlapOnce, toggles, keepRoutes)) {
       const String reason = _socketHandler->_cmd.uploadMapToMowerError();
       _socketHandler->sendMapOpResult(this, "previewJob", false,
           reason.length() > 0 ? reason.c_str() : "The job could not be put together.");
@@ -1666,7 +1668,8 @@ void UiSocketHandler::startMapChunkSend(UiSocketItem* sendTo, bool force) {
   // Chunks aus vorherigen Transfers eindeutig erkennen und verwerfen.
   mapChunkSendState.transferId++;
   if (mapChunkSendState.transferId == 0) mapChunkSendState.transferId = 1;
-  // Metadaten des aktuellen Karteninhalts für alle Chunks merken
+  // Metadaten des aktuellen Karteninhalts; gehen mit dem ersten Chunk hinaus
+  mapChunkSendState.metaSent = false;
   mapChunkSendState.metaHash = _source.currentMapHash();
   mapChunkSendState.metaCrc = _source.currentMapCrc();
   mapChunkSendState.metaArea = _source.currentMapArea();
@@ -1919,6 +1922,7 @@ bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<Ard
   doc["timestamp"] = timestamp;
   doc["transferId"] = mapChunkSendState.transferId;
   auto dataObj = doc["data"].to<JsonObject>();
+  const bool withMeta = !reset && !mapChunkSendState.metaSent && mapChunkSendState.metaHash.length() > 0;
   size_t transferTotal = mapChunkSendState.snapshot.perimeter.size()
     + mapChunkSendState.snapshot.dockpoints.size()
     + mapChunkSendState.snapshot.searchWire.size()
@@ -1937,7 +1941,11 @@ bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<Ard
     if (pointType == MapPointType::Exclusion) {
       dataObj["exclusionIdx"] = exclusionIdx;
     }
-    if (mapChunkSendState.metaHash.length() > 0) {
+    // Metadaten nur einmal je Übertragung. Früher hing die Auswahl an jedem
+    // Chunk: Eine Lasso-Auswahl mit mehr als ~140 Punkten füllte allein die
+    // 4 KB, kein Kartenpunkt passte mehr hinein, und die Übertragung schickte
+    // endlos denselben leeren Chunk samt Reset.
+    if (withMeta) {
       auto metaObj = dataObj["meta"].to<JsonObject>();
       metaObj["hash"] = mapChunkSendState.metaHash;
       metaObj["crc"] = mapChunkSendState.metaCrc;
@@ -1948,10 +1956,11 @@ bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<Ard
       const auto &selection = mapChunkSendState.snapshot.selection;
       if (selection.size() > 0) {
         JsonArray sel = metaObj["selection"].to<JsonArray>();
+        // Auf cm gerundet (wie der Umriss für Aufträge): halbiert die Größe
         for (const auto &p : selection) {
           JsonArray xy = sel.add<JsonArray>();
-          xy.add(p.X);
-          xy.add(p.Y);
+          xy.add(roundf((float)p.X * 100.0f) / 100.0f);
+          xy.add(roundf((float)p.Y * 100.0f) / 100.0f);
         }
       }
     }
@@ -1974,7 +1983,8 @@ bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<Ard
         continue;
       }
       size_t newMeasured = measureJson(doc);
-      if (newMeasured >= maxJsonSize - 128) {
+      // Mindestens ein Punkt je Chunk, damit die Übertragung vorankommt
+      if (newMeasured >= maxJsonSize - 128 && pointsAdded > 0) {
         arr.remove(arr.size() - 1);
         Log(DBG, "%s remove point", _LOG_);
         break;
@@ -2015,6 +2025,7 @@ bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<Ard
       return false;
     }
   }
+  if (withMeta) mapChunkSendState.metaSent = true;
   return true;
 #else
   return false;

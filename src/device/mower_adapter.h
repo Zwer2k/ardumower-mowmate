@@ -336,7 +336,8 @@ namespace ArduMower
       virtual bool uploadMapToMower() override;
       virtual bool uploadSavedMapToMower(const String &id) override;
       virtual bool uploadJobToMower(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) override;
-      virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7) override;
+      virtual bool composeJob(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles = 7,
+                              bool keepRoutes = false) override;
       virtual int nextRouteAngle() override;
       virtual void clearJob() override;
       virtual const ArduMower::Domain::Robot::MowJob *mowJob() override { return _job.id.length() ? &_job : nullptr; }
@@ -346,6 +347,16 @@ namespace ArduMower
       ArduMower::Domain::Robot::MowJob _job;
       // Geometrie des Auftrags (ohne Wegpunkte) für die Teil-Uploads
       ArduMower::Domain::Robot::MowerMap _jobGeometry;
+      // Ungefilterte Routen der Areas mit zufälligem/dynamischem Winkel aus dem
+      // letzten Zusammensetzen: Umschalten der Mow areas rechnet sie nicht neu
+      // (und würfelt keinen neuen Winkel), solange die Geometrie gleich bleibt.
+      struct JobAreaRoute {
+        String id;
+        uint32_t planKey = 0;
+        int16_t angle = -1;
+        std::vector<ArduMower::Domain::Robot::MapPoint> waypoints;
+      };
+      std::vector<JobAreaRoute> _jobAreaRoutes;
       virtual bool uploadJobSegment(uint32_t index) override;
       // Wegpunkte, die bei dieser Geometrie in den Speicher des Mähers passen; 0 = unbegrenzt
       uint32_t jobWaypointLimit(size_t fixedPoints);

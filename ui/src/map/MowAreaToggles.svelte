@@ -112,7 +112,8 @@
         : target.id === exclBorderId ? JOB_TOGGLE_EXCLUSION_BORDER : 0;
       if (!bit) return;
       const toggles = checked ? (job.toggles | bit) : (job.toggles & ~bit);
-      socketService.sendPreviewJob(job.parts.map((p) => p.id), job.overlapOnce, toggles);
+      // Nur filtern: dynamische Areas behalten ihre Route und ihren Winkel
+      socketService.sendPreviewJob(job.parts.map((p) => p.id), job.overlapOnce, toggles, true);
       return;
     }
     if (target.id === areaId) {

@@ -1426,12 +1426,13 @@ class SocketService {
   }
 
   /** Auftrag aus diesen Bereichen nur zusammensetzen und als Vorschau anzeigen */
-  sendPreviewJob(areaIds: string[], overlapOnce: boolean, toggles: number = 7) {
-    // Bereiche mit zufälligem/dynamischem Winkel rechnet das Modem dabei neu
+  /** keepRoutes: nur die Mow areas umgeschaltet; Areas mit zufälligem/
+   *  dynamischem Winkel behalten ihre Route, sonst rechnet das Modem sie neu */
+  sendPreviewJob(areaIds: string[], overlapOnce: boolean, toggles: number = 7, keepRoutes = false) {
     startPendingOperation("previewJob", "Putting the job together...", 120000);
     this.sendMessage({
       type: RequestDataType.previewJob,
-      data: { areaIds, overlapOnce, toggles } as unknown as RequestSocketMessage["data"],
+      data: (keepRoutes ? { areaIds, overlapOnce, toggles, keepRoutes: true } : { areaIds, overlapOnce, toggles }) as unknown as RequestSocketMessage["data"],
     });
   }
 
