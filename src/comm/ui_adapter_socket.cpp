@@ -439,7 +439,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
       if (!jsonData["doMowExclusionBorder"].isNull()) s.doMowExclusionBorder = jsonData["doMowExclusionBorder"];
       if (!jsonData["simplifyEpsilon"].isNull()) s.simplifyEpsilon = jsonData["simplifyEpsilon"];
       if (!jsonData["checkTurnRadius"].isNull()) s.checkTurnRadius = jsonData["checkTurnRadius"];
-      Log(INFO, "%s setMowSettings received: pattern=%d width=%.2f angle=%d distToBorder=%.0f laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusions=%d doMowExclusionBorder=%d simplify=%.3f checkRadius=%.2f",
+      Log(INFO, "%s setMowSettings received: pattern=%d width=%.2f angle=%d distToBorder=%.1f laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusions=%d doMowExclusionBorder=%d simplify=%.3f checkRadius=%.2f",
           _LOG_, s.pattern, s.width, s.angle, s.distanceToBorder, s.borderLaps,
           s.doMowArea, s.doMowPerimeter, s.doMowBorder, s.doMowExclusions, s.doMowExclusionBorder,
           s.simplifyEpsilon, s.checkTurnRadius);
@@ -2292,7 +2292,7 @@ void UiSocketHandler::processCalculateWaypoints() {
   // wird nicht gespeichert, kann aber so hochgeladen werden
   const int routeAngle = settings.angleMode != 0 ? _cmd.nextRouteAngle() : -1;
   if (routeAngle >= 0) settings.angle = routeAngle;
-  Log(INFO, "%s processCalculateWaypoints: settings pattern=%d width=%.2f angle=%d distToBorder=%.0f laps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
+  Log(INFO, "%s processCalculateWaypoints: settings pattern=%d width=%.2f angle=%d distToBorder=%.1f laps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
       _LOG_, settings.pattern, settings.width, settings.angle, settings.distanceToBorder, settings.borderLaps,
       settings.doMowArea, settings.doMowBorder, settings.doMowExclusionBorder);
   auto state = _source.state();

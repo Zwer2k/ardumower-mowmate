@@ -43,12 +43,13 @@ struct Settings {
     int pattern;
     float width;
     int angle;
-    int distanceToBorder;
+    // Abstand der Mähfläche zum Perimeter in Spurbreiten (auch halbe)
+    double distanceToBorder;
     int borderLaps;
-    // Abstand der Mähfläche zu den Exclusions in Spurbreiten und Anzahl der
+    // Abstand der Mähfläche zu den Exclusions in Spurbreiten (auch halbe) und Anzahl der
     // Runden um die Exclusions. exclusionLaps < 0: wie borderLaps (früheres
     // Verhalten, als beide Rundenarten gemeinsam berechnet wurden).
-    int distanceToExclusions;
+    double distanceToExclusions;
     int exclusionLaps;
     // Berechnung ist immer aktiv; die Laufzeit-Toggles (doMow*) filtern später.
     bool mowArea;

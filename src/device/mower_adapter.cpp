@@ -262,7 +262,7 @@ void MowerAdapter::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s
     }
   }
 
-  Log(INFO, "%ssetMowSettings: pattern=%d width=%.2f angle=%d distToBorder=%.0f laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusionBorder=%d",
+  Log(INFO, "%ssetMowSettings: pattern=%d width=%.2f angle=%d distToBorder=%.1f laps=%d doMowArea=%d doMowPerimeter=%d doMowBorder=%d doMowExclusionBorder=%d",
       _LOG_, _mowSettings.pattern, _mowSettings.width, _mowSettings.angle, _mowSettings.distanceToBorder, _mowSettings.borderLaps,
       _mowSettings.doMowArea, _mowSettings.doMowPerimeter, _mowSettings.doMowBorder, _mowSettings.doMowExclusionBorder);
 }
