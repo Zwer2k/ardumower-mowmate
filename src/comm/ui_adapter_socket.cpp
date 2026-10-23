@@ -256,6 +256,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     }
     break;
 
+#ifdef ENABLE_MAP
+  // Karten, Areas, Aufträge und Zeitplan gibt es nur mit ENABLE_MAP
   case RequestDataType::uploadMap: {
     const String requestedMapId = jsonData["mapId"] | "";
     if (requestedMapId == _source.currentMapId() && requestedMapId.length() > 0) {
@@ -266,6 +268,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     }
     break;
   }
+
+#endif
 
   case RequestDataType::robotCommand:
     {
@@ -294,6 +298,7 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     }
     break;
 
+#ifdef ENABLE_MAP
    case RequestDataType::setMap:
     {
       using namespace ArduMower::Domain::Robot;
@@ -449,10 +454,13 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     }
     break;
 
+#endif
+
    case RequestDataType::requestMowSettings:
     _socketHandler->sendData(ResponseDataType::mowSettings, this, true);
     break;
 
+#ifdef ENABLE_MAP
    case RequestDataType::clearWaypoints:
     _socketHandler->clearWaypoints();
     break;
@@ -816,6 +824,8 @@ void UiSocketItem::handleData(RequestDataType dataType, JsonDocument &jsonData)
     _socketHandler->sendSchedule(this);
     break;
   }
+
+#endif
 
    case RequestDataType::requestClock: {
     _socketHandler->sendClock(this);
@@ -1640,6 +1650,7 @@ void UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
 
 // Starte asynchronen Map-Chunk-Versand
 void UiSocketHandler::startMapChunkSend(UiSocketItem* sendTo, bool force) {
+#ifdef ENABLE_MAP
   auto map = _source.mowerMap();
   if (mapChunkSendState.active || (!force && (map.timestamp == 0 || map.timestamp == oldDataTimestamp[ResponseDataType::map]))) {
     return;
@@ -1669,10 +1680,12 @@ void UiSocketHandler::startMapChunkSend(UiSocketItem* sendTo, bool force) {
   mapChunkSendState.idx = 0;
   mapChunkSendState.lastRetryMs = 0;
   mapChunkSendState.lastProgressMs = millis();
+#endif
 }
 
 // Pro loop() einen Chunk versenden – Snapshot aus mapChunkSendState verwenden
 bool UiSocketHandler::processMapChunkSend() {
+#ifdef ENABLE_MAP
   if (!mapChunkSendState.active) return false;
   // Stall-Watchdog: ein Transfer, der längere Zeit keinen einzigen Chunk
   // loswird (Client-Queue voll, Client hängt in WS_DISCONNECTING, ...),
@@ -1832,17 +1845,22 @@ bool UiSocketHandler::processMapChunkSend() {
   }
   // true: ein Chunk ging hinaus und der Transfer läuft weiter
   return mapChunkSendState.active && !stalled;
+#else
+  return false;
+#endif
 }
 
 // Mehrere Chunks pro loop(), solange der Client aufnimmt: Früher ging nur in
 // jeder ~12. loop()-Runde ein Chunk hinaus (Round-Robin mit allen anderen
 // Aufgaben), die WLAN-Verbindung lag damit weitgehend brach.
 void UiSocketHandler::pumpMapChunkSend() {
+#ifdef ENABLE_MAP
   if (!mapChunkSendState.active) return;
   const uint32_t start = millis();
   for (int i = 0; i < 8 && millis() - start < 20; i++) {
     if (!processMapChunkSend()) break;
   }
+#endif
 }
 
 
@@ -1852,6 +1870,7 @@ void UiSocketHandler::pumpMapChunkSend() {
 // stream stays unfragmented. Must NOT be called while holding _clientsMutex:
 // the flushed broadcasts take _sendMutex and then _clientsMutex.
 void UiSocketHandler::finishMapChunkSend() {
+#ifdef ENABLE_MAP
   if (!mapChunkSendState.active) return;
   mapChunkSendState.active = false;
   mapChunkSendState.clientId = 0;
@@ -1883,10 +1902,12 @@ void UiSocketHandler::finishMapChunkSend() {
   // nach Berechnen oder Clear): sonst gab erst die nächste reguläre
   // Statusmeldung die Knöpfe nach Sekunden wieder frei.
   if (!_progressOp.isEmpty()) sendData(ResponseDataType::mowerState, NULL, true);
+#endif
 }
 
 // Hilfsfunktion: Sende einen Chunk eines MapPoint-Vektors
 bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<ArduMower::Domain::Robot::MapPoint>& points, uint32_t timestamp, uint32_t clientId, int exclusionIdx, size_t startIdx, size_t blockSize, bool reset, size_t &nextIdx) {
+#ifdef ENABLE_MAP
   const size_t maxJsonSize = 4096;
   size_t total = points.size();
   nextIdx = 0;
@@ -1995,6 +2016,9 @@ bool UiSocketHandler::sendMapChunk(MapPointType pointType, const std::vector<Ard
     }
   }
   return true;
+#else
+  return false;
+#endif
 }
 
 void UiSocketHandler::logToUiLoop()
@@ -2125,6 +2149,7 @@ std::function<void(int percent)> UiSocketHandler::progressReporter(const char *o
 }
 
 void UiSocketHandler::uploadMapToMower() {
+#ifdef ENABLE_MAP
   if (_uploadToMowerPending) {
     Log(INFO, "%s uploadMapToMower: upload already in progress", _LOG_);
     return;
@@ -2137,9 +2162,11 @@ void UiSocketHandler::uploadMapToMower() {
   sendProgress("upload", 0, "Uploading map");
   sendData(ResponseDataType::mowerState, NULL, true);
   Log(INFO, "%s uploadMapToMower: started", _LOG_);
+#endif
 }
 
 void UiSocketHandler::processUploadToMower() {
+#ifdef ENABLE_MAP
   if (!_uploadToMowerPending) return;
   if (_cmd.uploadMapToMowerActive()) {
     auto p = _cmd.uploadProgress();
@@ -2170,6 +2197,7 @@ void UiSocketHandler::processUploadToMower() {
   }
   sendData(ResponseDataType::mowerState, NULL, true);
   _cmd.requestStatusNow(); // refresh state/crc immediately after upload
+#endif
 }
 
 void UiSocketHandler::setMowSettings(const ArduMower::Domain::Robot::MowSettings &s, bool markUnsaved) {
@@ -2177,6 +2205,7 @@ void UiSocketHandler::setMowSettings(const ArduMower::Domain::Robot::MowSettings
 }
 
 void UiSocketHandler::sendWaypointsDirect(const std::vector<ArduMower::Domain::Robot::MapPoint> &waypoints, uint32_t timestamp) {
+#ifdef ENABLE_MAP
   JsonDocument doc;
   doc["type"] = ResponseDataType::map;
   doc["timestamp"] = timestamp;
@@ -2193,9 +2222,11 @@ void UiSocketHandler::sendWaypointsDirect(const std::vector<ArduMower::Domain::R
   serializeJson(doc, json);
   sanitizeUtf8InPlace(json);
   sendTextAllWithRetry(json);
+#endif
 }
 
 void UiSocketHandler::clearWaypoints() {
+#ifdef ENABLE_MAP
   sendProgress("clear", 0, "Clearing waypoints...");
   sendData(ResponseDataType::mowerState, NULL, true);
   using namespace ArduMower::Domain::Robot;
@@ -2215,9 +2246,11 @@ void UiSocketHandler::clearWaypoints() {
   Log(INFO, "%s clearWaypoints: waypoints cleared, map broadcast", _LOG_);
   sendProgress("clear", 100, "Complete");
   sendData(ResponseDataType::mowerState, NULL, true);
+#endif
 }
 
 void UiSocketHandler::calculateWaypoints() {
+#ifdef ENABLE_MAP
   if (_calculateWaypointsPending || _calculateWaypointsRunning) {
     Log(INFO, "%s calculateWaypoints: already queued or running", _LOG_);
     sendProgress("calculate", 0, "Calculation already in progress");
@@ -2236,9 +2269,11 @@ void UiSocketHandler::calculateWaypoints() {
   sendProgress("calculate", 0, "Calculating waypoints...");
   sendData(ResponseDataType::mowerState, NULL, true);
   Log(INFO, "%s calculateWaypoints: queued", _LOG_);
+#endif
 }
 
 void UiSocketHandler::processCalculateWaypoints() {
+#ifdef ENABLE_MAP
   if (!_calculateWaypointsPending || _calculateWaypointsRunning)
     return;
 
@@ -2331,6 +2366,7 @@ void UiSocketHandler::processCalculateWaypoints() {
   sendData(ResponseDataType::mowerState, NULL, true);
   ArduMower::Modem::BootDiag::setPhase(nullptr);
   _calculateWaypointsRunning = false;
+#endif
 }
 
 void UiSocketHandler::setMap(const ArduMower::Domain::Robot::MowerMap &map) {
@@ -2507,6 +2543,7 @@ bool UiSocketHandler::sendData(ResponseDataType dataType, UiSocketItem *sendTo, 
 
 void UiSocketHandler::sendMapList(UiSocketItem *sendTo)
 {
+#ifdef ENABLE_MAP
   // Do not interleave map-list broadcasts with an ongoing fragmented map
   // chunk transfer. A text frame in the middle of a fragmented message
   // violates the WebSocket framing and causes browser-side disconnects
@@ -2556,6 +2593,7 @@ void UiSocketHandler::sendMapList(UiSocketItem *sendTo)
       _ws->cleanupClients();
     }
   }
+#endif
 }
 
 void UiSocketHandler::sendMapOpResult(UiSocketItem *sendTo, const char *op, bool ok, const char *error)
@@ -2580,6 +2618,7 @@ void UiSocketHandler::sendMapOpResult(UiSocketItem *sendTo, const char *op, bool
 
 void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool accepted)
 {
+#ifdef ENABLE_MAP
   // Jede Bearbeitung (alle 250 ms) bestätigt hier: Früher kostete das eine
   // Kopie der ganzen Karte nur für den Zeitstempel und einen MD5 über die
   // komplette Geometrie. Der Browser speichert den Hash nur, entscheidet aber
@@ -2608,15 +2647,20 @@ void UiSocketHandler::sendMapAck(UiSocketItem *sendTo, uint32_t syncId, bool acc
   serializeJson(doc, json);
   sanitizeUtf8InPlace(json);
   sendTo->sendText(json);
+#endif
 }
 
 bool UiSocketHandler::setSchedule(bool enabled, const std::vector<ArduMower::Modem::Schedule::Entry> &entries)
 {
+#ifdef ENABLE_MAP
   bool ok = _scheduleManager.setConfig(enabled, entries);
   if (ok) {
     _scheduleDirty = true;
   }
   return ok;
+#else
+  return false;
+#endif
 }
 
 // Zeitplan-Einträge speichern Karten-ID und -Name. Beim Umbenennen zeigte der
@@ -2625,6 +2669,7 @@ bool UiSocketHandler::setSchedule(bool enabled, const std::vector<ArduMower::Mod
 // Eintrag, statt ihn zu entfernen: der Nutzer sieht ihn und wählt neu.
 void UiSocketHandler::onMapRenamed(const String &id, const String &name)
 {
+#ifdef ENABLE_MAP
   auto entries = _scheduleManager.entries();
   bool changed = false;
   const auto maps = _source.mapList();
@@ -2646,10 +2691,12 @@ void UiSocketHandler::onMapRenamed(const String &id, const String &name)
   _scheduleManager.setConfig(_scheduleManager.enabled(), entries);
   _scheduleManager.save();
   sendSchedule(NULL);
+#endif
 }
 
 void UiSocketHandler::onMapDeleted(const String &id)
 {
+#ifdef ENABLE_MAP
   auto entries = _scheduleManager.entries();
   bool changed = false;
   // Mit einer Karte verschwinden auch ihre Bereiche: jeden Eintrag prüfen,
@@ -2675,16 +2722,22 @@ void UiSocketHandler::onMapDeleted(const String &id)
   _scheduleManager.setConfig(_scheduleManager.enabled(), entries);
   _scheduleManager.save();
   sendSchedule(NULL);
+#endif
 }
 
 bool UiSocketHandler::saveSchedule()
 {
+#ifdef ENABLE_MAP
   bool ok = _scheduleManager.save();
   return ok;
+#else
+  return false;
+#endif
 }
 
 void UiSocketHandler::sendSchedule(UiSocketItem *sendTo)
 {
+#ifdef ENABLE_MAP
   JsonDocument doc;
   doc["type"] = ResponseDataType::schedule;
   doc["timestamp"] = millis();
@@ -2707,6 +2760,7 @@ void UiSocketHandler::sendSchedule(UiSocketItem *sendTo)
       _ws->cleanupClients();
     }
   }
+#endif
 }
 
 void UiSocketHandler::requestFirmwareStatus(bool force)
@@ -2839,6 +2893,7 @@ void UiSocketHandler::sendRouteReport(UiSocketItem *sendTo)
 
 void UiSocketHandler::processScheduleTrigger()
 {
+#ifdef ENABLE_MAP
   // Time must be valid and schedule must be enabled.
   if (!_scheduleManager.enabled()) return;
   if (_scheduleManager.entries().empty()) return;
@@ -2883,11 +2938,13 @@ void UiSocketHandler::processScheduleTrigger()
   queueJob(entry->areaIds, entry->overlapOnce, true, 0);
   _scheduleManager.computeNextRun();
   _scheduleDirty = true;
+#endif
 }
 
 bool UiSocketHandler::queueJob(const std::vector<String> &ids, bool overlapOnce, bool start, uint32_t clientId,
                                bool recompose, uint8_t toggles)
 {
+#ifdef ENABLE_MAP
   // Eine laufende Serie (Teil wird gemäht oder Mäher lädt) ersetzt ein neuer Auftrag
   if (_jobStartPending && _jobStartPhase < 2) return false;
   _jobRecompose = recompose;
@@ -2901,6 +2958,9 @@ bool UiSocketHandler::queueJob(const std::vector<String> &ids, bool overlapOnce,
   Log(INFO, "%s queueJob: %u areas, overlap %s, start=%d", _LOG_, (unsigned)ids.size(),
       overlapOnce ? "once" : "twice", start);
   return true;
+#else
+  return false;
+#endif
 }
 
 // Ablauf eines Mähauftrags. Passt er nicht in den Speicher des Mähers, läuft er
@@ -2910,6 +2970,7 @@ bool UiSocketHandler::queueJob(const std::vector<String> &ids, bool overlapOnce,
 //   2 Teil wird gemäht, 3 auf Ladeende warten, dann nächsten Teil hochladen.
 void UiSocketHandler::processJobStart()
 {
+#ifdef ENABLE_MAP
   if (!_jobStartPending) return;
   auto finish = [this](bool ok, const String &error) {
     _jobStartPending = false;
@@ -3050,10 +3111,12 @@ void UiSocketHandler::processJobStart()
       return;
     }
   }
+#endif
 }
 
 String UiSocketHandler::runJob()
 {
+#ifdef ENABLE_MAP
   const ArduMower::Domain::Robot::MowJob *job = _source.mowJob();
   if (job == nullptr || _source.state().mapCrc != job->crc) return "The job is not on the mower. Upload it first.";
   if (_jobStartPending && _jobStartPhase < 2) return "The job is still being uploaded.";
@@ -3072,12 +3135,16 @@ String UiSocketHandler::runJob()
     _jobStartPending = true;
   }
   return "";
+#else
+  return String("Jobs need the map feature.");
+#endif
 }
 
 // Die Route des Auftrags in Stücken an jeden Browser, der sie noch nicht hat:
 // Die Dashboards zeigen sie statt der Route der geladenen Karte.
 void UiSocketHandler::sendMowJobChunks()
 {
+#ifdef ENABLE_MAP
   const ArduMower::Domain::Robot::MowJob *job = _source.mowJob();
   if (mapChunkSendState.active || countConnectedClients() == 0) return;
   if (job == nullptr) {
@@ -3144,6 +3211,7 @@ void UiSocketHandler::sendMowJobChunks()
     }
     yield();
   }
+#endif
 }
 
 void UiSocketHandler::pushDrivenTrackPoint(float x, float y, uint32_t timestamp) {
@@ -3152,6 +3220,7 @@ void UiSocketHandler::pushDrivenTrackPoint(float x, float y, uint32_t timestamp)
 
 void UiSocketHandler::sendDrivenTrack(UiSocketItem *sendTo)
 {
+#ifdef ENABLE_MAP
   if (countConnectedClients() == 0 && sendTo == NULL) return;
   if (_track.size() == 0) return;
 
@@ -3189,6 +3258,7 @@ void UiSocketHandler::sendDrivenTrack(UiSocketItem *sendTo)
   if (sendTo->sendText(json)) {
     sendTo->setDrivenTrackSequence(_track.latestSequence());
   }
+#endif
 }
 
 bool UiSocketHandler::isClientReceivingChunk(uint32_t clientId) const {
@@ -3201,6 +3271,7 @@ bool UiSocketHandler::isClientReceivingChunk(uint32_t clientId) const {
 // Direct send used by map chunks so they are not blocked by the
 // per-client serialization guard. Must not be used for non-map traffic.
 bool UiSocketHandler::sendMapChunkText(uint32_t clientId, const String& text) {
+#ifdef ENABLE_MAP
   size_t textLen = text.length();
   if (textLen > 512) {
     if (!ArduMower::Modem::MemPolicy::bufferFits(textLen, 4096)) {
@@ -3232,6 +3303,9 @@ bool UiSocketHandler::sendMapChunkText(uint32_t clientId, const String& text) {
   if (anySent) markClientActivity();
   unlockSendMutex();
   return anySent;
+#else
+  return false;
+#endif
 }
 
 bool UiSocketHandler::sendTextAllWithRetry(const String &text)

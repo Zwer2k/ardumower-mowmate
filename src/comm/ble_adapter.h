@@ -1,5 +1,9 @@
 #pragma once
 
+// BLE-Anbindung für die App; ohne ENABLE_BLE (ESP32 ohne S3: zu wenig Flash,
+// NimBLE und der Bluetooth-Controller kosten ~170 KB) fehlt sie ganz.
+#ifdef ENABLE_BLE
+
 #include <NimBLEDevice.h>
 #include "api.h"
 #include "prometheus.h"
@@ -74,3 +78,5 @@ namespace ArduMower
   }
 
 }
+
+#endif // ENABLE_BLE

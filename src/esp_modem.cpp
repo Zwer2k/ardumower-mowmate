@@ -84,8 +84,10 @@ Ota::HttpServer otaHttpServer(settings, webServer.server(), mowerUpdater);
 
 // provides request/response communication with the robot
 Router router(Serial2);
+#ifdef ENABLE_BLE
 // Bluetooth LE endpoint for app
 BleAdapter bleAdapter(settings, router);
+#endif
 // emulates the behavior of the previous generation Bluetooth UART modules
 Cli modemCli(router);
 // ArduMower protocol interpreter, keeps state
@@ -100,10 +102,14 @@ Http::UiSocketHandler socketHandler(terminal, webServer.server(), mowerAdapter, 
 #else
 Http::UiSocketHandler socketHandler(webServer.server(), mowerAdapter, mowerAdapter, mowerUpdater, scheduleManager);
 #endif
+#ifdef ENABLE_MQTT
 // publish state on MQTT, receive commands on MQTT
 MqttAdapter mqttAdapter(settings, router, mowerAdapter, mowerAdapter);
+#endif
+#ifdef ENABLE_PROMETHEUS
 // metrics available for use with Prometheus
 Prometheus::Adapter prometheusAdapter(settings, webServer.server(), mowerAdapter, mowerAdapter);
+#endif
 Prometheus::LooptimeMonitor looptime;
 
 #ifdef ENABLE_PS4_CONTROLLER
@@ -140,9 +146,16 @@ void setup() {
 
   ArduMower::Modem::MemPolicy::begin();
   ArduMower::Modem::BootDiag::begin();
+#ifdef ENABLE_BLE
   api.begin(&bleAdapter);
+#else
+  api.begin(nullptr);
+#endif
   settings.begin();
+#ifdef ENABLE_MAP
+  // Zeitplan startet Aufträge aus Karten und Areas
   scheduleManager.begin();
+#endif
   step("settings");
 #ifdef ESP_MODEM_SIM
   con.begin();
@@ -163,13 +176,19 @@ void setup() {
   };
   socketHandler.onFirmwareStatusRequest = [&](bool force){ otaHttpServer.requestFirmwareStatus(force); };
   step("ota");
+#ifdef ENABLE_BLE
   bleAdapter.begin();
   step("ble");
+#endif
   httpAdapter.begin();
   mowerAdapter.begin();
   step("mower");
+#ifdef ENABLE_MQTT
   mqttAdapter.begin();
+#endif
+#ifdef ENABLE_PROMETHEUS
   prometheusAdapter.begin();
+#endif
   ui.begin();
   socketHandler.begin();
   webServer.begin();
@@ -208,10 +227,14 @@ void setup() {
   });
   looptime.add("router", std::bind(&Router::loop, &router));
   looptime.add("mower", [&](){ if (!Ota::MowerUpdater::isFlashing()) mowerAdapter.loop(); });
+#ifdef ENABLE_BLE
   looptime.add("ble", [&](){ if (!Ota::MowerUpdater::isFlashing()) bleAdapter.loop(); });
+#endif
   looptime.add("ui", [&](){ if (!Ota::MowerUpdater::isFlashing()) ui.loop(); });
   looptime.add("socket_handler", [&](){ if (!Ota::MowerUpdater::isFlashing()) socketHandler.loop(); });
+#ifdef ENABLE_MQTT
   looptime.add("mqtt", [&](){ if (!Ota::MowerUpdater::isFlashing()) mqttAdapter.loop(millis()); });
+#endif
 #ifdef ENABLE_PS4_CONTROLLER
   looptime.add("ps4_controller", [&](){ if (!Ota::MowerUpdater::isFlashing()) ps4ControllerAdapter.loop(); });
 #endif

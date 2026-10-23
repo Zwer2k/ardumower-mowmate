@@ -22,7 +22,8 @@ namespace ArduMower
       {
       public:
         OS & os;
-        Bluetooth * ble;
+        // nullptr ohne BLE (ENABLE_BLE)
+        Bluetooth * ble = nullptr;
 
         Api(OS & _os) : os(_os) {};
 

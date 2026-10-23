@@ -301,7 +301,7 @@ void UiAdapter::handleApiResetModemBluetoothPairings(AsyncWebServerRequest *requ
   if (!auth(request))
     return;
   
-  _api.ble->clearPairings();
+  if (_api.ble != nullptr) _api.ble->clearPairings();
   request->send(200, "application/json", "{\"result\":\"ok\"}");
 
   _restartAt = millis() + 1000;

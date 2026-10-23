@@ -1,3 +1,5 @@
+// MQTT (Home Assistant, ioBroker) nur mit ENABLE_MQTT; auf dem ESP32 ohne S3 fehlt der Platz.
+#ifdef ENABLE_MQTT
 #include "mqtt_adapter.h"
 #include "mqtt_ha.h"
 #include "mqtt_iobroker.h"
@@ -562,3 +564,5 @@ bool MqttAdapter::publishWithSubtopics(JsonObject& data, const String baseTopic)
 
   return true;
 }
+
+#endif // ENABLE_MQTT

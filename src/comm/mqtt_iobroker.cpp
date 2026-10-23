@@ -1,3 +1,5 @@
+// MQTT (Home Assistant, ioBroker) nur mit ENABLE_MQTT; auf dem ESP32 ohne S3 fehlt der Platz.
+#ifdef ENABLE_MQTT
 #include "mqtt_iobroker.h"
 #include "log.h"
 #include <ArduinoJson.h>
@@ -258,3 +260,5 @@ float batteryVoltageToLevel2(const float v)
 
   return rel * 100.0;
 }
+
+#endif // ENABLE_MQTT

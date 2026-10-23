@@ -1,3 +1,4 @@
+#ifdef ENABLE_BLE
 #include "ble_adapter.h"
 #include "log.h"
 
@@ -290,3 +291,5 @@ void BleAdapter::onWrite(NimBLECharacteristic *c, NimBLEConnInfo& connInfo)
 
   status = BLE_STATUS_RXBLE;
 }
+
+#endif // ENABLE_BLE
