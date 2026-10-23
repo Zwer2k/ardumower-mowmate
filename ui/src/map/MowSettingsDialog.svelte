@@ -78,13 +78,14 @@
   }
 
   // Counts track widths (the planner offsets the mow area by
-  // distanceToBorder * width), so only whole numbers are meaningful.
+  // distanceToBorder * width), in steps of half a track width.
+  const roundHalf = (v: number) => Math.max(0, Math.round((v || 0) * 2) / 2);
   function roundDistanceToBorder() {
-    distanceToBorder = Math.max(0, Math.round(distanceToBorder || 0));
+    distanceToBorder = roundHalf(distanceToBorder);
   }
 
   function roundDistanceToExclusions() {
-    distanceToExclusions = Math.max(0, Math.round(distanceToExclusions || 0));
+    distanceToExclusions = roundHalf(distanceToExclusions);
   }
 
   function handleOpen() {
@@ -204,11 +205,11 @@
 
     <NumberInput
       label="Distance to border"
-      helperText="Number of track widths the mow area is kept away from the perimeter."
+      helperText="Track widths the mow area is kept away from the perimeter, in steps of 0.5."
       bind:value={distanceToBorder}
       min={0}
       max={5}
-      step={1}
+      step={0.5}
       on:change={roundDistanceToBorder}
     />
 
@@ -235,11 +236,11 @@
 
     <NumberInput
       label="Distance to exclusions"
-      helperText="Number of track widths the mow area is kept away from the exclusions."
+      helperText="Track widths the mow area is kept away from the exclusions, in steps of 0.5."
       bind:value={distanceToExclusions}
       min={0}
       max={5}
-      step={1}
+      step={0.5}
       on:change={roundDistanceToExclusions}
     />
 

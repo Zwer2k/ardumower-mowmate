@@ -110,7 +110,7 @@ static PPC::Settings toPlannerSettings(const ArduMower::Domain::Robot::MowSettin
     ps.selectionEdgeLaps = settings.selectionEdgeLaps;
     ps.distanceToBorder = settings.distanceToBorder;
     ps.borderLaps = settings.borderLaps;
-    ps.distanceToExclusions = (int)lroundf(settings.distanceToExclusions);
+    ps.distanceToExclusions = settings.distanceToExclusions;
     ps.exclusionLaps = settings.exclusionLaps;
     ps.simplifyEpsilon = settings.simplifyEpsilon;
     // checkTurnRadius geht bewusst NICHT in die Planer-Settings: der Wert
@@ -383,7 +383,7 @@ Polygon calculateWaypoints(ArduMower::Domain::Robot::MowerMap &map,
     float mowSpeed,
     const std::function<void(int percent)> &progress)
 {
-    Log(INFO, "%scalculateWaypoints: width=%.2f angle=%d distToBorder=%.2f borderLaps=%d distToExclusions=%.0f exclusionLaps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
+    Log(INFO, "%scalculateWaypoints: width=%.2f angle=%d distToBorder=%.1f borderLaps=%d distToExclusions=%.1f exclusionLaps=%d doMowArea=%d doMowBorder=%d doMowExclusionBorder=%d",
         _LOG_, settings.width, settings.angle, settings.distanceToBorder, settings.borderLaps,
         settings.distanceToExclusions, settings.exclusionLaps,
         settings.doMowArea, settings.doMowBorder, settings.doMowExclusionBorder);

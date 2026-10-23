@@ -1561,7 +1561,7 @@ Polygon calculateWaypoints(Map &map, Settings &settings, const State *state,
     const Progress safetyProgress = progress.sub(0.92, 0.99);
     progress.report(0.0);
 
-    PP_LOG(0, "%scalculateWaypoints pattern=%d width=%.3f angle=%d distToBorder=%d borderLaps=%d distToExclusions=%d exclusionLaps=%d",
+    PP_LOG(0, "%scalculateWaypoints pattern=%d width=%.3f angle=%d distToBorder=%.1f borderLaps=%d distToExclusions=%.1f exclusionLaps=%d",
         _LOG_, settings.pattern, settings.width, settings.angle,
         settings.distanceToBorder, settings.borderLaps,
         settings.distanceToExclusions, settings.exclusionLaps);
