@@ -9,7 +9,8 @@ const meta = (id: string, name: string, parentId?: string): MapMeta =>
 const maps = [meta("m", "Garden"), meta("m1", "Front", "m"), meta("n", "Lawn"), meta("n1", "Back", "n")];
 
 function checked(container: HTMLElement): string[] {
-  return [...container.querySelectorAll<HTMLInputElement>("input[type=checkbox]")]
+  // Nur die Auswahl der Areas, nicht Schalter (Toggle) im Dialog
+  return [...container.querySelectorAll<HTMLInputElement>("input[type=checkbox]:not(.bx--toggle-input)")]
     .filter((i) => i.checked)
     .map((i) => i.closest(".bx--checkbox-wrapper")?.textContent?.trim() ?? "");
 }
@@ -152,7 +153,7 @@ describe("MowAreaToggles in job mode", () => {
     expect(inputs.map((i) => i.checked)).toEqual([true, true, true]);
     await fireEvent.click(inputs[1]);
     await tick();
-    expect(sent).toHaveBeenLastCalledWith(["m1", "m"], true, 5);
+    expect(sent).toHaveBeenLastCalledWith(["m1", "m"], true, 5, true);
     sent.mockRestore();
     mowJobStore.set(null);
   });

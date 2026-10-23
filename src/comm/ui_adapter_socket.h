@@ -179,6 +179,8 @@ namespace ArduMower
         int metaCrc = 0;
         double metaArea = 0.0;
         double metaRotation = 0.0;
+        // Metadaten (mit der Auswahl) sind in dieser Übertragung schon raus
+        bool metaSent = false;
       };
 
       class UiSocketHandler

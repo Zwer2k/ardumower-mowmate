@@ -2,7 +2,8 @@
   // Bereiche für den nächsten Mähauftrag wählen. Das Modem setzt den Auftrag
   // zusammen; die Karte zeigt ihn als Vorschau, hochgeladen und gestartet
   // wird er mit Upload und Start.
-  import { Button, Modal } from "carbon-components-svelte";
+  import { Button, Modal, Toggle } from "carbon-components-svelte";
+  import { areaMarksStore } from "../../../map/area-marks";
   import { socketStore, socketService } from "../../../stores/socket";
   import { mowJobStore, isJobPreview, mowNowSelectionStore } from "../../../stores/mow-job";
   import AreaJobPicker from "../../../map/AreaJobPicker.svelte";
@@ -119,10 +120,22 @@
   {#if previewActive}
     <Button kind="ghost" size="small" on:click={handleShowLoadedMap}>Show the loaded map again</Button>
   {/if}
+  <div class="area-marks">
+    <Toggle
+      size="sm"
+      labelText="Mark areas with a random or dynamic angle on the map"
+      labelA="Off"
+      labelB="On"
+      bind:toggled={$areaMarksStore}
+    />
+  </div>
 </Modal>
 </div>
 
 <style>
+  .area-marks {
+    margin-top: 1rem;
+  }
   .hint {
     font-size: 0.75rem;
     color: var(--cds-text-02, #525252);
