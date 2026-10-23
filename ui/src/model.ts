@@ -121,6 +121,10 @@ export interface Info {
   mqtt_supported?: boolean;
   prometheus_supported?: boolean;
   map_supported?: boolean;
+  /** Release asset prefix of this build: esp32, esp32-ps4 or esp32-s3 */
+  firmware_variant?: string;
+  /** The modem can update itself (false: PS4 variant without a second app slot) */
+  ota_supported?: boolean;
   /** Terminal port supported and switched on in the mower capabilities */
   terminal_available?: boolean;
   /** Baud rate the terminal port currently uses */

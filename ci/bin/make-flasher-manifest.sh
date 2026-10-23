@@ -1,14 +1,19 @@
 #!/bin/bash
 #
-# Writes an ESP Web Tools manifest for one firmware channel.
+# Writes the ESP Web Tools manifests for one firmware channel.
 #
 # Usage: make-flasher-manifest.sh <channel-dir> <version>
 #
 # The channel directory holds the release assets as published by ci.yml, ie
 # prefixed with the platform name: esp32-bootloader.bin, esp32-s3-firmware.bin
-# and so on. A platform whose files are incomplete is left out of the manifest;
-# if neither platform is complete, no manifest is written and the web installer
-# reports the channel as empty.
+# and so on. Two manifests come out of it:
+#
+#   manifest.json      standard firmware, ESP32 and ESP32-S3
+#   manifest-ps4.json  ESP32 with the PS4 controller instead of BLE
+#
+# A platform whose files are incomplete is left out of its manifest; a manifest
+# without any complete platform is not written, and the web installer reports
+# that variant as missing for the channel.
 
 set -euo pipefail
 
@@ -56,25 +61,26 @@ $entries
 "
 }
 
-add_build esp32 ESP32 "$esp32_offsets"
-add_build esp32-s3 ESP32-S3 "$esp32_s3_offsets"
+write_manifest() {
+  local file="$1" name="$2"
 
-if [ -z "$builds" ]; then
-  echo "no complete platform found in $dir, not writing a manifest" >&2
-  exit 0
-fi
+  if [ -z "$builds" ]; then
+    echo "no complete platform for $file in $dir, not writing it" >&2
+    return 0
+  fi
 
-builds="${builds%,
+  builds="${builds%,
 }"
 
-# new_install_prompt_erase must stay true. MowMate does not implement Improv
-# Serial, so ESP Web Tools treats every flash as a first install. With the flag
-# set it shows an "Erase device" checkbox that starts unchecked, which keeps the
-# spiffs partition - maps, schedules, settings, map CRC - intact. With the flag
-# false or absent it skips the question and erases the whole chip every time.
-cat > "$dir/manifest.json" <<JSON
+  # new_install_prompt_erase must stay true. MowMate does not implement Improv
+  # Serial, so ESP Web Tools treats every flash as a first install. With the
+  # flag set it shows an "Erase device" checkbox that starts unchecked, which
+  # keeps the spiffs partition - maps, schedules, settings, map CRC - intact.
+  # With the flag false or absent it skips the question and erases the whole
+  # chip every time.
+  cat > "$dir/$file" <<JSON
 {
-  "name": "MowMate",
+  "name": "$name",
   "version": "$version",
   "new_install_prompt_erase": true,
   "builds": [
@@ -83,4 +89,15 @@ $builds
 }
 JSON
 
-echo "wrote $dir/manifest.json ($version)"
+  echo "wrote $dir/$file ($version)"
+}
+
+# The PS4 firmware uses huge_app.csv, whose images sit at the same offsets.
+builds=""
+add_build esp32 ESP32 "$esp32_offsets"
+add_build esp32-s3 ESP32-S3 "$esp32_s3_offsets"
+write_manifest manifest.json "MowMate"
+
+builds=""
+add_build esp32-ps4 ESP32 "$esp32_offsets"
+write_manifest manifest-ps4.json "MowMate PS4"

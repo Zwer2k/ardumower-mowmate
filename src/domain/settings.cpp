@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "ota.h"
 #include "log.h"
 #include "atomic_file.h"
 #include "url.h"
@@ -985,6 +986,10 @@ void PropertiesClass::marshal(JsonObject o) const
 #else
   o["map_supported"] = false;
 #endif
+  // Variante (Asset-Präfix) und ob sich das Modem selbst aktualisieren kann:
+  // Die PS4-Variante hat nur einen App-Slot, Updates gehen nur über USB
+  o["firmware_variant"] = ArduMower::Modem::Ota::firmwareVariant();
+  o["ota_supported"] = ArduMower::Modem::Ota::hasUpdateSlot();
 #ifdef CONFIG_IDF_TARGET_ESP32S3
   o["firmware_target"] = "esp32-s3";
 #else

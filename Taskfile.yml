@@ -100,7 +100,7 @@ tasks:
           $f_cpu_prop \
           --build-property build.partitions="$partitions" \
           --build-property upload.maximum_size="$upload_size" \
-          --build-property "build.extra_flags=-DESP32 -D{{.VARIANT}} -DENABLE_PS4_CONTROLLER $git_tag_defines -Isrc -Isrc/hal -Isrc/comm -Isrc/device -Isrc/domain -Isrc/sys -Isrc/ota -Isrc/stm32ota"
+          --build-property "build.extra_flags=-DESP32 -D{{.VARIANT}} -DENABLE_BLE -DENABLE_MQTT -DENABLE_PROMETHEUS $git_tag_defines -Isrc -Isrc/hal -Isrc/comm -Isrc/device -Isrc/domain -Isrc/sys -Isrc/ota -Isrc/stm32ota"
       fi
     deps:
     - task: package-ui
@@ -109,15 +109,11 @@ tasks:
         VITE_ENABLE_LIVE_MAP: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
         VITE_ENABLE_GPS_DASHBOARD: '{{if eq .ESP_TARGET "esp32-S3"}}true{{else}}false{{end}}'
 
+  # ESP32 mit PS4-Controller (huge_app.csv, kein OTA): nur über USB flashen
   compile-with-ps4:
     cmds:
-    - ~/.platformio/penv/bin/pio run
-    deps:
-    - task: package-ui
-      vars:
-        VITE_ENABLE_MAP: 'true'
-        VITE_ENABLE_LIVE_MAP: 'true'
-        VITE_ENABLE_GPS_DASHBOARD: 'true'
+    - task: compile-pio
+      vars: {ESP_TARGET: esp32-ps4}
 
   compile-pio:
     vars:
@@ -253,27 +249,6 @@ tasks:
     deps: [task: build-firmware]
     dir: build
 
-  ota-with-ps4:
-    cmds:
-    - |
-      curl ${ESP_DEV_IP}/api/modem/ota/post \
-        -v \
-        -u "${ESP_DEV_CREDS}" \
-        -X POST \
-        -H 'Content-type: application/binary' \
-        --data-binary @.pio/build/esp32/firmware.bin
-    deps: [task: build-firmware-with-ps4]
-  
-  ota-sim-with-ps4:
-    cmds:
-    - |
-      curl ${ESP_DEV_IP}/api/modem/ota/upload \
-        -v \
-        -u "${ESP_DEV_CREDS}" \
-        -X POST \
-        -H 'Content-type: application/binary' \
-        --data-binary @.pio/build/esp32/firmware.bin 
-    
   monitor:
     # Ctrl-a Ctrl-\ terminates GNU screen
     cmds:

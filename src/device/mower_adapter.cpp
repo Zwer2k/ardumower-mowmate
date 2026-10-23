@@ -2366,6 +2366,7 @@ uint32_t MowerAdapter::jobWaypointLimit(size_t fixedPoints)
 #endif
 }
 
+#ifdef ENABLE_MAP
 // Schnittstellen der Teilaufträge: höchstens limit Wegpunkte je Teil, wenn es
 // ohne zu kleine Teile geht an einer Bereichsgrenze.
 static std::vector<uint32_t> splitJob(uint32_t total, const std::vector<uint32_t> &partStarts, uint32_t limit)
@@ -2385,6 +2386,7 @@ static std::vector<uint32_t> splitJob(uint32_t total, const std::vector<uint32_t
   }
   return starts;
 }
+#endif
 
 bool MowerAdapter::uploadJobToMower(const std::vector<String> &ids, bool overlapOnce, uint8_t toggles)
 {
@@ -2808,6 +2810,8 @@ bool MowerAdapter::sendMapChunkAsync(const std::vector<ArduMower::Domain::Robot:
 #endif
 }
 
+// Hilfen des Karten-Uploads zum Mäher
+#ifdef ENABLE_MAP
 static bool responseOkForPhase(int phase, const char* response)
 {
   if (response == nullptr || *response == '\0') return true;
@@ -2860,6 +2864,7 @@ static int parseResponseIndex(int phase, const char* response)
   }
   return value;
 }
+#endif
 
 void MowerAdapter::processMapUpload()
 {

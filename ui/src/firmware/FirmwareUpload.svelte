@@ -20,6 +20,7 @@
     socketService,
   } from "../stores/socket";
   import { BackendSettings } from "../stores/backend";
+  import { InfoStore } from "../stores/info";
 
   export let open: boolean = false;
 
@@ -87,6 +88,9 @@
   $: if (!mowerUploadAllowed && uploadType === FirmwareUploadType.mower && !activeJob) {
     uploadType = FirmwareUploadType.modem;
   }
+
+  // PS4-Variante: nur ein App-Slot, das Modem kann sich nicht selbst aktualisieren
+  $: modemUpdateSupported = $InfoStore?.ota_supported !== false;
 
   let fileSize = 0;
 
@@ -354,7 +358,15 @@
           direction="bottom"
         />
       </div>
-      {#if uploadType === FirmwareUploadType.modem}
+      {#if uploadType === FirmwareUploadType.modem && !modemUpdateSupported}
+        <InlineNotification
+          kind="info"
+          title="Update over USB only"
+          subtitle="This firmware ({$InfoStore?.firmware_variant ?? 'PS4 controller'}) has no second firmware slot, so the modem cannot update itself. Install new versions with the MowMate Web Installer over USB."
+          hideCloseButton
+          lowContrast
+        />
+      {:else if uploadType === FirmwareUploadType.modem}
         {#if githubChecking}
           <p style="margin-bottom: 1rem;">Checking whether the modem can reach GitHub...</p>
         {:else if githubAvailable}
@@ -442,7 +454,7 @@
         </div>
       {/if}
     </div>
-    {#if !activeJob && source === "github"}
+    {#if !activeJob && source === "github" && (modemUpdateSupported || uploadType !== FirmwareUploadType.modem)}
       {#if releaseOptions.length > 0}
         <div class="release-picker">
           <Dropdown
@@ -483,7 +495,7 @@
         <InlineNotification kind="error" title="Download failed" subtitle={downloadError} hideCloseButton lowContrast />
       {/if}
     {/if}
-    {#if !activeJob && source === "file"}
+    {#if !activeJob && source === "file" && (modemUpdateSupported || uploadType !== FirmwareUploadType.modem)}
       <p>Select the firmware update file on your computer.</p>
       <FileUploaderButton
         bind:ref
